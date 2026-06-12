@@ -173,14 +173,65 @@ kgsm-watchdog/
   fallback, which is proven) is best re-checked with factorio in Inc 2. "spawn+stop works" ≠
   "supervision works" yet.
 
-### Increment 2 — watchdog behavior: crash detection + restart
-- [ ] Desired-state table (running/stopped) keyed by instance.
-- [ ] `CrashWatcher`: `poll()` per-instance `cgroup.events`; populated→0 with
-      desired=running ⇒ crash.
-- [ ] `BackoffPolicy`: exponential backoff + flap rate-limit + give-up/"failed".
-- [ ] Distinguish clean exit vs. crash where possible (exit status / stop-requested).
-- **Exit:** a crashed standalone instance restarts; a deliberately-stopped one
-  does not; a crash-loop gives up and reports "failed".
+### Increment 2 — watchdog behavior: crash detection + restart  ◀ BUILT (2026-06-12)
+- [x] Durable desired-state table: `SupervisedInstance` (keyed by name) that **outlives**
+      `RunningInstance` — desired-state, the restart counter, and the phase
+      (`running`/`restart-pending`/`stopped`/`failed`) must survive the down-window, where no
+      live process exists to hang them on. Intent (`DesiredRunning`) moved off the handle onto it.
+- [x] `CrashWatcher` (`BackgroundService` + `PeriodicTimer`, `KGSM_WATCHDOG_POLL_INTERVAL_MS`,
+      default 1 Hz) → calls `InstanceSupervisor.Reconcile()` each tick. The watcher is just the clock;
+      **every state transition lives in the supervisor — one decision point**, so a timer and an
+      exit-handler never race the same state. Reconcile *try-acquires* the gate and skips a tick if a
+      control verb holds it (never blocks behind a graceful-stop drain).
+- [x] Detection = cgroup `populated`→0 (child-inclusive, race-free) **while desired-running**. The
+      leader's **exit code** (the launcher `exec`s into the game, so its `Process.ExitCode` is the
+      game's) is logged and shown in `reason`, and gates restart under one **configurable policy**
+      (`KGSM_WATCHDOG_RESTART_POLICY`): **`always` (default)** restarts on any exit — the only "stay
+      down" is a deliberate `stop`, since operator intent lives authoritatively in `DesiredRunning` and
+      a game server's exit code is an unreliable crash signal; **`on-failure`** (opt-in, systemd-style)
+      leaves a clean code-0 exit `stopped` and restarts only non-zero/signal/unknown exits.
+- [x] `BackoffPolicy` (pure, unit-tested): exponential delay **between** restarts
+      (`base·2^(n-1)`, capped, overflow-safe) **decoupled** from give-up. Give-up =
+      **consecutive failures since last stability ≥ maxRetries**, NOT failures-within-a-window — a
+      window limit is defeated by the backoff itself (the delay spaces restarts past the window so it
+      never fills). `NoteStable()` resets the streak once uptime ≥ `StabilityThreshold` (so "crashed
+      once after a week up" ≠ one step closer to failed); a manual start `Reset()`s the give-up latch.
+      A **grace window** after each (re)spawn suppresses crash-detection so a slow start isn't
+      self-flagged as a crash.
+- [x] `/status` + `/list` surface `phase`, `restarts` (the streak), and a human `reason`.
+- [x] Tests: 26 green (20 Inc 1 + 6 `BackoffPolicy`/`RestartTracker` — exponential growth+cap,
+      give-up at maxRetries, **stability-reset never accumulates across healthy runs**, manual-start
+      clears give-up, `FromOptions` mapping). AOT publish still **0-warning**.
+- [x] `deploy/validate-increment2.sh` (shellcheck-clean) — env-tunes grace/backoff/maxRetries so
+      give-up runs in seconds; simulates crashes via the instance's own `cgroup.kill`, spacing kills by
+      waiting for the new PID (no racing).
+- **VERIFIED under root (`validate-increment2.sh`, 12/12)** against real `7dtd`: crash (`cgroup.kill`)
+  → respawn with a **new PID** back in the cgroup, `phase=running restarts=1`; second crash → respawn;
+  third crash exceeds `maxRetries=2` → `phase=failed restarts=3 reason="restart limit reached (3
+  consecutive failures, last exit 137); gave up after 2 retries"` and **no further restarts**; manual start **clears the give-up latch**
+  (fresh PID); deliberate `stop` → stays down + dropped from the table (404). `exit 137` (128+SIGKILL)
+  confirms the exit-code discriminator. Teardown clean: no stray process, no leftover cgroup, slice
+  still delegated to the user.
+- **Exit (met):** a crashed standalone instance restarts; a deliberately-stopped one does not; a
+  crash-loop gives up and reports "failed".
+- **Restart policy made configurable (was hardcoded on-failure).** The user flagged the on-failure
+  footgun — a game server that exits **0** on a fatal error (many do) or on SIGTERM would be silently
+  left dead. Since operator intent for a deliberate stop is already held by `DesiredRunning`, the exit
+  code was a redundant, unreliable second-guess. Resolution: `KGSM_WATCHDOG_RESTART_POLICY`, **default
+  `always`** (no footgun by default — any exit while desired-running restarts), with `on-failure` as
+  opt-in. The decision is a pure one-liner (`BackoffPolicy.ShouldRestartAfter`) unit-tested for both
+  modes (clean/non-zero/signal/unknown).
+- **Coverage gap (narrowed, by design):** the live run only exercised non-zero exits (every
+  `cgroup.kill` → SIGKILL → 137), so the **`on-failure` clean-exit-stays-stopped** branch ran in
+  neither the unit *integration* nor the live run — a live test needs a fake instance that exits 0 on
+  its own (deliberately not built). Under the **default `always`** that branch is inert (exit 0 is
+  restarted), so the original footgun is gone by default; `ShouldRestartAfter(0)` is unit-covered for
+  both modes. (`NoteStable()`'s uptime-reset was likewise not hit live — `STABILITY_SEC=3600` — but its
+  mechanics are unit-covered and the wiring is a one-line comparison.)
+- **Note (carried from Inc 1, still open):** graceful stop of a *fully-loaded* server vs. the
+  `cgroup.kill` fallback — the 7dtd `stop` again hit the kill fallback because it was mid-world-load
+  (`killed (timeout)`). The no-restart invariant holds regardless; re-confirm a true graceful drain
+  with a fast-loading server (factorio) when convenient. Daemon-death orphan re-adoption remains Inc 3.
 
 ### Increment 3 — clients + boot integration (in the `kgsm` repo + here)
 - [ ] kgsm-lib: typed `IWatchdogClient` for the control socket.

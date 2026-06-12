@@ -125,6 +125,9 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
         return NativeMethods.access(Base, NativeMethods.W_OK) == 0;
     }
 
+    /// <summary>True if the per-instance cgroup directory currently exists.</summary>
+    public bool Exists(string instanceName) => Directory.Exists(PathFor(instanceName));
+
     /// <summary>Create the per-instance cgroup (idempotent mkdir). Controllers are inherited from the base.</summary>
     public bool Create(string instanceName)
     {

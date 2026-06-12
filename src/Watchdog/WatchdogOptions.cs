@@ -1,3 +1,5 @@
+using TheKrystalShip.KGSM.Watchdog.Supervision;
+
 namespace TheKrystalShip.KGSM.Watchdog;
 
 /// <summary>
@@ -64,6 +66,37 @@ public sealed class WatchdogOptions
     /// <summary>gid counterpart to <see cref="TargetUid"/>. <c>KGSM_WATCHDOG_GID</c>, else <c>SUDO_GID</c>, else null.</summary>
     public uint? TargetGid { get; init; }
 
+    // ---- Increment 2: crash detection + restart ----------------------------------------------
+
+    /// <summary>
+    /// How often the crash watcher polls each instance's <c>cgroup.events</c> for liveness.
+    /// <c>KGSM_WATCHDOG_POLL_INTERVAL_MS</c>. Default <c>1000</c>. Cheap at this scale (a handful of
+    /// instances), so 1 Hz is plenty; lower it only to make crash-detection latency tighter.
+    /// </summary>
+    public int PollIntervalMs { get; init; } = 1000;
+
+    /// <summary>First-restart delay; doubles each consecutive failure. <c>KGSM_WATCHDOG_RESTART_BASE_DELAY_MS</c>. Default <c>1000</c>.</summary>
+    public int RestartBaseDelayMs { get; init; } = 1000;
+
+    /// <summary>Ceiling on the exponential restart delay. <c>KGSM_WATCHDOG_RESTART_MAX_DELAY_MS</c>. Default <c>60000</c>.</summary>
+    public int RestartMaxDelayMs { get; init; } = 60_000;
+
+    /// <summary>Max consecutive restarts before giving up ("failed"). <c>KGSM_WATCHDOG_RESTART_MAX_RETRIES</c>. Default <c>5</c>.</summary>
+    public int RestartMaxRetries { get; init; } = 5;
+
+    /// <summary>Uptime after which an instance is "healthy" and its failure counter resets. <c>KGSM_WATCHDOG_RESTART_STABILITY_SEC</c>. Default <c>300</c>.</summary>
+    public int RestartStabilitySeconds { get; init; } = 300;
+
+    /// <summary>Post-spawn grace window in which crash-detection is suppressed. <c>KGSM_WATCHDOG_RESTART_GRACE_SEC</c>. Default <c>10</c>.</summary>
+    public int RestartGraceSeconds { get; init; } = 10;
+
+    /// <summary>
+    /// What counts as restartable. <c>KGSM_WATCHDOG_RESTART_POLICY</c> = <c>always</c> (default) | <c>on-failure</c>.
+    /// <c>always</c>: restart on any exit while desired-running (the only "stay down" is <c>stop</c>);
+    /// <c>on-failure</c>: leave a clean (code 0) exit stopped, restart only crashes. See <see cref="RestartPolicyMode"/>.
+    /// </summary>
+    public RestartPolicyMode RestartPolicy { get; init; } = RestartPolicyMode.Always;
+
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
@@ -92,11 +125,35 @@ public sealed class WatchdogOptions
             SupervisorLeaf = Env("KGSM_WATCHDOG_SUPERVISOR_LEAF") is { Length: > 0 } sl ? sl : defaults.SupervisorLeaf,
             TargetUid = ParseId(Env("KGSM_WATCHDOG_UID")) ?? ParseId(Env("SUDO_UID")),
             TargetGid = ParseId(Env("KGSM_WATCHDOG_GID")) ?? ParseId(Env("SUDO_GID")),
+            PollIntervalMs = ParseInt(Env("KGSM_WATCHDOG_POLL_INTERVAL_MS"), defaults.PollIntervalMs, min: 50),
+            RestartBaseDelayMs = ParseInt(Env("KGSM_WATCHDOG_RESTART_BASE_DELAY_MS"), defaults.RestartBaseDelayMs, min: 0),
+            RestartMaxDelayMs = ParseInt(Env("KGSM_WATCHDOG_RESTART_MAX_DELAY_MS"), defaults.RestartMaxDelayMs, min: 0),
+            RestartMaxRetries = ParseInt(Env("KGSM_WATCHDOG_RESTART_MAX_RETRIES"), defaults.RestartMaxRetries, min: 0),
+            RestartStabilitySeconds = ParseInt(Env("KGSM_WATCHDOG_RESTART_STABILITY_SEC"), defaults.RestartStabilitySeconds, min: 1),
+            RestartGraceSeconds = ParseInt(Env("KGSM_WATCHDOG_RESTART_GRACE_SEC"), defaults.RestartGraceSeconds, min: 0),
+            RestartPolicy = ParseRestartPolicy(Env("KGSM_WATCHDOG_RESTART_POLICY"), defaults.RestartPolicy),
+        };
+    }
+
+    /// <summary>Lenient parse: any spelling reducing to "onfailure" selects on-failure; everything else (incl. blank) is always.</summary>
+    private static RestartPolicyMode ParseRestartPolicy(string? value, RestartPolicyMode fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+        string norm = new string(value.Where(char.IsLetter).ToArray()).ToLowerInvariant();
+        return norm switch
+        {
+            "onfailure" => RestartPolicyMode.OnFailure,
+            "always" => RestartPolicyMode.Always,
+            _ => fallback,
         };
     }
 
     private static uint? ParseId(string? value)
         => uint.TryParse(value, out uint id) ? id : null;
+
+    private static int ParseInt(string? value, int fallback, int min)
+        => int.TryParse(value, out int v) && v >= min ? v : fallback;
 
     private static string[]? ParseControllers(string? raw)
     {

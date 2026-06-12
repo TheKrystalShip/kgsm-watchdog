@@ -28,8 +28,13 @@ builder.Services.AddSingleton<SupervisorState>();
 builder.Services.AddSingleton<CgroupBootstrap>();
 
 // Supervision layer.
+builder.Services.AddSingleton(BackoffPolicy.FromOptions(options));
 builder.Services.AddSingleton<SpawnEngine>();
 builder.Services.AddSingleton<InstanceSupervisor>();
+
+// The crash watcher: polls each instance's cgroup.events and drives restart-with-backoff. It is the
+// clock; the supervisor holds all the state and makes all the decisions (one decision point).
+builder.Services.AddHostedService<CrashWatcher>();
 
 // Control plane: a unix domain socket (no TCP port; the socket's filesystem perms are the
 // security boundary, same model as kgsm-monitor).

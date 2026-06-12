@@ -11,9 +11,12 @@ the daemon **is** the watchdog the project always wanted. See [`PLAN.md`](PLAN.m
 rationale and increment roadmap, and `../kgsm/docs/specs/cgroup-supervision-plan.md` for the
 cgroup foundation (Increment 0, in the `kgsm` repo).
 
-> **Status: Increment 1 — daemon skeleton.** Spawn/stop one native instance into its cgroup over
-> the control socket. Crash detection + restart is Increment 2; CLI/lib/bot client wiring and boot
-> integration is Increment 3.
+> **Status: Increment 2 — crash detection + restart.** Spawn/stop one native instance into its
+> cgroup over the control socket (Inc 1), and **supervise it**: a 1 Hz crash watcher detects cgroup
+> `populated`→0 while desired-running and restarts with **exponential backoff + give-up** (consecutive
+> failures since last stability ≥ maxRetries → `phase=failed`). Restart policy is configurable —
+> **`always`** by default (any exit restarts; only a deliberate `stop` keeps it down), or `on-failure`
+> (leave clean code-0 exits stopped). CLI/lib/bot client wiring and boot integration is Increment 3.
 
 ## Architecture (sibling of kgsm-monitor)
 
@@ -36,7 +39,7 @@ dotnet test  kgsm-watchdog.slnx
 dotnet publish src/Watchdog/Watchdog.csproj -c Release -r linux-x64   # expect 0 ILC warnings
 ```
 
-## Run (Increment 1)
+## Run
 
 Boot as root once; the daemon delegates the slice, enters it, and drops to the KGSM user:
 
@@ -59,3 +62,26 @@ curl --unix-socket $S -X POST http://x/stop/my-server
 
 The watchdog supervises **native standalone** instances only; it no-ops on systemd/container
 instances (those are owned by systemd / Docker).
+
+### Supervision knobs (Increment 2)
+
+The crash watcher and restart policy are tuned via environment (defaults shown):
+
+| Env | Default | Meaning |
+|---|---|---|
+| `KGSM_WATCHDOG_POLL_INTERVAL_MS` | `1000` | how often each instance's `cgroup.events` is polled |
+| `KGSM_WATCHDOG_RESTART_BASE_DELAY_MS` | `1000` | first-restart delay; doubles each consecutive failure |
+| `KGSM_WATCHDOG_RESTART_MAX_DELAY_MS` | `60000` | ceiling on the exponential delay |
+| `KGSM_WATCHDOG_RESTART_MAX_RETRIES` | `5` | consecutive failures before giving up (`phase=failed`) |
+| `KGSM_WATCHDOG_RESTART_STABILITY_SEC` | `300` | uptime after which the failure streak resets |
+| `KGSM_WATCHDOG_RESTART_GRACE_SEC` | `10` | post-spawn window where crash-detection is suppressed |
+| `KGSM_WATCHDOG_RESTART_POLICY` | `always` | `always` = restart any exit; `on-failure` = leave clean code-0 exits stopped |
+
+A manual `start` clears a `failed` instance's give-up latch. A deliberate `stop` is never restarted.
+
+> **Restart policy.** Default **`always`**: any exit while the instance is desired-running is
+> restarted — the only way to keep a server down is to `stop` it through the watchdog. This suits game
+> servers, whose exit codes are an unreliable crash signal (many exit **0** even on a fatal error).
+> Set `KGSM_WATCHDOG_RESTART_POLICY=on-failure` for systemd-style semantics, where a clean code-0 exit
+> is treated as an intentional shutdown and left stopped (only non-zero / signal exits restart) — but
+> note that then a server crashing with exit 0 will *not* come back.

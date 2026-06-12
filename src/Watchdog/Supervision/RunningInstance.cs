@@ -5,16 +5,17 @@ using TheKrystalShip.KGSM.Watchdog.Interop;
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
 /// <summary>
-/// A live supervised instance: the daemon's handle on one game process. Holds three things the
-/// supervisor must keep for the instance's whole lifetime:
+/// A live supervised instance: the daemon's handle on one game process, valid only while the game is
+/// up. Holds two things the daemon must keep for the process's whole lifetime:
 /// <list type="bullet">
-/// <item>the child <see cref="Process"/> — keeps the daemon its parent so it can reap it and (Inc 2)
-/// learn its exit; dropping it would orphan a zombie and lose the exit signal;</item>
+/// <item>the child <see cref="Process"/> — keeps the daemon its parent so it can reap it and learn its
+/// exit code (the clean-vs-crash discriminator); dropping it would orphan a zombie and lose the exit
+/// signal;</item>
 /// <item>the FIFO keepalive <see cref="_fifoFd"/> — an O_RDWR fd the daemon holds open so the game's
-/// stdin never hits EOF, and the channel it writes stop/console commands into;</item>
-/// <item>the <see cref="DesiredRunning"/> intent — what the daemon was last told to do, the signal
-/// Inc 2 uses to tell a crash (populated→0 while desired-running) from a deliberate stop.</item>
+/// stdin never hits EOF, and the channel it writes stop/console commands into.</item>
 /// </list>
+/// Desired-state and the restart counter do <em>not</em> live here — they must survive this handle's
+/// disposal across a respawn, so they live on the durable <see cref="SupervisedInstance"/>.
 /// </summary>
 internal sealed class RunningInstance : IDisposable
 {
@@ -39,7 +40,6 @@ internal sealed class RunningInstance : IDisposable
         StopCommand = stopCommand;
         StopTimeoutSeconds = stopTimeoutSeconds;
         _log = log;
-        DesiredRunning = true;
     }
 
     public string Name { get; }
@@ -51,8 +51,20 @@ internal sealed class RunningInstance : IDisposable
     /// <summary>How long to wait for a graceful drain before <c>cgroup.kill</c> (KGSM's <c>stop_command_timeout_seconds</c>).</summary>
     public int StopTimeoutSeconds { get; }
 
-    /// <summary>The last intent the daemon was given. Set false by a deliberate <c>stop</c>.</summary>
-    public bool DesiredRunning { get; set; }
+    /// <summary>
+    /// The launcher/game leader's exit code if it has exited, else null. After the launcher's
+    /// <c>exec</c>, this <see cref="Process"/> <em>is</em> the game leader, so a non-zero/​signal exit
+    /// (≥128) means a crash and <c>0</c> means a clean shutdown — the reconcile loop's discriminator.
+    /// Reading <see cref="Process.HasExited"/> also lets .NET reap the child (no zombie).
+    /// </summary>
+    public int? ExitCode
+    {
+        get
+        {
+            try { return Process.HasExited ? Process.ExitCode : null; }
+            catch { return null; }
+        }
+    }
 
     /// <summary>The spawned leader PID, or null if the process object is already gone.</summary>
     public int? Pid

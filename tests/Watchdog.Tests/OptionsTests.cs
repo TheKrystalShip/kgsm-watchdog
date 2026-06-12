@@ -1,4 +1,5 @@
 using TheKrystalShip.KGSM.Watchdog;
+using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -109,5 +110,24 @@ public sealed class OptionsTests
 
         Assert.Equal(1001u, opts.TargetUid);
         Assert.Equal(1002u, opts.TargetGid);
+    }
+
+    [Fact]
+    public void RestartPolicy_defaults_to_always()
+    {
+        using var _ = new EnvScope(("KGSM_WATCHDOG_RESTART_POLICY", null));
+        Assert.Equal(RestartPolicyMode.Always, WatchdogOptions.FromEnvironment().RestartPolicy);
+    }
+
+    [Theory]
+    [InlineData("on-failure", RestartPolicyMode.OnFailure)]
+    [InlineData("onfailure", RestartPolicyMode.OnFailure)]
+    [InlineData("ON_FAILURE", RestartPolicyMode.OnFailure)]
+    [InlineData("always", RestartPolicyMode.Always)]
+    [InlineData("nonsense", RestartPolicyMode.Always)]   // unknown falls back to the default
+    public void RestartPolicy_parses_leniently(string value, RestartPolicyMode expected)
+    {
+        using var _ = new EnvScope(("KGSM_WATCHDOG_RESTART_POLICY", value));
+        Assert.Equal(expected, WatchdogOptions.FromEnvironment().RestartPolicy);
     }
 }

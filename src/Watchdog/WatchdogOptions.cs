@@ -98,6 +98,18 @@ public sealed class WatchdogOptions
     /// </summary>
     public RestartPolicyMode RestartPolicy { get; init; } = RestartPolicyMode.Always;
 
+    // ---- Increment 4: boot persistence (auto-start across restarts) ---------------------------
+
+    /// <summary>
+    /// On-disk file holding the set of instances the operator left desired-running, so the daemon can
+    /// restore supervision after a restart or host reboot — the in-house replacement for systemd's
+    /// <c>systemctl enable</c> + <c>WantedBy=</c>. <c>KGSM_WATCHDOG_STATE_FILE</c>. <b>Empty (the
+    /// default)</b> means "derive it lazily" as <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog/desired-state.json</c>
+    /// — resolved AFTER the privilege drop, so it lands in the dropped KGSM user's data tree (writable
+    /// by construction, no extra privileged setup step). Set this only to relocate it.
+    /// </summary>
+    public string StateFile { get; init; } = string.Empty;
+
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
@@ -133,6 +145,7 @@ public sealed class WatchdogOptions
             RestartStabilitySeconds = ParseInt(Env("KGSM_WATCHDOG_RESTART_STABILITY_SEC"), defaults.RestartStabilitySeconds, min: 1),
             RestartGraceSeconds = ParseInt(Env("KGSM_WATCHDOG_RESTART_GRACE_SEC"), defaults.RestartGraceSeconds, min: 0),
             RestartPolicy = ParseRestartPolicy(Env("KGSM_WATCHDOG_RESTART_POLICY"), defaults.RestartPolicy),
+            StateFile = Env("KGSM_WATCHDOG_STATE_FILE") is { Length: > 0 } st ? st : defaults.StateFile,
         };
     }
 
@@ -176,6 +189,7 @@ public sealed class WatchdogOptions
         "KGSM_WATCHDOG_RESTART_STABILITY_SEC",
         "KGSM_WATCHDOG_RESTART_GRACE_SEC",
         "KGSM_WATCHDOG_RESTART_POLICY",
+        "KGSM_WATCHDOG_STATE_FILE",
     ];
 
     /// <summary>
@@ -246,6 +260,9 @@ public sealed class WatchdogOptions
         Row("KGSM_WATCHDOG_RESTART_MAX_RETRIES", $"[{d.RestartMaxRetries}]", "consecutive failures before giving up (phase=failed)");
         Row("KGSM_WATCHDOG_RESTART_STABILITY_SEC", $"[{d.RestartStabilitySeconds}]", "uptime after which the failure streak resets");
         Row("KGSM_WATCHDOG_RESTART_GRACE_SEC", $"[{d.RestartGraceSeconds}]", "post-spawn window where crash-detection is suppressed");
+
+        Section("Boot persistence (auto-start across restarts — replaces systemd enable/WantedBy)");
+        Row("KGSM_WATCHDOG_STATE_FILE", "[~/.local/share/kgsm-watchdog/desired-state.json]", "desired-running set restored on boot; default under the KGSM user's data dir");
 
         sb.AppendLine();
         sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");

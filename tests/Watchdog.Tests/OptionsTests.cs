@@ -132,6 +132,22 @@ public sealed class OptionsTests
     }
 
     [Fact]
+    public void StateFile_defaults_empty_so_the_store_derives_it_lazily()
+    {
+        // Empty is intentional: the real default (under the dropped user's HOME) can only be resolved
+        // AFTER the bootstrap privilege drop, so DesiredStateStore derives it lazily, not here.
+        using var _ = new EnvScope(("KGSM_WATCHDOG_STATE_FILE", null));
+        Assert.Equal(string.Empty, WatchdogOptions.FromEnvironment().StateFile);
+    }
+
+    [Fact]
+    public void StateFile_reads_explicit_override()
+    {
+        using var _ = new EnvScope(("KGSM_WATCHDOG_STATE_FILE", "/var/lib/kgsm-watchdog/state.json"));
+        Assert.Equal("/var/lib/kgsm-watchdog/state.json", WatchdogOptions.FromEnvironment().StateFile);
+    }
+
+    [Fact]
     public void Help_documents_every_known_var()
     {
         // Completeness guard: add a knob to FromEnvironment + KnownEnvVars but forget to document it

@@ -24,6 +24,15 @@ cgroup foundation (Increment 0, in the `kgsm` repo).
 > Discord bot consumes kgsm-lib 1.2.0 (from the local feed) — start/stop/restart route to the daemon
 > transparently via `kgsm.sh`, and a read-only `/supervision` command surfaces the daemon's supervision
 > state. Only the literal Discord-token-in-the-loop run is left to the operator.
+>
+> **Increment 5 — boot persistence (built; root run pending).** The in-house replacement for systemd's
+> `systemctl enable` + `WantedBy=` — and the prerequisite for the planned systemd hard-break. The
+> desired-running set is persisted to disk (`KGSM_WATCHDOG_STATE_FILE`, default under the KGSM user's
+> data dir) on every start/stop, and **restored on daemon startup**: an instance whose cgroup is still
+> live (survived a *daemon* restart) is **re-adopted** without a respawn; one whose cgroup is empty (a
+> *host reboot*) is **spawned fresh**. So a reboot brings every previously-running native instance back
+> up, with no systemd unit involved. Unit-verified (53 tests, AOT-clean); `deploy/validate-increment4.sh`
+> awaits an operator root run.
 
 ## Architecture (sibling of kgsm-monitor)
 
@@ -126,6 +135,7 @@ startup (it would otherwise silently fall back to its default).
 | `KGSM_WATCHDOG_RESTART_MAX_RETRIES` | `5` | consecutive failures before giving up (`phase=failed`) |
 | `KGSM_WATCHDOG_RESTART_STABILITY_SEC` | `300` | uptime after which the failure streak resets |
 | `KGSM_WATCHDOG_RESTART_GRACE_SEC` | `10` | post-spawn window where crash-detection is suppressed |
+| `KGSM_WATCHDOG_STATE_FILE` | *(`~/.local/share/kgsm-watchdog/desired-state.json`)* | desired-running set persisted here + restored on boot (replaces systemd `enable`/`WantedBy`) |
 
 A manual `start` clears a `failed` instance's give-up latch. A deliberate `stop` is never restarted.
 

@@ -38,7 +38,13 @@ builder.Services.AddSingleton<CgroupBootstrap>();
 // Supervision layer.
 builder.Services.AddSingleton(BackoffPolicy.FromOptions(options));
 builder.Services.AddSingleton<SpawnEngine>();
+builder.Services.AddSingleton<DesiredStateStore>();
 builder.Services.AddSingleton<InstanceSupervisor>();
+
+// Boot auto-start (replaces systemd enable/WantedBy): restore the persisted desired-running set once
+// at startup — registered BEFORE the crash watcher so the table is fully restored (a plain
+// IHostedService's StartAsync is awaited) before the first reconcile tick runs.
+builder.Services.AddHostedService<StartupRestorer>();
 
 // The crash watcher: polls each instance's cgroup.events and drives restart-with-backoff. It is the
 // clock; the supervisor holds all the state and makes all the decisions (one decision point).

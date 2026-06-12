@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Model;
@@ -34,6 +35,7 @@ internal sealed class InstanceSupervisor(
     CgroupManager cgroups,
     BackoffPolicy policy,
     SupervisorState state,
+    DesiredStateStore store,
     ILogger<InstanceSupervisor> logger) : IDisposable
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
@@ -69,6 +71,11 @@ internal sealed class InstanceSupervisor(
             si.Spec = instance;
             si.DesiredRunning = true;
             si.Restart.Reset();
+
+            // Persist the intent NOW — before the spawn attempt — so a "start it on boot" survives even
+            // if this particular spawn fails (systemd parity: enablement persists independent of the
+            // current run). A deliberate stop is the only thing that removes it again.
+            store.Add(name);
 
             // Clear any stale handle / leftover cgroup before a fresh spawn (e.g. a crashed-but-not-yet-
             // reconciled instance, or an orphan cgroup from a previous daemon).
@@ -114,6 +121,11 @@ internal sealed class InstanceSupervisor(
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // A deliberate stop is also "do not auto-start this on boot": drop it from the persisted
+            // desired set on every path (tracked or not), so the operator can even use stop to prune a
+            // stale/gone entry that is no longer running.
+            store.Remove(name);
+
             if (!_instances.TryGetValue(name, out var si))
             {
                 // Not tracked — but a previous daemon (or a crash window) may have left a live cgroup.
@@ -130,13 +142,29 @@ internal sealed class InstanceSupervisor(
             // Intent first: this is a deliberate stop, so the reconcile loop must never restart it.
             si.DesiredRunning = false;
 
-            // RestartPending / Stopped / Failed have no live process — just cancel and forget.
+            // No live handle. Either there genuinely is no process (RestartPending / Stopped / Failed —
+            // just cancel and forget), or this is an ADOPTED-live instance: re-attached after a daemon
+            // restart, supervised by cgroup alone, with no FIFO/PID recovered. We cannot send its
+            // graceful stop command, so a populated cgroup must be torn down with cgroup.kill + drain
+            // (not the no-op "not running"). Graceful stop returns on the instance's next respawn, which
+            // rebuilds a real handle.
             if (si.Current is null)
             {
-                PurgeCgroup(name);
+                string reason;
+                if (cgroups.IsPopulated(name))
+                {
+                    cgroups.Kill(name);
+                    await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                    cgroups.Remove(name);
+                    reason = "stopped (adopted instance hard-killed; no graceful-stop channel until a respawn)";
+                }
+                else
+                {
+                    PurgeCgroup(name);
+                    reason = si.Phase == SupervisionPhase.RestartPending ? "stopped (cancelled pending restart)" : "not running";
+                }
                 _instances.TryRemove(name, out _);
-                return new ActionResult(name, true,
-                    si.Phase == SupervisionPhase.RestartPending ? "stopped (cancelled pending restart)" : "not running");
+                return new ActionResult(name, true, reason);
             }
 
             // Graceful: write the stop command into the FIFO, then drain up to the instance's timeout.
@@ -168,6 +196,139 @@ internal sealed class InstanceSupervisor(
         {
             _gate.Release();
         }
+    }
+
+    // ---- boot restore (Inc 4) ----------------------------------------------------------------
+
+    /// <summary>
+    /// At daemon startup, restore supervision of every instance the operator left desired-running (the
+    /// set persisted by <see cref="DesiredStateStore"/>) — the in-house replacement for systemd boot
+    /// auto-start. For each, the spec is re-read fresh from kgsm-lib, then <see cref="RestorePlan"/>
+    /// decides: ADOPT a still-live cgroup (a process that outlived a daemon restart — no kill, no
+    /// respawn), SPAWN a dead one (a host reboot left nothing running), or skip.
+    /// <para>
+    /// Deliberately does <b>not</b> route through <see cref="StartAsync"/>: that purges the cgroup
+    /// before spawning (<c>cgroup.kill</c>), which would murder a live instance we mean to adopt. And it
+    /// never prunes the persisted set on a (possibly transient) kgsm-lib read miss — durability is the
+    /// whole point; only an explicit stop removes intent.
+    /// </para>
+    /// </summary>
+    public async Task RestoreAsync(CancellationToken ct = default)
+    {
+        var names = store.Load();
+        if (names.Count == 0)
+        {
+            logger.LogInformation("no persisted desired-state to restore");
+            return;
+        }
+        if (!state.Ready)
+        {
+            logger.LogError(
+                "supervisor not ready ({Detail}); cannot restore {Count} instance(s) — they will not auto-start this boot",
+                state.Detail, names.Count);
+            return;
+        }
+
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var now = DateTime.UtcNow;
+            int adopted = 0, spawned = 0, failed = 0, skipped = 0;
+
+            foreach (var name in names)
+            {
+                if (_instances.ContainsKey(name))
+                    continue; // already tracked — restore is idempotent
+
+                Instance? spec = null;
+                try { spec = instances.GetInstanceInfo(name); }
+                catch (Exception ex) { logger.LogWarning(ex, "restore: kgsm-lib threw reading {Instance}", name); }
+
+                bool populated = cgroups.IsPopulated(name);
+                switch (RestorePlan.Classify(populated, spec))
+                {
+                    case RestoreAction.Adopt:
+                        AdoptLive(name, spec!, now);
+                        adopted++;
+                        break;
+
+                    case RestoreAction.Spawn:
+                        if (RespawnFresh(name, spec!, now)) spawned++; else failed++;
+                        break;
+
+                    case RestoreAction.SkipGone:
+                        skipped++;
+                        logger.LogWarning(
+                            "restore: {Instance} is in the auto-start set but kgsm-lib returned no config — skipping " +
+                            "(intent kept; re-start manually if this was a transient read failure, or stop it to prune)", name);
+                        break;
+
+                    case RestoreAction.SkipOutOfScope:
+                        skipped++;
+                        logger.LogWarning(
+                            "restore: {Instance} is no longer a native standalone instance ({Runtime}/{Lifecycle}) — skipping",
+                            name, spec!.Runtime, spec.LifecycleManager);
+                        break;
+                }
+            }
+
+            logger.LogInformation(
+                "restore complete: {Adopted} adopted, {Spawned} spawned, {Failed} failed, {Skipped} skipped (of {Total} persisted)",
+                adopted, spawned, failed, skipped, names.Count);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Re-attach supervision to an instance whose cgroup is already populated (it outlived a daemon
+    /// restart). <see cref="SupervisedInstance.Current"/> stays null — the previous daemon held the PID
+    /// and FIFO, and neither is recoverable — so the reconcile loop supervises it by cgroup liveness
+    /// alone. On its first crash it respawns through the normal path, rebuilding a real handle; until
+    /// then a stop is a hard <c>cgroup.kill</c> and there is no exit code (<c>ShouldRestartAfter(null)</c>
+    /// restarts under both policies, so it stays supervised).
+    /// </summary>
+    private void AdoptLive(string name, Instance spec, DateTime now)
+    {
+        var si = new SupervisedInstance
+        {
+            Name = name,
+            Spec = spec,
+            DesiredRunning = true,
+            Phase = SupervisionPhase.Running,
+            SpawnedAt = now, // treat as freshly (re)spawned so the grace window applies
+            LastReason = "re-adopted live cgroup after daemon restart (no graceful-stop channel until next respawn)",
+        };
+        _instances[name] = si;
+        logger.LogInformation("restore: adopted live {Instance} (cgroup populated; Current=null until next respawn)", name);
+    }
+
+    /// <summary>
+    /// Spawn an instance whose cgroup is empty (a host reboot / clean stop left nothing running). Mirrors
+    /// the RESTART path (<see cref="ReconcileRestartPending"/>), not <see cref="StartAsync"/>: a bare
+    /// <see cref="TrySpawn"/> that trusts the grace window, NOT a synchronous <c>WaitForPopulated</c> —
+    /// blocking 5s × N instances here would delay the control socket binding during boot. The reconcile
+    /// loop confirms liveness a tick later. Returns true if it spawned, false if the spawn failed
+    /// (tracked as <see cref="SupervisionPhase.Failed"/>).
+    /// </summary>
+    private bool RespawnFresh(string name, Instance spec, DateTime now)
+    {
+        var si = new SupervisedInstance { Name = name, Spec = spec, DesiredRunning = true };
+        if (TrySpawn(si, now, out var reason))
+        {
+            si.LastReason = $"restored after restart; {reason}";
+            _instances[name] = si;
+            logger.LogInformation("restore: spawned {Instance} ({Reason})", name, reason);
+            return true;
+        }
+
+        si.Phase = SupervisionPhase.Failed;
+        si.LastReason = $"restore spawn failed: {reason}";
+        _instances[name] = si;
+        logger.LogError("restore: spawn failed for {Instance}: {Reason}", name, reason);
+        return false;
     }
 
     public InstanceState? Status(string name)

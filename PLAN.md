@@ -258,15 +258,18 @@ kgsm-watchdog/
       — the real `Delegate=yes` half of the bullet below; **requires `kgsm system setup-cgroups`**
       since per-service delegated-base discovery is unwired), `kgsm-watchdog.openrc` (non-systemd).
       systemd units `systemd-analyze verify` clean; openrc shellcheck clean.
-- [ ] **(deferred to a dedicated increment — direction chosen 2026-06-12)** systemd-native: drop
-      `service.tp` `Restart=on-failure`. This is **not** a no-op cleanup: the user's intent is to
-      **migrate systemd-hosted native instances onto the watchdog too** (today the watchdog only
-      supervises *standalone*; systemd instances are systemd's). Dropping `Restart=` is only correct
-      **once that migration lands** — doing it before would leave systemd instances unsupervised by
-      anyone. So the order is: (1) teach the watchdog to adopt/supervise systemd-runtime native
-      instances (scope guard in `InstanceSupervisor.StartAsync` currently rejects non-standalone), then
-      (2) drop the dueling `Restart=on-failure`. Left as its own increment; **not** touched here. (The
-      `Delegate=yes` half is already done, in the rootless unit above.)
+- [ ] **(its own future increment — direction REVISED 2026-06-12 to a COMPLETE HARD BREAK from systemd.)**
+      Not the earlier "migrate systemd-native onto the watchdog, then drop `Restart=on-failure`" — instead
+      **remove the systemd *runtime* entirely**: delete `service.tp`/`socket.tp`, `files.systemd.sh` (both
+      layers), the `systemctl`/`journalctl` lifecycle branches, and the `enable_systemd` / `lifecycle_manager=systemd`
+      path, so every native instance is watchdog-supervised and systemd is used **only** to boot the daemon
+      (`deploy/*.service`). **Sequenced AFTER Increment 5 (boot persistence) — which is now BUILT** — because
+      the watchdog must be able to restore boot auto-start before systemd's `enable`/`WantedBy` is torn out.
+      The systemd surface is mapped (≈4 deletable files + ≈4 editable; the four `lifecycle.sh` dispatchers
+      branch only on `lifecycle_manager`, so the container path is untouched). The kgsm-lib `Instance` model
+      keeps its now-vestigial `LifecycleManager`/`EnableSystemd` fields (they deserialize to defaults — no
+      breaking 1.3.0). Nothing is deployed, so it's a clean deletion, not a live migration. (The `Delegate=yes`
+      half is already done, in the rootless unit above.)
 - **VERIFIED under root (`validate-increment3.sh`, 8/8)** against real `7dtd`: `kgsm start 7dtd`
   (the bash CLI) routed to the running daemon → the process entered `kgsm.slice/7dtd` **and** appeared
   in the daemon's `/list` (a direct spawn would do neither); `kgsm is-active` reported active off the
@@ -293,6 +296,66 @@ kgsm-watchdog/
       controller-gated; per-server net still uncovered).
 - [ ] Keystone: add the supervisor to the topology, **amend §4 statelessness**,
       fix the §6 ledger + `kgsm-lib/docs/host-monitoring-inventory.md` native anchor.
+
+### Increment 5 — boot persistence: desired-state restore across restarts  ◀ BUILT (2026-06-12)
+
+The in-house replacement for systemd's `systemctl enable` + `WantedBy=multi-user.target`, and the
+**prerequisite for the systemd hard-break** (the user's revised order, 2026-06-12: stand up the
+in-house boot auto-start FIRST, remove the systemd runtime SECOND — never tear out boot auto-start
+before the watchdog can take over the job). Until now desired-state lived only in memory, so a daemon
+restart or host reboot came up empty and auto-started nothing.
+
+- [x] **`DesiredStateStore`** — persists the desired-running *name set only* (the spawn config is
+      re-read fresh from kgsm-lib on restore → no stale-spec drift) to a versioned JSON file. Path:
+      `KGSM_WATCHDOG_STATE_FILE`, else `${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog/desired-state.json`,
+      **resolved lazily** (post-bootstrap, so it lands in the dropped KGSM user's data tree — writable by
+      construction in all boot paths, no new privileged setup step, no `/var/lib` chown asymmetry).
+      Mutation is **incremental** (`Add` on start / `Remove` on stop), NOT a snapshot of the live table:
+      an instance whose config kgsm-lib can't read at restore (a transient miss) is therefore never
+      silently dropped from auto-start — intent persists until an *explicit* stop, exactly like a systemd
+      unit stays enabled until `disable`. Atomic same-dir temp+rename; missing→empty, corrupt→warn+empty
+      (a bad file can never wedge boot). AOT-safe via a new `PersistedDesiredState` DTO in `WatchdogJsonContext`.
+- [x] **`store.Add` on start / `store.Remove` on stop** (`InstanceSupervisor`, under the existing gate).
+      Add fires *after the scope guard, before the spawn attempt* — so "start it on boot" persists even if
+      this spawn fails (systemd parity: enablement is independent of the current run). Stop removes on
+      every path (so an operator can `stop` even a not-running stale entry to prune it).
+- [x] **`RestoreAsync` + `StartupRestorer`** (an `IHostedService` registered *before* `CrashWatcher`, so the
+      table is fully restored before the first reconcile tick; runs after `CgroupBootstrap`, so the
+      supervisor is ready and HOME is the dropped user's). For each persisted name it re-reads the spec and
+      applies a **pure** decision (`RestorePlan.Classify`, unit-tested like `BackoffPolicy`):
+      - **Adopt** — cgroup already populated (a process that outlived a *daemon* restart): re-attach as
+        `Running` with `Current=null`, **no kill, no respawn**. Supervised by cgroup liveness; on its first
+        crash it respawns through the normal path (rebuilding a real handle), and `ShouldRestartAfter(null)`
+        restarts under both policies so it never falls out of supervision. Two documented limits until that
+        next respawn: a stop is a hard `cgroup.kill` (the FIFO/PID weren't recovered — FIFO-reopen deferred),
+        and there's no exit code. **Deliberately does NOT route through `StartAsync`**, whose purge-before-spawn
+        would `cgroup.kill` the live instance.
+      - **Spawn** — cgroup empty (a *host reboot* left nothing running): `TrySpawn` fresh (mirrors the restart
+        path, no per-instance synchronous `WaitForPopulated` that would delay the socket bind by 5s×N during
+        boot; the reconcile loop confirms liveness a tick later).
+      - **Skip** — gone (kgsm-lib returned no config; intent KEPT, logged loudly) or out-of-scope (became
+        container/systemd). Restore **never re-writes** the set, so a skip can't prune durable intent.
+- [x] **Deliberate call — `Failed` / cleanly-stopped instances DO auto-start on boot.** With the incremental
+      model, `_instances.Where(DesiredRunning)` ≡ everything not explicitly stopped, so a crash-looped
+      (`Failed`) or `on-failure` clean-exit instance stays in the set and restores with a **fresh**
+      `RestartTracker` (streak + give-up reset). Faithful to what it replaces — `enable` + `WantedBy` restart
+      an enabled unit on boot regardless of its last exit or rate-limit state.
+- [x] **stdin-EOF nuance (honest limit).** The daemon holds the game's stdin FIFO open, so killing the daemon
+      closes the only writer and the game *may* hit stdin EOF and exit (game-dependent). The **Adopt** path is
+      thus reachable only for EOF-tolerant processes; otherwise the game exits and restore takes the **Spawn**
+      branch (a brief restart) — correct either way, just not seamless. The deferred FIFO-reopen would help but
+      still can't cover the gap between daemon death and restart, so this is a graceful-degrade, not a guarantee.
+- [x] Config: `KGSM_WATCHDOG_STATE_FILE` (+ `KnownEnvVars` + `--help` row; the completeness test covers it).
+- [x] Tests: **53 green** (was 38) — `DesiredStateStoreTests` (round-trip across a fresh store = a restart,
+      Add/Remove idempotence, missing/corrupt→empty, dir auto-create), `RestorePlanTests` (the 5-way fork),
+      2 options tests. AOT publish **0 ILC warnings** (native ELF; the new source-gen JSON path is clean).
+- [ ] **VERIFY under root (`deploy/validate-increment4.sh`, real `7dtd`)** — ready + shellcheck-clean,
+      **not yet run**: A `kgsm start` persists intent; B daemon restart with the game alive (FIFO held open) →
+      adopt (same pid, no respawn); C daemon down + `cgroup.kill` → respawn fresh (new pid); D `kgsm stop`
+      prunes the set → a later restart does not auto-start. *Operator's root run pending.*
+- **Exit (met, pending the root run):** desired-state survives a daemon/host restart on disk; the daemon
+  restores it on boot (adopt-live / spawn-dead) — the in-house stand-in for systemd boot auto-start, which
+  unblocks the systemd hard-break (next).
 
 ---
 

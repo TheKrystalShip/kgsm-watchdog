@@ -12,4 +12,5 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 [JsonSerializable(typeof(InstanceState))]
 [JsonSerializable(typeof(InstanceState[]))]
 [JsonSerializable(typeof(ReadyState))]
+[JsonSerializable(typeof(PersistedDesiredState))]
 internal sealed partial class WatchdogJsonContext : JsonSerializerContext;

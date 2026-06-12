@@ -18,10 +18,12 @@ cgroup foundation (Increment 0, in the `kgsm` repo).
 > **`always`** by default (any exit restarts; only a deliberate `stop` keeps it down), or `on-failure`
 > (leave clean code-0 exits stopped).
 >
-> **Increment 3 — clients + boot integration (in progress).** kgsm-lib ships a typed
-> `IWatchdogClient`; `kgsm start|stop` (native standalone) auto-routes to the daemon when present
-> (falling back to direct spawn when absent); and three boot variants ship in `deploy/`. End-to-end
-> Discord-bot wiring is gated on distributing kgsm-lib 1.2.0 to consumers (see Clients below).
+> **Increment 3 — clients + boot integration (done).** kgsm-lib ships a typed
+> `IWatchdogClient`; `kgsm start|stop|restart|is-active` (native standalone) auto-routes to the daemon
+> when present (falling back to direct spawn when absent); three boot variants ship in `deploy/`; and the
+> Discord bot consumes kgsm-lib 1.2.0 (from the local feed) — start/stop/restart route to the daemon
+> transparently via `kgsm.sh`, and a read-only `/supervision` command surfaces the daemon's supervision
+> state. Only the literal Discord-token-in-the-loop run is left to the operator.
 
 ## Architecture (sibling of kgsm-monitor)
 

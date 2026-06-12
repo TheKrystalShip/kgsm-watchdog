@@ -274,11 +274,17 @@ kgsm-watchdog/
   `/list` (is-active then inactive); and with the daemon killed the routing gate
   (`__watchdog_available`) went false → fallback to the direct path. Teardown clean (no stray process,
   no leftover instance cgroup, slice still delegated to the user).
-- **Exit (partial):** the bash + lib + boot plumbing is in place, unit-verified, and the
-  `kgsm → daemon` round-trip is **verified live**. The **bot end-to-end** capstone is gated on getting
-  kgsm-lib **1.2.0** to the bot (the "stranded lib distribution", ecosystem finding #1 — no local feed
-  wired; packed locally, **not** pushed to the GitHub Packages feed without authorization). The bot
-  wiring + a clarified systemd `service.tp` decision remain.
+- **Exit (met — pending the operator's live Discord run):** the bash + lib + boot plumbing is in place, unit-verified, and the
+  `kgsm → daemon` round-trip is **verified live**. kgsm-lib **1.2.0** is distributed via the
+  `/home/heisen/local-nuget` local feed (the bot's `nuget.config` already references it), and the **bot
+  capstone is wired**: 3 csprojs bumped 1.1.0→1.2.0; a **read-only** supervision surface added
+  (`IWatchdogService` over `IWatchdogClient`, `GetWatchdogStatusQuery`, `/supervision` command) — start/stop/
+  restart are left on the existing kgsm-lib→`kgsm.sh` path, which already routes to the daemon, so no
+  second C# write path was introduced (Option A). Routing is verified, not assumed: kgsm-lib invokes
+  `kgsm.sh lifecycle <verb>`, which (kgsm.sh:196 ≡ :214) resolves to the *same* `lifecycle.sh <verb>` path
+  `validate-increment3.sh` proved live; `restart` decomposes into routed stop+start (can't fight the
+  supervisor). Bot suite 8/8, 0-warning build, assets resolve 1.2.0. **Only the literal Discord-token run
+  is the operator's manual step.** The clarified systemd `service.tp` decision is its own future increment.
 
 ### Increment 4 — cross-repo finish (additive)
 - [ ] kgsm-lib: `Instance.CgroupPath`; register in `KgsmJsonContext`.

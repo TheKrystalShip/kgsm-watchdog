@@ -297,7 +297,7 @@ kgsm-watchdog/
 - [ ] Keystone: add the supervisor to the topology, **amend §4 statelessness**,
       fix the §6 ledger + `kgsm-lib/docs/host-monitoring-inventory.md` native anchor.
 
-### Increment 5 — boot persistence: desired-state restore across restarts  ◀ BUILT (2026-06-12)
+### Increment 5 — boot persistence: desired-state restore across restarts  ◀ DONE (built 2026-06-12, root-verified 2026-06-13)
 
 The in-house replacement for systemd's `systemctl enable` + `WantedBy=multi-user.target`, and the
 **prerequisite for the systemd hard-break** (the user's revised order, 2026-06-12: stand up the
@@ -346,16 +346,17 @@ restart or host reboot came up empty and auto-started nothing.
       branch (a brief restart) — correct either way, just not seamless. The deferred FIFO-reopen would help but
       still can't cover the gap between daemon death and restart, so this is a graceful-degrade, not a guarantee.
 - [x] Config: `KGSM_WATCHDOG_STATE_FILE` (+ `KnownEnvVars` + `--help` row; the completeness test covers it).
-- [x] Tests: **53 green** (was 38) — `DesiredStateStoreTests` (round-trip across a fresh store = a restart,
-      Add/Remove idempotence, missing/corrupt→empty, dir auto-create), `RestorePlanTests` (the 5-way fork),
-      2 options tests. AOT publish **0 ILC warnings** (native ELF; the new source-gen JSON path is clean).
-- [ ] **VERIFY under root (`deploy/validate-increment4.sh`, real `7dtd`)** — ready + shellcheck-clean,
-      **not yet run**: A `kgsm start` persists intent; B daemon restart with the game alive (FIFO held open) →
-      adopt (same pid, no respawn); C daemon down + `cgroup.kill` → respawn fresh (new pid); D `kgsm stop`
-      prunes the set → a later restart does not auto-start. *Operator's root run pending.*
-- **Exit (met, pending the root run):** desired-state survives a daemon/host restart on disk; the daemon
-  restores it on boot (adopt-live / spawn-dead) — the in-house stand-in for systemd boot auto-start, which
-  unblocks the systemd hard-break (next).
+- [x] Tests: **55 green** (was 38) — `DesiredStateStoreTests` (round-trip across a fresh store = a restart,
+      Add/Remove idempotence, missing/corrupt→empty, dir auto-create, **and the default empty-`StateFile`
+      HOME/XDG derivation** every operator hits), `RestorePlanTests` (the 5-way fork), 2 options tests. AOT
+      publish **0 ILC warnings** (native ELF; the new source-gen JSON path is clean).
+- [x] **VERIFIED under root (`deploy/validate-increment4.sh`, real `7dtd`, 2026-06-13) — 13/13 pass:**
+      A `kgsm start` persists intent; B daemon restart with the game alive (FIFO held open) → adopt (same
+      pid 1777045, no respawn); C daemon down + `cgroup.kill` → respawn fresh (new pid 1778232); D `kgsm stop`
+      prunes the set → a later restart does not auto-start. Trap left no orphaned daemon, cgroup, or state file.
+- **Exit (met):** desired-state survives a daemon/host restart on disk; the daemon restores it on boot
+  (adopt-live / spawn-dead), proven live against a real server — the in-house stand-in for systemd boot
+  auto-start, which unblocks the systemd hard-break (next).
 
 ---
 

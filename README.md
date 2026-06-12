@@ -25,14 +25,15 @@ cgroup foundation (Increment 0, in the `kgsm` repo).
 > transparently via `kgsm.sh`, and a read-only `/supervision` command surfaces the daemon's supervision
 > state. Only the literal Discord-token-in-the-loop run is left to the operator.
 >
-> **Increment 5 — boot persistence (built; root run pending).** The in-house replacement for systemd's
+> **Increment 5 — boot persistence (done).** The in-house replacement for systemd's
 > `systemctl enable` + `WantedBy=` — and the prerequisite for the planned systemd hard-break. The
 > desired-running set is persisted to disk (`KGSM_WATCHDOG_STATE_FILE`, default under the KGSM user's
 > data dir) on every start/stop, and **restored on daemon startup**: an instance whose cgroup is still
 > live (survived a *daemon* restart) is **re-adopted** without a respawn; one whose cgroup is empty (a
 > *host reboot*) is **spawned fresh**. So a reboot brings every previously-running native instance back
-> up, with no systemd unit involved. Unit-verified (53 tests, AOT-clean); `deploy/validate-increment4.sh`
-> awaits an operator root run.
+> up, with no systemd unit involved. Unit-verified (55 tests, AOT-clean) and **validated as root against a
+> live `7dtd` server** — `deploy/validate-increment4.sh` exercises persist → adopt → respawn → prune
+> across four real daemon restarts (13/13 checks pass).
 
 ## Architecture (sibling of kgsm-monitor)
 
@@ -145,3 +146,36 @@ A manual `start` clears a `failed` instance's give-up latch. A deliberate `stop`
 > Set `KGSM_WATCHDOG_RESTART_POLICY=on-failure` for systemd-style semantics, where a clean code-0 exit
 > is treated as an intentional shutdown and left stopped (only non-zero / signal exits restart) — but
 > note that then a server crashing with exit 0 will *not* come back.
+
+## Boot persistence (desired-state file)
+
+The daemon records which instances are *desired-running* in a small JSON file
+(`KGSM_WATCHDOG_STATE_FILE`, default `~/.local/share/kgsm-watchdog/desired-state.json`) and restores
+them on startup — the in-house replacement for `systemctl enable` / `WantedBy=`. On boot each listed
+instance is **re-adopted** if its cgroup is still live (a *daemon* restart) or **spawned fresh** if not
+(a *host reboot*).
+
+A version-controlled reference of the exact format ships as
+[`deploy/desired-state.example.json`](deploy/desired-state.example.json):
+
+```json
+{
+  "version": 1,
+  "desiredRunning": [
+    "7dtd",
+    "factorio"
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `version` | on-disk schema version (currently `1`), carried for forward-compatible migration |
+| `desiredRunning` | the instance names to auto-start on boot — **intent only**; each one's spawn config is re-read fresh from kgsm-lib on restore, so there is no stale-spec drift |
+
+**The daemon owns this file** — it adds a name on `start` and removes it on `stop`, so you normally
+never edit it by hand; `stop` an instance through the watchdog to drop it from auto-start. Writes are
+atomic (temp + rename), and a missing or corrupt file degrades to "nothing to restore" rather than
+wedging boot. To pre-seed auto-start before the daemon's first run, drop a file in this shape at the
+configured path (keys are case-sensitive `camelCase`, and JSON comments are **not** permitted — a file
+the parser rejects is treated as empty).

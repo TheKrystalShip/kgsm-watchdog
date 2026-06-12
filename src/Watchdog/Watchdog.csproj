@@ -12,6 +12,15 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <IsAotCompatible>true</IsAotCompatible>
 
+    <!-- Workstation, non-concurrent GC. This is an ASP.NET Core (Sdk.Web) app, whose default is
+         ServerGarbageCollection=true — and Server GC reserves a heap (plus a background GC thread)
+         PER CPU core, so an idle supervisor on a many-core host sat at ~100 MB RSS / ~29 threads
+         doing nothing. A 1 Hz cgroup poller allocates next to nothing, so Server GC's throughput is
+         pure waste here; Workstation + non-concurrent collapses it to one heap and drops the
+         background GC thread. Native AOT never affected this — AOT removes the JIT, not the GC. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+
     <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
     <AssemblyName>kgsm-watchdog</AssemblyName>
 

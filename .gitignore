@@ -1,0 +1,12 @@
+# Build output
+bin/
+obj/
+artifacts/
+publish/
+
+# Rider / VS
+.idea/
+.vs/
+*.user
+
+# Local planning docs are tracked; nothing else to ignore here.

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Watchdog/Watchdog.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Watchdog.Tests/Watchdog.Tests.csproj" />
+  </Folder>
+</Solution>

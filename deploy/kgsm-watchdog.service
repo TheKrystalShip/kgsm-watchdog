@@ -1,0 +1,52 @@
+[Unit]
+Description=KGSM Watchdog (native game-server supervisor)
+Documentation=https://github.com/TheKrystalShip
+After=network.target
+
+[Service]
+Type=simple
+# Native-AOT single-file binary.
+#
+# Increment 1 model: the daemon boots as ROOT and self-bootstraps the delegated kgsm.slice
+# (this subsumes `kgsm system setup-cgroups`), enters kgsm.slice/supervisor, then DROPS to the
+# KGSM user. After the drop there is NO further privilege escalation — every game spawn is an
+# intra-slice cgroup move the unprivileged daemon is allowed to make. The only privileged moment
+# is this boot, which is normal daemon behaviour.
+ExecStart=/opt/kgsm-watchdog/kgsm-watchdog
+
+# REQUIRED: path to kgsm.sh. Used (read-only, via kgsm-lib) to fetch each instance's spawn config
+# before forking it. Point at the packaged launcher, not a copy under /home.
+Environment=KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm
+
+# The user to drop to after the root bootstrap, and the owner the delegated cgroup subtree +
+# runtime socket dir are chowned to. SET THESE to your KGSM user's numeric uid/gid.
+Environment=KGSM_WATCHDOG_UID=1000
+Environment=KGSM_WATCHDOG_GID=1000
+
+# Optional knobs (defaults shown):
+# Environment=KGSM_WATCHDOG_SOCKET=/run/kgsm-watchdog/control.sock
+# Environment=KGSM_WATCHDOG_SOCKET_MODE=660
+# Environment=KGSM_WATCHDOG_CGROUP_BASE=kgsm.slice
+# Environment=KGSM_WATCHDOG_CGROUP_CONTROLLERS=cpu memory io pids
+# Environment=KGSM_WATCHDOG_SUPERVISOR_LEAF=supervisor
+
+# Control socket lives here. systemd creates the dir; the root bootstrap re-chowns it to the
+# target user so the dropped daemon can bind the socket.
+RuntimeDirectory=kgsm-watchdog
+RuntimeDirectoryMode=0750
+
+Restart=always
+RestartSec=2
+
+# The daemon writes cgroup control files under /sys/fs/cgroup, so do NOT enable a read-only /sys
+# (ProtectKernelTunables) here, and do NOT hide /home/data dirs where game servers may live
+# (ProtectHome). It only ever talks over unix sockets.
+RestrictAddressFamilies=AF_UNIX
+
+# NOTE (future, Increment 3): a fully rootless variant can instead run `User=kgsm`,
+# `Slice=kgsm.slice`, `Delegate=yes` and skip the root step — but that delegates
+# `kgsm.slice/kgsm-watchdog.service`, not `kgsm.slice` itself, so the daemon would need to
+# discover its delegated base from /proc/self/cgroup. Not wired in Increment 1.
+
+[Install]
+WantedBy=multi-user.target

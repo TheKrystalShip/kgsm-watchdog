@@ -1,3 +1,4 @@
+using System.Text;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 namespace TheKrystalShip.KGSM.Watchdog;
@@ -147,6 +148,115 @@ public sealed class WatchdogOptions
             "always" => RestartPolicyMode.Always,
             _ => fallback,
         };
+    }
+
+    /// <summary>
+    /// Every environment variable the daemon reads. The single source of truth for config discovery:
+    /// <see cref="DescribeEnvironment"/> renders it for <c>--help</c>, and <see cref="UnknownConfigVars"/>
+    /// uses it to flag typo'd <c>KGSM_WATCHDOG_*</c> vars at startup. <b>Add a new knob here</b> when you
+    /// add one to <see cref="FromEnvironment"/> (a unit test asserts every name appears in the help).
+    /// </summary>
+    public static readonly string[] KnownEnvVars =
+    [
+        "KGSM_WATCHDOG_KGSM_PATH",
+        "KGSM_WATCHDOG_KGSM_SOCKET",
+        "KGSM_WATCHDOG_SOCKET",
+        "KGSM_WATCHDOG_SOCKET_MODE",
+        "KGSM_WATCHDOG_CGROUP_MOUNT",
+        "KGSM_WATCHDOG_CGROUP_BASE",
+        "KGSM_WATCHDOG_CGROUP_CONTROLLERS",
+        "KGSM_WATCHDOG_SUPERVISOR_LEAF",
+        "KGSM_WATCHDOG_UID",
+        "KGSM_WATCHDOG_GID",
+        "KGSM_WATCHDOG_HOME",
+        "KGSM_WATCHDOG_POLL_INTERVAL_MS",
+        "KGSM_WATCHDOG_RESTART_BASE_DELAY_MS",
+        "KGSM_WATCHDOG_RESTART_MAX_DELAY_MS",
+        "KGSM_WATCHDOG_RESTART_MAX_RETRIES",
+        "KGSM_WATCHDOG_RESTART_STABILITY_SEC",
+        "KGSM_WATCHDOG_RESTART_GRACE_SEC",
+        "KGSM_WATCHDOG_RESTART_POLICY",
+    ];
+
+    /// <summary>
+    /// Any <c>KGSM_WATCHDOG_*</c> environment variables that are set but not recognised — almost always
+    /// a typo silently falling back to a default. Logged as a warning at startup so the config surface
+    /// is not invisible (the cost of stringly-typed env config; see PLAN §8 discussion).
+    /// </summary>
+    public static IReadOnlyList<string> UnknownConfigVars()
+    {
+        var known = new HashSet<string>(KnownEnvVars, StringComparer.Ordinal);
+        var unknown = new List<string>();
+        foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
+        {
+            if (e.Key is string key && key.StartsWith("KGSM_WATCHDOG_", StringComparison.Ordinal) && !known.Contains(key))
+                unknown.Add(key);
+        }
+        unknown.Sort(StringComparer.Ordinal);
+        return unknown;
+    }
+
+    /// <summary>
+    /// The operator-facing configuration reference, rendered for <c>--help</c>. Defaults are read live
+    /// from a fresh <see cref="WatchdogOptions"/> so the help can never drift from the real defaults.
+    /// </summary>
+    public static string DescribeEnvironment()
+    {
+        var d = new WatchdogOptions();
+        var sb = new StringBuilder();
+
+        sb.AppendLine("kgsm-watchdog — resident KGSM native-instance supervisor daemon");
+        sb.AppendLine();
+        sb.AppendLine("USAGE");
+        sb.AppendLine("  kgsm-watchdog [--help|-h]");
+        sb.AppendLine();
+        sb.AppendLine("CONFIGURATION");
+        sb.AppendLine("  All configuration is via environment variables — idiomatic for a systemd/init");
+        sb.AppendLine("  daemon (set them in the unit's Environment= / EnvironmentFile=). Exactly one var");
+        sb.AppendLine("  is REQUIRED; every other knob has a working default, shown in [brackets].");
+
+        void Section(string title) { sb.AppendLine(); sb.AppendLine(title); }
+        void Row(string name, string def, string desc)
+            => sb.AppendLine($"  {name,-37} {def,-26} {desc}");
+
+        Section("KGSM integration");
+        Row("KGSM_WATCHDOG_KGSM_PATH", "[REQUIRED]", "absolute path to kgsm.sh (read via kgsm-lib for spawn config)");
+        Row("KGSM_WATCHDOG_KGSM_SOCKET", $"[{d.KgsmSocketPath}]", "kgsm-lib event socket");
+
+        Section("Control socket (the security boundary is its filesystem perms)");
+        Row("KGSM_WATCHDOG_SOCKET", $"[{d.SocketPath}]", "control unix-domain socket path");
+        Row("KGSM_WATCHDOG_SOCKET_MODE", "[0660]", "octal perms applied to the socket");
+
+        Section("Cgroup layout (rarely changed)");
+        Row("KGSM_WATCHDOG_CGROUP_MOUNT", $"[{d.CgroupMountPoint}]", "cgroup v2 mount point");
+        Row("KGSM_WATCHDOG_CGROUP_BASE", $"[{d.CgroupBaseName}]", "KGSM's delegated base cgroup");
+        Row("KGSM_WATCHDOG_CGROUP_CONTROLLERS", $"[{string.Join(' ', d.CgroupControllers)}]", "controllers enabled on the base subtree");
+        Row("KGSM_WATCHDOG_SUPERVISOR_LEAF", $"[{d.SupervisorLeaf}]", "leaf cgroup the daemon itself lives in");
+
+        Section("Privilege drop (root-boot path)");
+        Row("KGSM_WATCHDOG_UID", "[SUDO_UID]", "uid to drop to / chown the subtree to");
+        Row("KGSM_WATCHDOG_GID", "[SUDO_GID]", "gid counterpart");
+        Row("KGSM_WATCHDOG_HOME", "[from /etc/passwd]", "HOME for the dropped user (kgsm-lib reads XDG dirs from it)");
+
+        Section("Supervision: crash detection + restart");
+        Row("KGSM_WATCHDOG_POLL_INTERVAL_MS", $"[{d.PollIntervalMs}]", "how often cgroup.events is polled for liveness");
+        Row("KGSM_WATCHDOG_RESTART_POLICY", $"[{d.RestartPolicy.ToString().ToLowerInvariant()}]", "always = restart any exit; on-failure = keep clean code-0 exits stopped");
+        Row("KGSM_WATCHDOG_RESTART_BASE_DELAY_MS", $"[{d.RestartBaseDelayMs}]", "first-restart delay; doubles each consecutive failure");
+        Row("KGSM_WATCHDOG_RESTART_MAX_DELAY_MS", $"[{d.RestartMaxDelayMs}]", "ceiling on the exponential delay");
+        Row("KGSM_WATCHDOG_RESTART_MAX_RETRIES", $"[{d.RestartMaxRetries}]", "consecutive failures before giving up (phase=failed)");
+        Row("KGSM_WATCHDOG_RESTART_STABILITY_SEC", $"[{d.RestartStabilitySeconds}]", "uptime after which the failure streak resets");
+        Row("KGSM_WATCHDOG_RESTART_GRACE_SEC", $"[{d.RestartGraceSeconds}]", "post-spawn window where crash-detection is suppressed");
+
+        sb.AppendLine();
+        sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");
+        sb.AppendLine("  GET  /ready              supervisor readiness (200 ready / 503 not)");
+        sb.AppendLine("  GET  /healthz            process liveness");
+        sb.AppendLine("  POST /start/{instance}   spawn into its cgroup, desired-state = running");
+        sb.AppendLine("  POST /stop/{instance}    graceful stop -> drain -> cgroup.kill, desired-state = stopped");
+        sb.AppendLine("  GET  /status/{instance}  desired/phase/populated/pid/restarts");
+        sb.AppendLine("  GET  /list               all supervised instances");
+
+        return sb.ToString();
     }
 
     private static uint? ParseId(string? value)

@@ -14,21 +14,22 @@ Type=simple
 # is this boot, which is normal daemon behaviour.
 ExecStart=/opt/kgsm-watchdog/kgsm-watchdog
 
-# REQUIRED: path to kgsm.sh. Used (read-only, via kgsm-lib) to fetch each instance's spawn config
-# before forking it. Point at the packaged launcher, not a copy under /home.
+# Configuration is via environment variables. The full, authoritative list (with defaults) is
+# printed by the binary itself: `/opt/kgsm-watchdog/kgsm-watchdog --help`. The three below are the
+# ones a typical install must set; everything else has a working default. A complete, commented
+# template ships as deploy/kgsm-watchdog.env.example.
+#
+# REQUIRED: path to kgsm.sh (read-only, via kgsm-lib, for each instance's spawn config). Point at
+# the packaged launcher, not a copy under /home.
 Environment=KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm
-
 # The user to drop to after the root bootstrap, and the owner the delegated cgroup subtree +
 # runtime socket dir are chowned to. SET THESE to your KGSM user's numeric uid/gid.
 Environment=KGSM_WATCHDOG_UID=1000
 Environment=KGSM_WATCHDOG_GID=1000
 
-# Optional knobs (defaults shown):
-# Environment=KGSM_WATCHDOG_SOCKET=/run/kgsm-watchdog/control.sock
-# Environment=KGSM_WATCHDOG_SOCKET_MODE=660
-# Environment=KGSM_WATCHDOG_CGROUP_BASE=kgsm.slice
-# Environment=KGSM_WATCHDOG_CGROUP_CONTROLLERS=cpu memory io pids
-# Environment=KGSM_WATCHDOG_SUPERVISOR_LEAF=supervisor
+# Optional: keep the rest of the knobs in a file instead of inline Environment= lines. The leading
+# '-' makes it optional (no failure if absent). Copy deploy/kgsm-watchdog.env.example to this path.
+EnvironmentFile=-/etc/kgsm-watchdog/kgsm-watchdog.env
 
 # Control socket lives here. systemd creates the dir; the root bootstrap re-chowns it to the
 # target user so the dropped daemon can bind the socket.

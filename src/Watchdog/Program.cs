@@ -4,6 +4,13 @@ using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
+// Self-documenting: an operator with only the compiled binary can discover every config knob.
+if (args.Any(a => a is "--help" or "-h" or "help"))
+{
+    Console.Write(WatchdogOptions.DescribeEnvironment());
+    return 0;
+}
+
 var options = WatchdogOptions.FromEnvironment();
 
 // Unlike the monitor, the watchdog cannot run "headless" without KGSM: it reads each instance's
@@ -11,6 +18,7 @@ var options = WatchdogOptions.FromEnvironment();
 if (string.IsNullOrEmpty(options.KgsmPath))
 {
     Console.Error.WriteLine("FATAL: KGSM_WATCHDOG_KGSM_PATH is required (absolute path to kgsm.sh).");
+    Console.Error.WriteLine("Run 'kgsm-watchdog --help' for the full list of configuration variables.");
     return 1;
 }
 
@@ -68,6 +76,12 @@ app.Lifetime.ApplicationStarted.Register(() =>
 });
 
 app.MapWatchdog();
+
+// Surface typo'd config: a misspelled KGSM_WATCHDOG_* var silently falls back to its default
+// otherwise (the cost of stringly-typed env config — make it visible, not invisible).
+foreach (var v in WatchdogOptions.UnknownConfigVars())
+    app.Logger.LogWarning(
+        "unrecognised config variable {Var} is set but has no effect (typo?) — run 'kgsm-watchdog --help' for valid knobs", v);
 
 var ready = app.Services.GetRequiredService<SupervisorState>();
 app.Logger.LogInformation(

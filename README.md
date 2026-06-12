@@ -63,19 +63,41 @@ curl --unix-socket $S -X POST http://x/stop/my-server
 The watchdog supervises **native standalone** instances only; it no-ops on systemd/container
 instances (those are owned by systemd / Docker).
 
-### Supervision knobs (Increment 2)
+## Configuration
 
-The crash watcher and restart policy are tuned via environment (defaults shown):
+All configuration is via environment variables (idiomatic for a systemd/init daemon — set them in
+the unit's `Environment=` / `EnvironmentFile=`). **The compiled binary is self-documenting** — it
+prints the full list with live defaults, so config is never invisible to an operator:
+
+```bash
+kgsm-watchdog --help
+```
+
+A ready-to-edit template ships as [`deploy/kgsm-watchdog.env.example`](deploy/kgsm-watchdog.env.example)
+(point the unit at it with `EnvironmentFile=`). Only **`KGSM_WATCHDOG_KGSM_PATH` is required**;
+everything else has a working default. A misspelled `KGSM_WATCHDOG_*` var is logged as a warning at
+startup (it would otherwise silently fall back to its default).
 
 | Env | Default | Meaning |
 |---|---|---|
+| `KGSM_WATCHDOG_KGSM_PATH` | *(required)* | absolute path to `kgsm.sh` (read via kgsm-lib for spawn config) |
+| `KGSM_WATCHDOG_KGSM_SOCKET` | `/run/kgsm-watchdog/events.sock` | kgsm-lib event socket |
+| `KGSM_WATCHDOG_SOCKET` | `/run/kgsm-watchdog/control.sock` | control unix-domain socket path |
+| `KGSM_WATCHDOG_SOCKET_MODE` | `0660` | octal perms applied to the control socket |
+| `KGSM_WATCHDOG_CGROUP_MOUNT` | `/sys/fs/cgroup` | cgroup v2 mount point |
+| `KGSM_WATCHDOG_CGROUP_BASE` | `kgsm.slice` | KGSM's delegated base cgroup |
+| `KGSM_WATCHDOG_CGROUP_CONTROLLERS` | `cpu memory io pids` | controllers enabled on the base subtree |
+| `KGSM_WATCHDOG_SUPERVISOR_LEAF` | `supervisor` | leaf cgroup the daemon itself lives in |
+| `KGSM_WATCHDOG_UID` | `$SUDO_UID` | uid to drop to / chown the delegated subtree to |
+| `KGSM_WATCHDOG_GID` | `$SUDO_GID` | gid counterpart |
+| `KGSM_WATCHDOG_HOME` | *(from `/etc/passwd`)* | `HOME` for the dropped user (kgsm-lib reads XDG dirs from it) |
 | `KGSM_WATCHDOG_POLL_INTERVAL_MS` | `1000` | how often each instance's `cgroup.events` is polled |
+| `KGSM_WATCHDOG_RESTART_POLICY` | `always` | `always` = restart any exit; `on-failure` = leave clean code-0 exits stopped |
 | `KGSM_WATCHDOG_RESTART_BASE_DELAY_MS` | `1000` | first-restart delay; doubles each consecutive failure |
 | `KGSM_WATCHDOG_RESTART_MAX_DELAY_MS` | `60000` | ceiling on the exponential delay |
 | `KGSM_WATCHDOG_RESTART_MAX_RETRIES` | `5` | consecutive failures before giving up (`phase=failed`) |
 | `KGSM_WATCHDOG_RESTART_STABILITY_SEC` | `300` | uptime after which the failure streak resets |
 | `KGSM_WATCHDOG_RESTART_GRACE_SEC` | `10` | post-spawn window where crash-detection is suppressed |
-| `KGSM_WATCHDOG_RESTART_POLICY` | `always` | `always` = restart any exit; `on-failure` = leave clean code-0 exits stopped |
 
 A manual `start` clears a `failed` instance's give-up latch. A deliberate `stop` is never restarted.
 

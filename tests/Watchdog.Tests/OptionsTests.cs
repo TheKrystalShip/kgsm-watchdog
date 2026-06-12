@@ -130,4 +130,32 @@ public sealed class OptionsTests
         using var _ = new EnvScope(("KGSM_WATCHDOG_RESTART_POLICY", value));
         Assert.Equal(expected, WatchdogOptions.FromEnvironment().RestartPolicy);
     }
+
+    [Fact]
+    public void Help_documents_every_known_var()
+    {
+        // Completeness guard: add a knob to FromEnvironment + KnownEnvVars but forget to document it
+        // in DescribeEnvironment, and this fails — config can't silently become invisible.
+        var help = WatchdogOptions.DescribeEnvironment();
+        foreach (var v in WatchdogOptions.KnownEnvVars)
+            Assert.Contains(v, help, StringComparison.Ordinal);
+        Assert.Contains("REQUIRED", help, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void KnownEnvVars_has_no_duplicates()
+        => Assert.Equal(WatchdogOptions.KnownEnvVars.Length, WatchdogOptions.KnownEnvVars.Distinct().Count());
+
+    [Fact]
+    public void UnknownConfigVars_flags_typos_not_valid_names()
+    {
+        using var _ = new EnvScope(
+            ("KGSM_WATCHDOG_RESTART_MAX_RETRYS", "3"),    // typo (RETRYS)
+            ("KGSM_WATCHDOG_RESTART_MAX_RETRIES", "3"));  // the real one
+
+        var unknown = WatchdogOptions.UnknownConfigVars();
+
+        Assert.Contains("KGSM_WATCHDOG_RESTART_MAX_RETRYS", unknown);
+        Assert.DoesNotContain("KGSM_WATCHDOG_RESTART_MAX_RETRIES", unknown);
+    }
 }

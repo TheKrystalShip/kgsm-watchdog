@@ -1,0 +1,65 @@
+[Unit]
+Description=KGSM Watchdog (native game-server supervisor, rootless/delegated)
+Documentation=https://github.com/TheKrystalShip
+After=network.target
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Boot variant: ROOTLESS / DELEGATED (advanced, opt-in).
+#
+# The DEFAULT and most-tested variant is deploy/kgsm-watchdog.service (root-boot:
+# the daemon starts as root, delegates kgsm.slice itself, then drops privilege).
+# Prefer that unless you specifically want the daemon to never start as root.
+#
+# This unit instead never runs as root: systemd places the service inside
+# kgsm.slice and the daemon takes the *delegated* path (CgroupBootstrap.RunDelegated)
+# — it only ensures the supervisor leaf and moves into it, with no root step.
+#
+# PREREQUISITE (must be done once, as root, before this unit will become ready):
+#   kgsm system setup-cgroups <kgsm-user>
+# That creates kgsm.slice, enables controllers, and chowns the slice to the KGSM
+# user, making it the writable delegated base this daemon expects
+# (KGSM_WATCHDOG_CGROUP_BASE, default kgsm.slice). Without it the daemon reports
+# /ready = 503 "kgsm.slice is not a writable delegated base" — fall back to the
+# root-boot unit in that case.
+#
+# CAVEAT (Increment 3): with Delegate=yes systemd delegates
+# kgsm.slice/kgsm-watchdog.service (this service's own leaf), not kgsm.slice. The
+# daemon reparents itself to kgsm.slice/supervisor, which works because the
+# setup-cgroups chown above makes kgsm.slice writable to the user. Per-service
+# delegated-base discovery from /proc/self/cgroup is not yet wired, so the
+# setup-cgroups prerequisite is load-bearing here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[Service]
+Type=simple
+ExecStart=/opt/kgsm-watchdog/kgsm-watchdog
+
+# Run as the KGSM user from the start — no privilege drop happens in this path.
+User=kgsm
+Group=kgsm
+
+# Place the service inside kgsm.slice and hand it a delegated cgroup subtree so the
+# daemon may create/enter the supervisor leaf and per-instance cgroups unprivileged.
+Slice=kgsm.slice
+Delegate=yes
+
+# REQUIRED: path to kgsm.sh (read-only, via kgsm-lib, for each instance's spawn
+# config). UID/GID are not needed here (there is no drop — systemd already runs us
+# as the KGSM user). Keep the rest of the knobs in the EnvironmentFile below.
+Environment=KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm
+EnvironmentFile=-/etc/kgsm-watchdog/kgsm-watchdog.env
+
+# Control socket lives here; systemd creates the dir owned by the service user.
+RuntimeDirectory=kgsm-watchdog
+RuntimeDirectoryMode=0750
+
+Restart=always
+RestartSec=2
+
+# The daemon writes cgroup control files under its delegated subtree and talks only
+# over unix sockets. Do NOT enable ProtectKernelTunables (read-only /sys) or
+# ProtectHome (game-server data may live under /home).
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

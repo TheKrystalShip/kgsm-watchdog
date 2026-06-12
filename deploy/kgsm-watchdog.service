@@ -44,10 +44,12 @@ RestartSec=2
 # (ProtectHome). It only ever talks over unix sockets.
 RestrictAddressFamilies=AF_UNIX
 
-# NOTE (future, Increment 3): a fully rootless variant can instead run `User=kgsm`,
-# `Slice=kgsm.slice`, `Delegate=yes` and skip the root step — but that delegates
-# `kgsm.slice/kgsm-watchdog.service`, not `kgsm.slice` itself, so the daemon would need to
-# discover its delegated base from /proc/self/cgroup. Not wired in Increment 1.
+# This root-boot unit is the recommended, most-tested variant. Two other boot
+# variants ship alongside it:
+#   - deploy/kgsm-watchdog.rootless.service — never starts as root; takes the
+#     delegated path (User=kgsm, Slice=kgsm.slice, Delegate=yes). Requires
+#     `kgsm system setup-cgroups` first; see that file's header.
+#   - deploy/kgsm-watchdog.openrc — the same root-boot model for non-systemd hosts.
 
 [Install]
 WantedBy=multi-user.target

@@ -233,16 +233,52 @@ kgsm-watchdog/
   (`killed (timeout)`). The no-restart invariant holds regardless; re-confirm a true graceful drain
   with a fast-loading server (factorio) when convenient. Daemon-death orphan re-adoption remains Inc 3.
 
-### Increment 3 — clients + boot integration (in the `kgsm` repo + here)
-- [ ] kgsm-lib: typed `IWatchdogClient` for the control socket.
-- [ ] `kgsm.sh start/stop` (native) route to the daemon when present; the bash
-      `manage.native.d` direct-spawn path is superseded for native.
-- [ ] systemd-native: drop `service.tp` `Restart=on-failure` (no dueling
-      supervisors); add `Delegate=yes` where systemd hosts the daemon.
-- [ ] Ship `deploy/` units for the three boot variants (init script / systemd /
-      rootless `enable-linger`).
-- **Exit:** the Discord bot can start/stop/auto-restart a native server end-to-end,
-  headless.
+### Increment 3 — clients + boot integration (in the `kgsm` repo + here)  ◀ PARTIAL (2026-06-12)
+- [x] kgsm-lib: typed `IWatchdogClient` for the control socket — `WatchdogClient`
+      (HTTP/1.1 over UDS via `SocketsHttpHandler.ConnectCallback`), the 3 DTOs mirrored
+      with explicit camelCase `[JsonPropertyName]` + registered in `KgsmJsonContext`
+      (reflection-free), `AddKgsmWatchdogClient(...)` DI. 13 unit tests (wire-shape casing
+      guards + ctor/DI), full lib suite **420 green**, `IsAotCompatible` build **0-warning**,
+      packed **1.2.0** locally. Decoupled from `AddKgsmServices` — a surface can take either.
+- [x] `kgsm.sh start/stop` (native standalone) route to the daemon when present — new
+      `commands/handlers/watchdog.sh` (`__watchdog_available` gates on socket + `/ready`=200;
+      `__watchdog_dispatch_lifecycle` maps 200/409→event code, conn-fail→`EC_ERROR` with **no
+      silent double-spawn**), wired into `__logic_{start,stop,is_active}_standalone_instance`.
+      **is-active also routes** (the daemon writes no PID file, so the management script's check
+      would be stale); a "not tracked" result falls through to the direct check. **stop is gated
+      on `__watchdog_tracks`** (orphan safety): an instance the daemon does not track — a direct-path
+      orphan started before the daemon — falls through to the direct PID-file stop, so the daemon
+      can't false-report "stopped" while the orphan runs (and `restart` therefore can't double-spawn).
+      Absent/curl-less → direct path unchanged. 18 unit tests / 27 assertions
+      (`test_watchdog_routing.sh`), lifecycle regression 44/44, shellcheck clean.
+      **Residual (documented): explicit `start` on a live direct-path orphan still double-spawns —
+      the genuine orphan re-adoption gap, out of scope here.**
+- [x] Ship `deploy/` units for the boot variants: `kgsm-watchdog.service` (root-boot,
+      recommended), `kgsm-watchdog.rootless.service` (`User=kgsm, Slice=kgsm.slice, Delegate=yes`
+      — the real `Delegate=yes` half of the bullet below; **requires `kgsm system setup-cgroups`**
+      since per-service delegated-base discovery is unwired), `kgsm-watchdog.openrc` (non-systemd).
+      systemd units `systemd-analyze verify` clean; openrc shellcheck clean.
+- [ ] **(deferred to a dedicated increment — direction chosen 2026-06-12)** systemd-native: drop
+      `service.tp` `Restart=on-failure`. This is **not** a no-op cleanup: the user's intent is to
+      **migrate systemd-hosted native instances onto the watchdog too** (today the watchdog only
+      supervises *standalone*; systemd instances are systemd's). Dropping `Restart=` is only correct
+      **once that migration lands** — doing it before would leave systemd instances unsupervised by
+      anyone. So the order is: (1) teach the watchdog to adopt/supervise systemd-runtime native
+      instances (scope guard in `InstanceSupervisor.StartAsync` currently rejects non-standalone), then
+      (2) drop the dueling `Restart=on-failure`. Left as its own increment; **not** touched here. (The
+      `Delegate=yes` half is already done, in the rootless unit above.)
+- **VERIFIED under root (`validate-increment3.sh`, 8/8)** against real `7dtd`: `kgsm start 7dtd`
+  (the bash CLI) routed to the running daemon → the process entered `kgsm.slice/7dtd` **and** appeared
+  in the daemon's `/list` (a direct spawn would do neither); `kgsm is-active` reported active off the
+  daemon's `/status` (not a stale PID file); `kgsm stop` tore the cgroup down and dropped it from
+  `/list` (is-active then inactive); and with the daemon killed the routing gate
+  (`__watchdog_available`) went false → fallback to the direct path. Teardown clean (no stray process,
+  no leftover instance cgroup, slice still delegated to the user).
+- **Exit (partial):** the bash + lib + boot plumbing is in place, unit-verified, and the
+  `kgsm → daemon` round-trip is **verified live**. The **bot end-to-end** capstone is gated on getting
+  kgsm-lib **1.2.0** to the bot (the "stranded lib distribution", ecosystem finding #1 — no local feed
+  wired; packed locally, **not** pushed to the GitHub Packages feed without authorization). The bot
+  wiring + a clarified systemd `service.tp` decision remain.
 
 ### Increment 4 — cross-repo finish (additive)
 - [ ] kgsm-lib: `Instance.CgroupPath`; register in `KgsmJsonContext`.

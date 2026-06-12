@@ -16,7 +16,12 @@ cgroup foundation (Increment 0, in the `kgsm` repo).
 > `populated`→0 while desired-running and restarts with **exponential backoff + give-up** (consecutive
 > failures since last stability ≥ maxRetries → `phase=failed`). Restart policy is configurable —
 > **`always`** by default (any exit restarts; only a deliberate `stop` keeps it down), or `on-failure`
-> (leave clean code-0 exits stopped). CLI/lib/bot client wiring and boot integration is Increment 3.
+> (leave clean code-0 exits stopped).
+>
+> **Increment 3 — clients + boot integration (in progress).** kgsm-lib ships a typed
+> `IWatchdogClient`; `kgsm start|stop` (native standalone) auto-routes to the daemon when present
+> (falling back to direct spawn when absent); and three boot variants ship in `deploy/`. End-to-end
+> Discord-bot wiring is gated on distributing kgsm-lib 1.2.0 to consumers (see Clients below).
 
 ## Architecture (sibling of kgsm-monitor)
 
@@ -62,6 +67,27 @@ curl --unix-socket $S -X POST http://x/stop/my-server
 
 The watchdog supervises **native standalone** instances only; it no-ops on systemd/container
 instances (those are owned by systemd / Docker).
+
+## Deploy (three boot variants)
+
+All three live in [`deploy/`](deploy/); pick one per host. Configuration is shared via
+[`kgsm-watchdog.env.example`](deploy/kgsm-watchdog.env.example).
+
+| Variant | File | Model |
+|---|---|---|
+| **systemd, root-boot** *(recommended)* | `kgsm-watchdog.service` | Starts as root, self-delegates `kgsm.slice`, drops to the KGSM user. Most-tested. |
+| **systemd, rootless** *(advanced)* | `kgsm-watchdog.rootless.service` | Never root: `User=kgsm`, `Slice=kgsm.slice`, `Delegate=yes`. **Requires `kgsm system setup-cgroups` first** (see the file header). |
+| **OpenRC** | `kgsm-watchdog.openrc` | Same root-boot model for non-systemd hosts (Alpine/Gentoo); `supervise-daemon` respawns. |
+
+## Clients (Increment 3)
+
+C# consumers reach the daemon through **kgsm-lib's** typed `IWatchdogClient`
+(`AddKgsmWatchdogClient(socketPath)`) — `start`/`stop`/`status`/`list`/`ready` over the
+control socket, source-gen JSON, AOT-safe — keeping all watchdog integration in the one
+KGSM chokepoint. On the bash side, `kgsm start|stop` for **native standalone** instances
+auto-routes to the daemon when its socket is present and `/ready` is 200, and falls back to
+the legacy direct-spawn path when it is absent (so installs without the daemon are
+unchanged). See the kgsm repo's `commands/handlers/watchdog.sh`.
 
 ## Configuration
 

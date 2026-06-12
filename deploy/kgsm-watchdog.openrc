@@ -1,0 +1,46 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh
+# The name/command/supervisor/respawn_* variables below are read by the openrc-run
+# framework, not referenced within this script — so SC2034 is expected and disabled.
+# shellcheck disable=SC2034
+#
+# OpenRC init script for kgsm-watchdog (non-systemd hosts: Alpine, Gentoo, etc.).
+#
+# Boot variant: ROOT-BOOT (the proven path, same as deploy/kgsm-watchdog.service).
+# The daemon starts as root, self-bootstraps the delegated kgsm.slice (subsuming
+# `kgsm system setup-cgroups`), enters kgsm.slice/supervisor, then DROPS to the
+# KGSM user. After the drop there is no further privilege escalation. supervise-daemon
+# restarts the process if it ever dies — the analog of systemd Restart=always.
+#
+# Install:
+#   cp deploy/kgsm-watchdog.openrc        /etc/init.d/kgsm-watchdog && chmod +x $_
+#   cp deploy/kgsm-watchdog.env.example   /etc/conf.d/kgsm-watchdog   # then edit
+#   rc-update add kgsm-watchdog default
+#   rc-service kgsm-watchdog start
+#
+# Configuration lives in /etc/conf.d/kgsm-watchdog (sourced automatically). Put the
+# KGSM_WATCHDOG_* settings there as `export KEY=value` lines so they reach the daemon.
+# The binary documents every knob:  /opt/kgsm-watchdog/kgsm-watchdog --help
+
+name="kgsm-watchdog"
+description="KGSM Watchdog (native game-server supervisor)"
+
+command="/opt/kgsm-watchdog/kgsm-watchdog"
+command_user="root"          # boots as root, self-drops to KGSM_WATCHDOG_UID/GID
+command_background="no"      # supervise-daemon manages the foreground process
+
+supervisor="supervise-daemon"
+pidfile="/run/kgsm-watchdog.pid"
+respawn_delay=2              # ~ RestartSec=2
+respawn_max=0               # unlimited respawns ~ Restart=always
+
+depend() {
+  need localmount
+  after bootmisc
+}
+
+start_pre() {
+  # The control socket's runtime dir; the root bootstrap re-chowns it to the
+  # target user so the dropped daemon can bind the socket.
+  checkpath --directory --mode 0750 /run/kgsm-watchdog
+}

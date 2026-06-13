@@ -50,6 +50,11 @@ builder.Services.AddHostedService<StartupRestorer>();
 // clock; the supervisor holds all the state and makes all the decisions (one decision point).
 builder.Services.AddHostedService<CrashWatcher>();
 
+// One-shot post-startup heap trim: hands the startup allocation spike back to the OS once idle (the
+// GC otherwise holds ~75 MB of committed-but-free heap that a 1 Hz poller never collects). Pure
+// optimization, runs off the startup path.
+builder.Services.AddHostedService<StartupMemoryTrimmer>();
+
 // Control plane: a unix domain socket (no TCP port; the socket's filesystem perms are the
 // security boundary, same model as kgsm-monitor).
 builder.WebHost.ConfigureKestrel(kestrel =>

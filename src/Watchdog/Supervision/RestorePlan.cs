@@ -21,7 +21,7 @@ internal enum RestoreAction
     /// </summary>
     SkipGone,
 
-    /// <summary>No longer a native standalone instance (became container/systemd) — outside the watchdog's remit.</summary>
+    /// <summary>No longer a native instance (became a container) — outside the watchdog's remit.</summary>
     SkipOutOfScope,
 }
 
@@ -40,7 +40,9 @@ internal static class RestorePlan
         if (instance is null)
             return RestoreAction.SkipGone;
 
-        if (instance.Runtime != InstanceRuntime.Native || instance.LifecycleManager != LifecycleManager.Standalone)
+        // Runtime alone is the discriminator: every native instance is the watchdog's; containers are
+        // Docker's. (systemd is gone, so there is no longer a native-but-not-ours case.)
+        if (instance.Runtime != InstanceRuntime.Native)
             return RestoreAction.SkipOutOfScope;
 
         return cgroupPopulated ? RestoreAction.Adopt : RestoreAction.Spawn;

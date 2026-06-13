@@ -12,11 +12,10 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// </summary>
 public sealed class RestorePlanTests
 {
-    private static Instance Native(bool standalone = true) => new()
+    private static Instance Native() => new()
     {
         Name = "7dtd",
         Runtime = InstanceRuntime.Native,
-        LifecycleManager = standalone ? LifecycleManager.Standalone : LifecycleManager.Systemd,
     };
 
     [Fact]
@@ -35,14 +34,10 @@ public sealed class RestorePlanTests
     }
 
     [Fact]
-    public void Systemd_lifecycle_is_out_of_scope()
-        => Assert.Equal(RestoreAction.SkipOutOfScope, RestorePlan.Classify(false, Native(standalone: false)));
-
-    [Fact]
-    public void Native_standalone_with_a_live_cgroup_is_adopt()
+    public void Native_with_a_live_cgroup_is_adopt()
         => Assert.Equal(RestoreAction.Adopt, RestorePlan.Classify(cgroupPopulated: true, instance: Native()));
 
     [Fact]
-    public void Native_standalone_with_an_empty_cgroup_is_spawn()
+    public void Native_with_an_empty_cgroup_is_spawn()
         => Assert.Equal(RestoreAction.Spawn, RestorePlan.Classify(cgroupPopulated: false, instance: Native()));
 }

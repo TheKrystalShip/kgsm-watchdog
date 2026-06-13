@@ -4,14 +4,18 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 public sealed record ActionResult(string Instance, bool Ok, string Message);
 
 /// <summary>
-/// Reported state of a supervised instance: the <em>desired</em> state the daemon holds vs. the
-/// <em>actual</em> liveness measured from <c>cgroup.events</c>, plus the supervision phase and the
-/// current restart-failure streak. Never fabricated — <c>populated</c> is read from the kernel, and
-/// an instance the daemon does not track simply does not appear.
+/// Reported state of a supervised instance: the <em>desired</em> run-state and the boot-autostart
+/// <em>enabled</em> flag the daemon holds vs. the <em>actual</em> liveness measured from
+/// <c>cgroup.events</c>, plus the supervision phase and the current restart-failure streak. Never
+/// fabricated — <c>populated</c> is read from the kernel, and an instance the daemon does not track
+/// simply does not appear. <c>enabled</c> and <c>desired</c> are independent axes (systemctl-style):
+/// <c>desired</c> is the runtime intent set by start/stop, <c>enabled</c> is the persisted
+/// boot-autostart intent set by enable/disable.
 /// </summary>
 public sealed record InstanceState(
     string Name,
-    string Desired,       // "running" | "stopped"
+    string Desired,       // "running" | "stopped" — runtime intent (start/stop)
+    bool Enabled,         // in the persisted boot-autostart set (enable/disable)
     bool Populated,       // measured from cgroup.events
     int? Pid,             // the spawned leader PID, when known
     string CgroupPath,

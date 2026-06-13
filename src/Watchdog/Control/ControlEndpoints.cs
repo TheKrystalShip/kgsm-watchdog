@@ -51,5 +51,25 @@ internal static class ControlEndpoints
 
         app.MapGet("/list", (InstanceSupervisor sup) =>
             Results.Json(sup.List(), WatchdogJsonContext.Default.InstanceStateArray));
+
+        // Boot-autostart (systemctl-style enable/disable), orthogonal to start/stop. These mutate only
+        // the persisted set RestoreAsync reads at boot; they never spawn or kill.
+        app.MapPost("/enable/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>
+        {
+            var result = await sup.EnableAsync(name, ct);
+            return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
+                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+        });
+
+        app.MapPost("/disable/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>
+        {
+            var result = await sup.DisableAsync(name, ct);
+            return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
+                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+        });
+
+        // The persisted boot-autostart name set — the authoritative source for "is it enabled?".
+        app.MapGet("/enabled", (InstanceSupervisor sup) =>
+            Results.Json(sup.EnabledNames(), WatchdogJsonContext.Default.StringArray));
     }
 }

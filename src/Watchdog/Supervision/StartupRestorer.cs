@@ -4,8 +4,8 @@ using Microsoft.Extensions.Logging;
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
 /// <summary>
-/// Runs once at daemon startup to restore supervision of every instance the operator left
-/// desired-running — the boot auto-start that replaces systemd's <c>WantedBy=</c>. The timing is
+/// Runs once at daemon startup to restore supervision of every instance the operator enabled for boot
+/// auto-start — the in-house replacement for systemd's <c>WantedBy=</c>. The timing is
 /// load-bearing on both sides:
 /// <list type="bullet">
 /// <item><b>After</b> <c>CgroupBootstrap</c> (Program invokes it synchronously before <c>app.Run</c>),

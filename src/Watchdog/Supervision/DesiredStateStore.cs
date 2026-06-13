@@ -5,26 +5,33 @@ using TheKrystalShip.KGSM.Watchdog.Model;
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
 /// <summary>
-/// The durable record of which instances are desired-running, so the daemon can restore supervision
-/// after a restart or host reboot — the in-house replacement for systemd's <c>systemctl enable</c> +
-/// <c>WantedBy=</c>. It persists <b>operator intent only</b> (the set of instance names); the spawn
-/// config is re-read from kgsm-lib on restore, so there is no stale-spec drift.
+/// The durable record of which instances are <b>enabled for boot auto-start</b>, so the daemon can
+/// restore them after a restart or host reboot — the in-house replacement for systemd's
+/// <c>systemctl enable</c> + <c>WantedBy=</c>. It persists <b>operator intent only</b> (the set of
+/// instance names); the spawn config is re-read from kgsm-lib on restore, so there is no stale-spec
+/// drift.
+/// <para>
+/// This set is the <em>boot</em> axis, written ONLY by <c>enable</c>/<c>disable</c> — it is independent
+/// of the runtime <c>start</c>/<c>stop</c> axis (systemctl-style). A started-but-not-enabled instance
+/// is absent here and will not come back next boot; an enabled-but-stopped one stays here and will.
+/// </para>
 /// <para>
 /// Mutation is <b>incremental</b> (<see cref="Add"/>/<see cref="Remove"/>), not a snapshot of the live
 /// supervisor table. That is deliberate: an instance whose config kgsm-lib can't read at restore time
 /// (a transient miss) must NOT be silently dropped from auto-start — intent persists until an
-/// <em>explicit</em> stop removes it, exactly like a systemd unit stays enabled until <c>disable</c>.
+/// <em>explicit</em> <c>disable</c> removes it, exactly like a systemd unit stays enabled until
+/// <c>disable</c>.
 /// </para>
 /// <para>
 /// All callers are post-bootstrap (restore runs in a hosted-service <c>StartAsync</c> after
-/// <c>CgroupBootstrap</c>; <see cref="Add"/>/<see cref="Remove"/> run inside control verbs under the
-/// supervisor gate), so the lazily-resolved default path sees the dropped user's <c>HOME</c>, and the
-/// load/modify/save sequence is already serialized — no internal locking needed.
+/// <c>CgroupBootstrap</c>; <see cref="Add"/>/<see cref="Remove"/> run inside the enable/disable control
+/// verbs under the supervisor gate), so the lazily-resolved default path sees the dropped user's
+/// <c>HOME</c>, and the load/modify/save sequence is already serialized — no internal locking needed.
 /// </para>
 /// </summary>
 internal sealed class DesiredStateStore(WatchdogOptions options, ILogger<DesiredStateStore> logger)
 {
-    /// <summary>The set of instance names currently marked desired-running (deduped, order-insensitive).</summary>
+    /// <summary>The set of instance names currently enabled for boot auto-start (deduped, order-insensitive).</summary>
     public IReadOnlyList<string> Load()
     {
         string path = ResolvePath();
@@ -48,7 +55,7 @@ internal sealed class DesiredStateStore(WatchdogOptions options, ILogger<Desired
         }
     }
 
-    /// <summary>Mark <paramref name="name"/> desired-running (idempotent). Called when an instance is started.</summary>
+    /// <summary>Mark <paramref name="name"/> enabled for boot auto-start (idempotent). Called by <c>enable</c>.</summary>
     public void Add(string name)
     {
         var set = new SortedSet<string>(Load(), StringComparer.Ordinal);
@@ -56,7 +63,7 @@ internal sealed class DesiredStateStore(WatchdogOptions options, ILogger<Desired
             Save(set);
     }
 
-    /// <summary>Drop <paramref name="name"/> from the desired-running set (idempotent). Called on a deliberate stop.</summary>
+    /// <summary>Drop <paramref name="name"/> from the boot-autostart set (idempotent). Called by <c>disable</c>.</summary>
     public void Remove(string name)
     {
         var set = new SortedSet<string>(Load(), StringComparer.Ordinal);

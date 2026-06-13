@@ -59,11 +59,12 @@ internal sealed class InstanceSupervisor(
             if (instance is null)
                 return new ActionResult(name, false, "unknown instance (kgsm-lib returned no info)");
 
-            // Scope guard (PLAN §8): the watchdog supervises NATIVE STANDALONE instances. systemd
-            // instances are supervised by systemd; container instances by Docker. No-op on those.
-            if (instance.Runtime != InstanceRuntime.Native || instance.LifecycleManager != LifecycleManager.Standalone)
+            // Scope guard: the watchdog supervises NATIVE instances. Container instances are supervised
+            // by Docker. No-op on those. (Runtime alone is the discriminator now that systemd is gone —
+            // every native instance is the watchdog's.)
+            if (instance.Runtime != InstanceRuntime.Native)
                 return new ActionResult(name, false,
-                    $"out of scope: {instance.Runtime}/{instance.LifecycleManager} — the watchdog only supervises native standalone instances");
+                    $"out of scope: {instance.Runtime} — the watchdog only supervises native instances");
 
             // Get-or-create the durable record. A manual start is an operator override: it refreshes
             // the spec, re-asserts desired=running, and clears any give-up latch or failure streak.
@@ -72,10 +73,9 @@ internal sealed class InstanceSupervisor(
             si.DesiredRunning = true;
             si.Restart.Reset();
 
-            // Persist the intent NOW — before the spawn attempt — so a "start it on boot" survives even
-            // if this particular spawn fails (systemd parity: enablement persists independent of the
-            // current run). A deliberate stop is the only thing that removes it again.
-            store.Add(name);
+            // NB: start is runtime-only — it does NOT touch the persisted boot-autostart set. Surviving a
+            // reboot is a separate, explicit axis owned by enable/disable (systemctl-style); see
+            // EnableAsync/DisableAsync. A bare start that is never enabled will not auto-start next boot.
 
             // Clear any stale handle / leftover cgroup before a fresh spawn (e.g. a crashed-but-not-yet-
             // reconciled instance, or an orphan cgroup from a previous daemon).
@@ -121,10 +121,9 @@ internal sealed class InstanceSupervisor(
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            // A deliberate stop is also "do not auto-start this on boot": drop it from the persisted
-            // desired set on every path (tracked or not), so the operator can even use stop to prune a
-            // stale/gone entry that is no longer running.
-            store.Remove(name);
+            // NB: stop is runtime-only — it does NOT touch the persisted boot-autostart set. An instance
+            // can be stopped now yet still enabled (it comes back next boot); use `disable` to drop it
+            // from auto-start. This is the systemctl-style split (stop ≠ disable).
 
             if (!_instances.TryGetValue(name, out var si))
             {
@@ -198,11 +197,58 @@ internal sealed class InstanceSupervisor(
         }
     }
 
+    // ---- boot-autostart (enable/disable) ----------------------------------------------------
+    // The systemctl-style boot axis, orthogonal to start/stop. These mutate ONLY the persisted set
+    // (which RestoreAsync reads at boot); they never spawn or kill. `enable` does not start the
+    // instance, `disable` does not stop it — exactly like `systemctl enable`/`disable`.
+
+    /// <summary>
+    /// Mark <paramref name="name"/> for boot auto-start (idempotent). Validates it is a known, in-scope
+    /// (native) instance — like <c>systemctl enable</c> refusing an unknown unit — then persists intent.
+    /// Does NOT require the supervisor to be ready or the instance to be running: enablement is offline
+    /// intent that survives until an explicit <c>disable</c>.
+    /// </summary>
+    public async Task<ActionResult> EnableAsync(string name, CancellationToken ct = default)
+    {
+        // Read the spec OUTSIDE the gate (it shells out to kgsm-lib and can be slow).
+        var instance = instances.GetInstanceInfo(name);
+        if (instance is null)
+            return new ActionResult(name, false, "unknown instance (kgsm-lib returned no info)");
+        if (instance.Runtime != InstanceRuntime.Native)
+            return new ActionResult(name, false,
+                $"out of scope: {instance.Runtime} — only native instances can be enabled for watchdog auto-start");
+
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try { store.Add(name); }
+        finally { _gate.Release(); }
+
+        logger.LogInformation("enabled {Instance} for boot auto-start", name);
+        return new ActionResult(name, true, "enabled (will auto-start on boot)");
+    }
+
+    /// <summary>
+    /// Drop <paramref name="name"/> from boot auto-start (idempotent). Pure persistence — never stops a
+    /// running instance (use <c>stop</c> for that). Accepts any name so it can prune a stale/removed
+    /// entry; no validation needed to forget intent.
+    /// </summary>
+    public async Task<ActionResult> DisableAsync(string name, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try { store.Remove(name); }
+        finally { _gate.Release(); }
+
+        logger.LogInformation("disabled {Instance} for boot auto-start", name);
+        return new ActionResult(name, true, "disabled (will not auto-start on boot)");
+    }
+
+    /// <summary>The persisted boot-autostart name set (powers <c>GET /enabled</c>).</summary>
+    public string[] EnabledNames() => store.Load().ToArray();
+
     // ---- boot restore (Inc 4) ----------------------------------------------------------------
 
     /// <summary>
-    /// At daemon startup, restore supervision of every instance the operator left desired-running (the
-    /// set persisted by <see cref="DesiredStateStore"/>) — the in-house replacement for systemd boot
+    /// At daemon startup, restore supervision of every instance the operator enabled for boot auto-start
+    /// (the set persisted by <see cref="DesiredStateStore"/>) — the in-house replacement for systemd boot
     /// auto-start. For each, the spec is re-read fresh from kgsm-lib, then <see cref="RestorePlan"/>
     /// decides: ADOPT a still-live cgroup (a process that outlived a daemon restart — no kill, no
     /// respawn), SPAWN a dead one (a host reboot left nothing running), or skip.
@@ -266,8 +312,8 @@ internal sealed class InstanceSupervisor(
                     case RestoreAction.SkipOutOfScope:
                         skipped++;
                         logger.LogWarning(
-                            "restore: {Instance} is no longer a native standalone instance ({Runtime}/{Lifecycle}) — skipping",
-                            name, spec!.Runtime, spec.LifecycleManager);
+                            "restore: {Instance} is no longer a native instance ({Runtime}) — skipping",
+                            name, spec!.Runtime);
                         break;
                 }
             }
@@ -333,22 +379,33 @@ internal sealed class InstanceSupervisor(
 
     public InstanceState? Status(string name)
     {
+        // The enabled set is independent of the live table — an instance can be enabled-but-not-tracked
+        // (enabled, never started this session). Load once and test membership.
+        bool enabled = store.Load().Contains(name, StringComparer.Ordinal);
+
         if (_instances.TryGetValue(name, out var si))
-            return ToState(si);
+            return ToState(si, enabled);
 
         // Untracked but possibly alive (e.g. orphaned across a daemon restart — re-adoption is Inc 3).
         if (cgroups.IsPopulated(name))
-            return new InstanceState(name, "unknown", true, null, cgroups.PathFor(name), "unknown", 0,
+            return new InstanceState(name, "unknown", enabled, true, null, cgroups.PathFor(name), "unknown", 0,
                 "untracked live cgroup (orphan from a previous daemon?)");
 
+        // Not tracked and not live → 404 (stable contract for __watchdog_is_active/__watchdog_tracks).
+        // The boot-autostart bit is reported authoritatively by GET /enabled, not here.
         return null;
     }
 
-    public InstanceState[] List() => _instances.Values.Select(ToState).ToArray();
+    public InstanceState[] List()
+    {
+        var enabled = new HashSet<string>(store.Load(), StringComparer.Ordinal);
+        return _instances.Values.Select(si => ToState(si, enabled.Contains(si.Name))).ToArray();
+    }
 
-    private InstanceState ToState(SupervisedInstance si) => new(
+    private InstanceState ToState(SupervisedInstance si, bool enabled) => new(
         si.Name,
         si.DesiredText,
+        enabled,
         cgroups.IsPopulated(si.Name),
         si.Current?.Pid,
         cgroups.PathFor(si.Name),

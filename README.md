@@ -27,8 +27,9 @@ cgroup foundation (Increment 0, in the `kgsm` repo).
 >
 > **Increment 5 — boot persistence (done).** The in-house replacement for systemd's
 > `systemctl enable` + `WantedBy=` — and the prerequisite for the planned systemd hard-break. The
-> desired-running set is persisted to disk (`KGSM_WATCHDOG_STATE_FILE`, default under the KGSM user's
-> data dir) on every start/stop, and **restored on daemon startup**: an instance whose cgroup is still
+> enabled-for-boot set is persisted to disk (`KGSM_WATCHDOG_STATE_FILE`, default under the KGSM user's
+> data dir) — written by `enable`/`disable` (independent of runtime `start`/`stop`) — and **restored on
+> daemon startup**: an instance whose cgroup is still
 > live (survived a *daemon* restart) is **re-adopted** without a respawn; one whose cgroup is empty (a
 > *host reboot*) is **spawned fresh**. So a reboot brings every previously-running native instance back
 > up, with no systemd unit involved. Unit-verified (55 tests, AOT-clean) and **validated as root against a
@@ -136,7 +137,7 @@ startup (it would otherwise silently fall back to its default).
 | `KGSM_WATCHDOG_RESTART_MAX_RETRIES` | `5` | consecutive failures before giving up (`phase=failed`) |
 | `KGSM_WATCHDOG_RESTART_STABILITY_SEC` | `300` | uptime after which the failure streak resets |
 | `KGSM_WATCHDOG_RESTART_GRACE_SEC` | `10` | post-spawn window where crash-detection is suppressed |
-| `KGSM_WATCHDOG_STATE_FILE` | *(`~/.local/share/kgsm-watchdog/desired-state.json`)* | desired-running set persisted here + restored on boot (replaces systemd `enable`/`WantedBy`) |
+| `KGSM_WATCHDOG_STATE_FILE` | *(`~/.local/share/kgsm-watchdog/desired-state.json`)* | boot-autostart (enabled) set persisted here + restored on boot (replaces systemd `enable`/`WantedBy`) |
 
 A manual `start` clears a `failed` instance's give-up latch. A deliberate `stop` is never restarted.
 
@@ -149,11 +150,15 @@ A manual `start` clears a `failed` instance's give-up latch. A deliberate `stop`
 
 ## Boot persistence (desired-state file)
 
-The daemon records which instances are *desired-running* in a small JSON file
+The daemon records which instances are *enabled for boot auto-start* in a small JSON file
 (`KGSM_WATCHDOG_STATE_FILE`, default `~/.local/share/kgsm-watchdog/desired-state.json`) and restores
 them on startup — the in-house replacement for `systemctl enable` / `WantedBy=`. On boot each listed
 instance is **re-adopted** if its cgroup is still live (a *daemon* restart) or **spawned fresh** if not
 (a *host reboot*).
+
+This is the **boot** axis, independent of the runtime start/stop axis (systemctl-style): `enable`/
+`disable` control what comes back after a reboot; `start`/`stop` control what runs right now. A
+started-but-not-enabled instance will **not** survive a reboot; an enabled-but-stopped one **will**.
 
 A version-controlled reference of the exact format ships as
 [`deploy/desired-state.example.json`](deploy/desired-state.example.json):
@@ -173,9 +178,9 @@ A version-controlled reference of the exact format ships as
 | `version` | on-disk schema version (currently `1`), carried for forward-compatible migration |
 | `desiredRunning` | the instance names to auto-start on boot — **intent only**; each one's spawn config is re-read fresh from kgsm-lib on restore, so there is no stale-spec drift |
 
-**The daemon owns this file** — it adds a name on `start` and removes it on `stop`, so you normally
-never edit it by hand; `stop` an instance through the watchdog to drop it from auto-start. Writes are
-atomic (temp + rename), and a missing or corrupt file degrades to "nothing to restore" rather than
-wedging boot. To pre-seed auto-start before the daemon's first run, drop a file in this shape at the
+**The daemon owns this file** — it adds a name on `enable` and removes it on `disable`, so you normally
+never edit it by hand; `disable` an instance through the watchdog to drop it from auto-start (`stop`
+leaves it enabled). Writes are atomic (temp + rename), and a missing or corrupt file degrades to
+"nothing to restore" rather than wedging boot. To pre-seed auto-start before the daemon's first run, drop a file in this shape at the
 configured path (keys are case-sensitive `camelCase`, and JSON comments are **not** permitted — a file
 the parser rejects is treated as empty).

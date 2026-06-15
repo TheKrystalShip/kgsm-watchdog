@@ -153,7 +153,7 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
             ["instance_temp_dir"] = i.TempDir,
             ["instance_level_name"] = i.LevelName,
             ["instance_blueprint"] = i.Blueprint,
-            ["instance_ports"] = i.Ports,
+            ["instance_ports"] = i.Ports.ToUfwSpec(),
             ["instance_executable_file"] = i.ExecutableFile,
             ["instance_executable_subdirectory"] = i.ExecutableSubdirectory,
         };

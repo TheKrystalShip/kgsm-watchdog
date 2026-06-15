@@ -41,8 +41,12 @@ RestartSec=2
 
 # The daemon writes cgroup control files under /sys/fs/cgroup, so do NOT enable a read-only /sys
 # (ProtectKernelTunables) here, and do NOT hide /home/data dirs where game servers may live
-# (ProtectHome). It only ever talks over unix sockets.
-RestrictAddressFamilies=AF_UNIX
+# (ProtectHome).
+# RestrictAddressFamilies applies to EVERY process the service spawns, not just the daemon. The
+# daemon itself only talks over unix sockets, but its children do not: native game servers need
+# INET/INET6 for their listen sockets, and the UPnP helper (upnpc) needs them for its SOAP call
+# to the IGD. AF_UNIX alone seccomp-kills both ("Address family not supported by protocol").
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # This root-boot unit is the recommended, most-tested variant. Two other boot
 # variants ship alongside it:

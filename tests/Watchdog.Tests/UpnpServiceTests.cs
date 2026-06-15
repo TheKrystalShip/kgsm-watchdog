@@ -1,141 +1,18 @@
+using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
-/// Covers the two pure helpers of the UPnP path: the parser for the stored <c>upnp_ports</c> value
-/// and the <c>upnpc</c> argv builder. (The shell-out itself needs a real IGD and is exercised live,
-/// not in the unit suite — same boundary as <see cref="SpawnEngineTests"/>.)
-/// <para>
-/// The parser fixtures are pinned to the <b>verbatim</b> shape KGSM emits, captured from a real
-/// deployed instance: <c>"instances info &lt;name&gt; --json"</c> returns
-/// <c>"upnp_ports": "(34197 tcp 34197 udp)"</c> — parens included, alternating port/proto,
-/// whitespace-separated. The format is inferred from nothing; it is the observed wire value.
-/// </para>
+/// Covers the watchdog's one pure UPnP helper: the <c>upnpc</c> argv builder, which mirrors the
+/// management script (<c>manage.native.d/09-network.sh</c>) flag-for-flag. Parsing/validating the
+/// port spec now lives in kgsm-lib (the canonical structured <see cref="PortMapping"/> form, tested
+/// there) — the watchdog only expands it (<see cref="PortMappingExtensions.Expand"/>) and builds the
+/// command line. The shell-out itself needs a real IGD and is exercised live, not in the unit suite
+/// (same boundary as <see cref="SpawnEngineTests"/>).
 /// </summary>
 public sealed class UpnpServiceTests
 {
-    // ---- parser ------------------------------------------------------------------------------
-
-    [Fact]
-    public void TryParsePorts_parses_the_real_factorio_wire_value()
-    {
-        // The exact string observed from `kgsm instances info factorio-test --json`.
-        bool ok = UpnpService.TryParsePorts("(34197 tcp 34197 udp)", out var ports, out var error);
-
-        Assert.True(ok);
-        Assert.Null(error);
-        Assert.Equal([(34197, "tcp"), (34197, "udp")], ports);
-    }
-
-    [Fact]
-    public void TryParsePorts_parses_distinct_ports_and_protocols()
-    {
-        bool ok = UpnpService.TryParsePorts("(8080 tcp 8081 udp)", out var ports, out var error);
-
-        Assert.True(ok);
-        Assert.Null(error);
-        Assert.Equal([(8080, "tcp"), (8081, "udp")], ports);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("()")]
-    [InlineData("(  )")]
-    public void TryParsePorts_empty_or_parens_only_is_a_clean_noop(string? raw)
-    {
-        bool ok = UpnpService.TryParsePorts(raw, out var ports, out var error);
-
-        Assert.True(ok);          // not an error — just nothing to do
-        Assert.Null(error);
-        Assert.Empty(ports);
-    }
-
-    [Fact]
-    public void TryParsePorts_parses_without_surrounding_parens()
-    {
-        // Defensive: a parens-less form still parses (we only strip parens if present).
-        bool ok = UpnpService.TryParsePorts("34197 udp", out var ports, out var error);
-
-        Assert.True(ok);
-        Assert.Null(error);
-        Assert.Equal([(34197, "udp")], ports);
-    }
-
-    [Fact]
-    public void TryParsePorts_normalizes_uppercase_protocol()
-    {
-        bool ok = UpnpService.TryParsePorts("(27015 UDP)", out var ports, out var error);
-
-        Assert.True(ok);
-        Assert.Null(error);
-        Assert.Equal([(27015, "udp")], ports);
-    }
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(65535)]
-    public void TryParsePorts_accepts_boundary_ports(int port)
-    {
-        bool ok = UpnpService.TryParsePorts($"({port} tcp)", out var ports, out var error);
-
-        Assert.True(ok);
-        Assert.Null(error);
-        Assert.Equal([(port, "tcp")], ports);
-    }
-
-    [Fact]
-    public void TryParsePorts_rejects_odd_token_count_as_a_batch()
-    {
-        bool ok = UpnpService.TryParsePorts("(8080 tcp 8081)", out var ports, out var error);
-
-        Assert.False(ok);
-        Assert.NotNull(error);
-        Assert.Empty(ports); // rejected as a batch — never a guessed partial set
-    }
-
-    [Theory]
-    [InlineData("(0 tcp)")]       // below range
-    [InlineData("(65536 tcp)")]   // above range
-    [InlineData("(-1 tcp)")]      // negative
-    [InlineData("(abc tcp)")]     // non-numeric
-    public void TryParsePorts_rejects_bad_port(string raw)
-    {
-        bool ok = UpnpService.TryParsePorts(raw, out var ports, out var error);
-
-        Assert.False(ok);
-        Assert.NotNull(error);
-        Assert.Empty(ports);
-    }
-
-    [Theory]
-    [InlineData("(8080 sctp)")]
-    [InlineData("(8080 icmp)")]
-    [InlineData("(8080 7)")]
-    public void TryParsePorts_rejects_non_tcp_udp_protocol(string raw)
-    {
-        bool ok = UpnpService.TryParsePorts(raw, out var ports, out var error);
-
-        Assert.False(ok);
-        Assert.NotNull(error);
-        Assert.Empty(ports);
-    }
-
-    [Fact]
-    public void TryParsePorts_rejects_a_partial_failure_without_keeping_valid_pairs()
-    {
-        // First pair valid, second proto bad → the whole batch is rejected (no half-open).
-        bool ok = UpnpService.TryParsePorts("(8080 tcp 8081 sctp)", out var ports, out var error);
-
-        Assert.False(ok);
-        Assert.NotNull(error);
-        Assert.Empty(ports);
-    }
-
-    // ---- argv builder (mirrors manage.native.d/09-network.sh flag-for-flag) ------------------
-
     [Fact]
     public void BuildUpnpcArgs_open_mirrors_upnpc_dash_e_dash_r()
     {
@@ -155,5 +32,27 @@ public sealed class UpnpServiceTests
 
         // upnpc -f 34197 tcp 34197 udp
         Assert.Equal(["-f", "34197", "tcp", "34197", "udp"], args);
+    }
+
+    [Fact]
+    public void BuildUpnpcArgs_from_an_expanded_range_unrolls_each_port()
+    {
+        // The full structured -> upnpc path: a range PortMapping expands to one upnpc arg pair per
+        // port (upnpc -r takes individual external ports, not ranges).
+        List<PortMapping> ports = [new() { Start = 27015, End = 27017, Protocol = "udp" }];
+
+        var args = UpnpService.BuildUpnpcArgs(open: true, "rust-01", [.. ports.Expand()]);
+
+        Assert.Equal(
+            ["-e", "rust-01", "-r", "27015", "udp", "27016", "udp", "27017", "udp"], args);
+    }
+
+    [Fact]
+    public void BuildUpnpcArgs_open_with_no_ports_is_just_the_description_and_flag()
+    {
+        // Defensive shape only — ApplyAsync no-ops on an empty port set before this is reached.
+        var args = UpnpService.BuildUpnpcArgs(open: true, "empty-01", []);
+
+        Assert.Equal(["-e", "empty-01", "-r"], args);
     }
 }

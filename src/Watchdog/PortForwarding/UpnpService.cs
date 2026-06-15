@@ -42,14 +42,10 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
         if (!instance.EnablePortForwarding)
             return;
 
-        if (!TryParsePorts(instance.UpnpPorts, out var ports, out string? error))
-        {
-            logger.LogWarning(
-                "UPnP {Action} skipped for {Instance}: malformed upnp_ports {Raw} ({Error})",
-                action, instance.Name, instance.UpnpPorts, error);
-            return;
-        }
-
+        // Expand the canonical structured ports (kgsm-lib already parsed + validated them off the
+        // `instances info --json` surface) into the individual external ports upnpc opens one at a
+        // time. Ranges are unrolled here; a no-ports instance is a clean no-op.
+        List<(int Port, string Protocol)> ports = [.. instance.Ports.Expand()];
         if (ports.Count == 0)
         {
             logger.LogInformation(
@@ -59,63 +55,6 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
 
         await RunUpnpcAsync(BuildUpnpcArgs(open, instance.Name, ports), open, instance.Name, ct)
             .ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Parse the stored <c>upnp_ports</c> value into validated <c>(port, proto)</c> pairs. KGSM emits
-    /// it as a bash array literal, verbatim — e.g. <c>"(34197 tcp 34197 udp)"</c> (parens included,
-    /// alternating port/proto, whitespace-separated) — so we strip a single surrounding <c>( )</c> and
-    /// whitespace-split. Defensive even on our own data (§5·1): a malformed shape (odd token count,
-    /// out-of-range port, a proto that isn't tcp/udp) is rejected as a <b>batch</b> — <paramref name="error"/>
-    /// is set and <paramref name="ports"/> left empty — rather than opening a guessed partial set. An
-    /// empty or parens-only value is a clean no-op (returns true, no error). Returns false only on a
-    /// genuinely malformed value.
-    /// </summary>
-    internal static bool TryParsePorts(
-        string? raw, out List<(int Port, string Proto)> ports, out string? error)
-    {
-        ports = [];
-        error = null;
-
-        if (string.IsNullOrWhiteSpace(raw))
-            return true; // nothing configured — clean no-op
-
-        // Strip a single surrounding ( ) if present (the bash array literal form).
-        string s = raw.Trim();
-        if (s.Length >= 2 && s[0] == '(' && s[^1] == ')')
-            s = s[1..^1];
-
-        string[] tokens = s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0)
-            return true; // "()" or whitespace — clean no-op
-
-        if (tokens.Length % 2 != 0)
-        {
-            error = $"odd token count ({tokens.Length}); expected alternating 'port proto' pairs";
-            return false;
-        }
-
-        for (int i = 0; i < tokens.Length; i += 2)
-        {
-            if (!int.TryParse(tokens[i], out int port) || port < 1 || port > 65535)
-            {
-                ports.Clear();
-                error = $"port out of range or non-numeric: '{tokens[i]}'";
-                return false;
-            }
-
-            string proto = tokens[i + 1].ToLowerInvariant();
-            if (proto is not ("tcp" or "udp"))
-            {
-                ports.Clear();
-                error = $"protocol not tcp/udp: '{tokens[i + 1]}'";
-                return false;
-            }
-
-            ports.Add((port, proto));
-        }
-
-        return true;
     }
 
     /// <summary>

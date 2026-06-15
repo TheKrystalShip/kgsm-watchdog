@@ -56,10 +56,13 @@ RuntimeDirectoryMode=0750
 Restart=always
 RestartSec=2
 
-# The daemon writes cgroup control files under its delegated subtree and talks only
-# over unix sockets. Do NOT enable ProtectKernelTunables (read-only /sys) or
-# ProtectHome (game-server data may live under /home).
-RestrictAddressFamilies=AF_UNIX
+# The daemon writes cgroup control files under its delegated subtree. Do NOT enable
+# ProtectKernelTunables (read-only /sys) or ProtectHome (game-server data may live under /home).
+# RestrictAddressFamilies applies to EVERY process the service spawns, not just the daemon. The
+# daemon itself only talks over unix sockets, but its children do not: native game servers need
+# INET/INET6 for their listen sockets, and the UPnP helper (upnpc) needs them for its SOAP call
+# to the IGD. AF_UNIX alone seccomp-kills both ("Address family not supported by protocol").
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

@@ -36,10 +36,16 @@ internal sealed class InstanceSupervisor(
     BackoffPolicy policy,
     SupervisorState state,
     DesiredStateStore store,
+    IEventManagementService events,
     ILogger<InstanceSupervisor> logger) : IDisposable
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    // The autonomous supervisor lifecycle events kgsm-lib forwards to kgsm (dash CLI form). The
+    // watchdog is the only component that observes a crash, so it is the sole emitter of these.
+    private const string EventCrashed = "instance-crashed";
+    private const string EventFailed = "instance-failed";
 
     // ---- control verbs ----------------------------------------------------------------------
 
@@ -504,6 +510,7 @@ internal sealed class InstanceSupervisor(
             si.LastReason = $"restart limit reached ({si.Restart.ConsecutiveFailures} consecutive failures, last {exitText}); gave up after {policy.MaxRetries} retries";
             logger.LogWarning("{Instance} hit the restart limit ({Count} failures, last {Exit}); giving up after {Max} retries — reporting failed",
                 name, si.Restart.ConsecutiveFailures, exitText, policy.MaxRetries);
+            EmitSupervisionEvent(EventFailed, name, exit, si.Restart.ConsecutiveFailures);
             return;
         }
 
@@ -512,6 +519,7 @@ internal sealed class InstanceSupervisor(
         si.LastReason = $"{verb} ({exitText}); restart #{si.Restart.ConsecutiveFailures} in {(int)delay.Value.TotalSeconds}s";
         logger.LogWarning("{Instance} {Verb} ({Exit}); restart #{N} in {Delay}",
             name, verb, exitText, si.Restart.ConsecutiveFailures, delay.Value);
+        EmitSupervisionEvent(EventCrashed, name, exit, si.Restart.ConsecutiveFailures);
     }
 
     private void ReconcileRestartPending(SupervisedInstance si, DateTime now)
@@ -533,6 +541,8 @@ internal sealed class InstanceSupervisor(
             si.Phase = SupervisionPhase.Failed;
             si.LastReason = $"restart failed ({reason}); crash-looped ({si.Restart.ConsecutiveFailures} failures); gave up after {policy.MaxRetries} retries";
             logger.LogWarning("{Instance} restart failed and gave up after {Max} retries: {Reason}", si.Name, policy.MaxRetries, reason);
+            // The respawn never produced a process, so there is no exit code to report (honest unknown).
+            EmitSupervisionEvent(EventFailed, si.Name, null, si.Restart.ConsecutiveFailures);
             return;
         }
         si.NextRestartAt = now + delay.Value;
@@ -542,6 +552,34 @@ internal sealed class InstanceSupervisor(
     }
 
     // ---- helpers ----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fire-and-forget emit of an autonomous supervision event (crash / give-up) through kgsm-lib,
+    /// stamped <c>actor=system</c> / <c>origin=system</c> — an engine action no human drove. Off-loaded
+    /// to the thread pool so a slow <c>kgsm.sh</c> spawn never stalls the reconcile tick (which holds the
+    /// supervisor gate), and best-effort: a failed emit is logged and swallowed — a dropped event is the
+    /// same honest "no backfill" boundary the downstream consumer already accepts, never crashing
+    /// supervision. Carries the leader exit code (the literal <c>"unknown"</c> when unreadable — never a
+    /// fabricated code) and the consecutive restart-attempt count.
+    /// </summary>
+    private void EmitSupervisionEvent(string dashEventName, string instanceName, int? exit, int restarts)
+    {
+        string exitCode = exit is int code ? code.ToString() : "unknown";
+        string restartCount = restarts.ToString();
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                events.EmitWithProvenance(
+                    dashEventName, "system", "system", instanceName, exitCode, restartCount);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to emit {Event} for {Instance} (event dropped)", dashEventName, instanceName);
+            }
+        });
+    }
 
     /// <summary>Fork the game from the instance's cached spec into a fresh cgroup; on success the record is Running.</summary>
     private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason)

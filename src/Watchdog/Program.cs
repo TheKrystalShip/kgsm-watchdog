@@ -2,6 +2,7 @@ using TheKrystalShip.KGSM.Extensions;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
+using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 // Self-documenting: an operator with only the compiled binary can discover every config knob.
@@ -39,6 +40,9 @@ builder.Services.AddSingleton<CgroupBootstrap>();
 builder.Services.AddSingleton(BackoffPolicy.FromOptions(options));
 builder.Services.AddSingleton<SpawnEngine>();
 builder.Services.AddSingleton<DesiredStateStore>();
+// UPnP port forwarding: process-lifetime network state the supervisor owns (opens on bring-up,
+// holds across crash-restart, closes on intended stop). Self-gates on enable_port_forwarding.
+builder.Services.AddSingleton<UpnpService>();
 builder.Services.AddSingleton<InstanceSupervisor>();
 
 // Boot auto-start (replaces systemd enable/WantedBy): restore the persisted desired-running set once

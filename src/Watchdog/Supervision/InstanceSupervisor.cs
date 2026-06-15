@@ -5,6 +5,7 @@ using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Model;
+using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -37,6 +38,7 @@ internal sealed class InstanceSupervisor(
     SupervisorState state,
     DesiredStateStore store,
     IEventManagementService events,
+    UpnpService upnp,
     ILogger<InstanceSupervisor> logger) : IDisposable
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
@@ -113,6 +115,7 @@ internal sealed class InstanceSupervisor(
 
             si.LastReason = "started";
             _instances[name] = si;
+            OpenPortForwarding(si.Spec); // fresh bring-up → open UPnP (fire-and-forget, best-effort)
             logger.LogInformation("started {Instance} (pid {Pid})", name, si.Current!.Pid);
             return new ActionResult(name, true, $"started (pid {si.Current!.Pid})");
         }
@@ -146,6 +149,10 @@ internal sealed class InstanceSupervisor(
 
             // Intent first: this is a deliberate stop, so the reconcile loop must never restart it.
             si.DesiredRunning = false;
+            // Release the UPnP mapping on a deliberate stop (fire-and-forget, off the drain — so a stop
+            // that throws or hard-kills mid-drain still closes it). Held across crash-restarts, only an
+            // intended stop closes it. No-op unless enable_port_forwarding.
+            ClosePortForwarding(si.Spec);
 
             // No live handle. Either there genuinely is no process (RestartPending / Stopped / Failed —
             // just cancel and forget), or this is an ADOPTED-live instance: re-attached after a daemon
@@ -372,6 +379,11 @@ internal sealed class InstanceSupervisor(
         {
             si.LastReason = $"restored after restart; {reason}";
             _instances[name] = si;
+            // Boot bring-up of a DEAD instance (a host reboot left nothing running) — a first bring-up
+            // of the supervision episode, not a crash-restart, and exactly when the router lease is most
+            // likely gone. Open UPnP (upnpc -r is idempotent, so a surviving lease is harmless). Only the
+            // ADOPTED-live path (AdoptLive) deliberately does NOT re-assert — its mapping persisted.
+            OpenPortForwarding(si.Spec);
             logger.LogInformation("restore: spawned {Instance} ({Reason})", name, reason);
             return true;
         }
@@ -552,6 +564,28 @@ internal sealed class InstanceSupervisor(
     }
 
     // ---- helpers ----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fire-and-forget, best-effort UPnP open on a fresh bring-up (a manual <c>start</c> or a boot
+    /// respawn of a dead instance — NOT a crash-restart, where the router lease is deliberately held).
+    /// Off-loaded to the thread pool so a slow/absent router never delays the start result or holds the
+    /// supervisor gate; the service self-gates on <c>enable_port_forwarding</c> and time-boxes upnpc.
+    /// </summary>
+    private void OpenPortForwarding(Instance spec) => _ = Task.Run(async () =>
+    {
+        try { await upnp.OpenAsync(spec).ConfigureAwait(false); }
+        catch (Exception ex) { logger.LogWarning(ex, "UPnP open task faulted for {Instance}", spec.Name); }
+    });
+
+    /// <summary>
+    /// Fire-and-forget, best-effort UPnP close on a deliberate stop. Same off-the-gate, swallow-failures
+    /// posture as <see cref="OpenPortForwarding"/>.
+    /// </summary>
+    private void ClosePortForwarding(Instance spec) => _ = Task.Run(async () =>
+    {
+        try { await upnp.CloseAsync(spec).ConfigureAwait(false); }
+        catch (Exception ex) { logger.LogWarning(ex, "UPnP close task faulted for {Instance}", spec.Name); }
+    });
 
     /// <summary>
     /// Fire-and-forget emit of an autonomous supervision event (crash / give-up) through kgsm-lib,

@@ -94,6 +94,13 @@ owner/group gated; network-facing auth like Discord-OAuth lives in the surfaces
 - `stop <inst>` — desired-state = stopped, graceful stop-command → bounded drain →
   `cgroup.kill` → remove.
 - `status <inst>` / `list` — report desired vs. actual (populated), restart counts.
+- `GET /health` — the **unified ecosystem health probe** (one `/health` on every leaf,
+  2026-06-15). Carries *readiness*: `200` only when in-slice and able to spawn; `503` +
+  `{ready,detail}` reason when up-but-unable; no answer when down. Consumers treat anything
+  but `200` as "unavailable — retry until `200`". Replaces the old split (`/healthz` liveness
+  + `/ready` readiness); the bare-liveness `/healthz` is gone, and `/ready` survives as a
+  deprecated alias of `/health` for one transition release (so a not-yet-updated kgsm CLI /
+  kgsm-lib never silently drops off the daemon), to be removed next release.
 - (later) `reload`, backoff overrides.
 
 Transport mirrors the monitor (HTTP/1.1 over UDS via Kestrel, source-gen JSON), so
@@ -241,7 +248,8 @@ kgsm-watchdog/
       guards + ctor/DI), full lib suite **420 green**, `IsAotCompatible` build **0-warning**,
       packed **1.2.0** locally. Decoupled from `AddKgsmServices` — a surface can take either.
 - [x] `kgsm.sh start/stop` (native standalone) route to the daemon when present — new
-      `commands/handlers/watchdog.sh` (`__watchdog_available` gates on socket + `/ready`=200;
+      `commands/handlers/watchdog.sh` (`__watchdog_available` gates on socket + `/health`=200
+      — unified 2026-06-15, was `/ready`;
       `__watchdog_dispatch_lifecycle` maps 200/409→event code, conn-fail→`EC_ERROR` with **no
       silent double-spawn**), wired into `__logic_{start,stop,is_active}_standalone_instance`.
       **is-active also routes** (the daemon writes no PID file, so the management script's check

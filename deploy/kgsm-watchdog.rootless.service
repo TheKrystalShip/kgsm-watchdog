@@ -19,7 +19,7 @@ After=network.target
 # That creates kgsm.slice, enables controllers, and chowns the slice to the KGSM
 # user, making it the writable delegated base this daemon expects
 # (KGSM_WATCHDOG_CGROUP_BASE, default kgsm.slice). Without it the daemon reports
-# /ready = 503 "kgsm.slice is not a writable delegated base" — fall back to the
+# /health = 503 "kgsm.slice is not a writable delegated base" — fall back to the
 # root-boot unit in that case.
 #
 # CAVEAT (Increment 3): with Delegate=yes systemd delegates

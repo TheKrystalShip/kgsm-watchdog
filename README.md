@@ -71,7 +71,7 @@ Control plane (HTTP/1.1 over the unix socket — `curl --unix-socket`):
 
 ```bash
 S=/run/kgsm-watchdog/control.sock
-curl --unix-socket $S http://x/ready
+curl --unix-socket $S http://x/health    # readiness: 200 ready / 503 + reason (/ready = deprecated alias)
 curl --unix-socket $S -X POST http://x/start/my-server
 curl --unix-socket $S http://x/status/my-server
 curl --unix-socket $S http://x/list
@@ -98,7 +98,7 @@ C# consumers reach the daemon through **kgsm-lib's** typed `IWatchdogClient`
 (`AddKgsmWatchdogClient(socketPath)`) — `start`/`stop`/`status`/`list`/`ready` over the
 control socket, source-gen JSON, AOT-safe — keeping all watchdog integration in the one
 KGSM chokepoint. On the bash side, `kgsm start|stop` for **native standalone** instances
-auto-routes to the daemon when its socket is present and `/ready` is 200, and falls back to
+auto-routes to the daemon when its socket is present and `/health` is 200, and falls back to
 the legacy direct-spawn path when it is absent (so installs without the daemon are
 unchanged). See the kgsm repo's `commands/handlers/watchdog.sh`.
 

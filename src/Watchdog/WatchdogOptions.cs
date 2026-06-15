@@ -266,8 +266,8 @@ public sealed class WatchdogOptions
 
         sb.AppendLine();
         sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");
-        sb.AppendLine("  GET  /ready              supervisor readiness (200 ready / 503 not)");
-        sb.AppendLine("  GET  /healthz            process liveness");
+        sb.AppendLine("  GET  /health             supervisor readiness (200 ready / 503 not + reason)");
+        sb.AppendLine("  GET  /ready              deprecated alias of /health (removed next release)");
         sb.AppendLine("  POST /start/{instance}   spawn into its cgroup, desired-state = running");
         sb.AppendLine("  POST /stop/{instance}    graceful stop -> drain -> cgroup.kill, desired-state = stopped");
         sb.AppendLine("  GET  /status/{instance}  desired/phase/populated/pid/restarts");

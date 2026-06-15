@@ -14,18 +14,23 @@ internal static class ControlEndpoints
 {
     public static void MapWatchdog(this WebApplication app)
     {
-        // Liveness of the daemon process itself.
-        app.MapGet("/healthz", () => Results.Text("ok\n"));
-
-        // Readiness of the *supervisor* — is it in-slice and able to spawn? Distinct from /healthz:
-        // the process can be up but unable to supervise (not in kgsm.slice). 200 ready / 503 not.
-        app.MapGet("/ready", (SupervisorState state) =>
+        // Unified ecosystem health probe — one `/health` everywhere (PLAN §5). This carries
+        // *readiness* semantics, not bare liveness: 200 only when the supervisor is in-slice and
+        // able to spawn; 503 + reason when up-but-unable; no answer at all when down. Consumers
+        // treat anything other than 200 as "unavailable — retry until 200". The old bare-liveness
+        // /healthz is gone (it had no consumers). /ready is kept as a deprecated alias for one
+        // transition release so a not-yet-updated kgsm CLI / kgsm-lib never silently falls back
+        // off the daemon onto the direct-spawn path; remove it once both are on /health.
+        IResult Health(SupervisorState state)
         {
             var body = new ReadyState(state.Ready, state.Detail);
             return state.Ready
                 ? Results.Json(body, WatchdogJsonContext.Default.ReadyState)
                 : Results.Json(body, WatchdogJsonContext.Default.ReadyState, statusCode: StatusCodes.Status503ServiceUnavailable);
-        });
+        }
+
+        app.MapGet("/health", Health);
+        app.MapGet("/ready", Health); // deprecated alias — drop once kgsm CLI + kgsm-lib use /health
 
         app.MapPost("/start/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>
         {

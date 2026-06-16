@@ -44,10 +44,16 @@ internal sealed class InstanceSupervisor(
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    // The autonomous supervisor lifecycle events kgsm-lib forwards to kgsm (dash CLI form). The
-    // watchdog is the only component that observes a crash, so it is the sole emitter of these.
+    // The autonomous supervisor lifecycle events kgsm-lib forwards to kgsm (dash CLI form), all
+    // stamped actor=system / origin=system — engine actions no human drove. The watchdog is the
+    // sole observer of a crash AND the sole driver of the recovery respawn, so it is the sole
+    // emitter of these. A USER-driven start/restart is NOT emitted here: that routes through the
+    // kgsm command layer (exit 211/213), which emits its own event with the user's provenance —
+    // emitting here too would double-emit. EventRestarted fires ONLY for the supervisor's own
+    // crash-recovery respawn (ReconcileRestartPending), which never shells kgsm.
     private const string EventCrashed = "instance-crashed";
     private const string EventFailed = "instance-failed";
+    private const string EventRestarted = "instance-restarted";
 
     // ---- control verbs ----------------------------------------------------------------------
 
@@ -543,6 +549,11 @@ internal sealed class InstanceSupervisor(
         if (TrySpawn(si, now, out var reason))
         {
             si.LastReason = $"restarted (attempt #{si.Restart.ConsecutiveFailures}); {reason}";
+            // The autonomous crash-recovery respawn succeeded — emit instance-restarted (system/system)
+            // so the action is auditable downstream (kgsm-api maps it to server.restart and bridges the
+            // alert's resolution.actionId). Emitted per successful attempt, symmetric with the per-crash
+            // instance-crashed above; a respawn that immediately re-dies just re-fires the crash next tick.
+            EmitSystemEvent(EventRestarted, si.Name);
             return;
         }
 
@@ -588,24 +599,33 @@ internal sealed class InstanceSupervisor(
     });
 
     /// <summary>
-    /// Fire-and-forget emit of an autonomous supervision event (crash / give-up) through kgsm-lib,
-    /// stamped <c>actor=system</c> / <c>origin=system</c> — an engine action no human drove. Off-loaded
-    /// to the thread pool so a slow <c>kgsm.sh</c> spawn never stalls the reconcile tick (which holds the
-    /// supervisor gate), and best-effort: a failed emit is logged and swallowed — a dropped event is the
-    /// same honest "no backfill" boundary the downstream consumer already accepts, never crashing
-    /// supervision. Carries the leader exit code (the literal <c>"unknown"</c> when unreadable — never a
-    /// fabricated code) and the consecutive restart-attempt count.
+    /// Fire-and-forget emit of an autonomous supervision crash event (crash / give-up) through kgsm-lib.
+    /// Carries the leader exit code (the literal <c>"unknown"</c> when unreadable — never a fabricated
+    /// code) and the consecutive restart-attempt count, then delegates to <see cref="EmitSystemEvent"/>.
     /// </summary>
     private void EmitSupervisionEvent(string dashEventName, string instanceName, int? exit, int restarts)
     {
         string exitCode = exit is int code ? code.ToString() : "unknown";
-        string restartCount = restarts.ToString();
+        EmitSystemEvent(dashEventName, instanceName, exitCode, restarts.ToString());
+    }
+
+    /// <summary>
+    /// Fire-and-forget emit of an autonomous supervisor event through kgsm-lib, stamped
+    /// <c>actor=system</c> / <c>origin=system</c> — an engine action no human drove. Off-loaded to the
+    /// thread pool so a slow <c>kgsm.sh</c> spawn never stalls the reconcile tick (which holds the
+    /// supervisor gate), and best-effort: a failed emit is logged and swallowed — a dropped event is the
+    /// same honest "no backfill" boundary the downstream consumer already accepts, never crashing
+    /// supervision. <paramref name="extraData"/> is the event's remaining positional args after the
+    /// instance name (e.g. exit code + restart count for crash/failed; none for restarted).
+    /// </summary>
+    private void EmitSystemEvent(string dashEventName, string instanceName, params string[] extraData)
+    {
         _ = Task.Run(() =>
         {
             try
             {
                 events.EmitWithProvenance(
-                    dashEventName, "system", "system", instanceName, exitCode, restartCount);
+                    dashEventName, "system", "system", [instanceName, .. extraData]);
             }
             catch (Exception ex)
             {

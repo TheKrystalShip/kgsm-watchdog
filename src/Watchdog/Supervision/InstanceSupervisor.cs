@@ -46,14 +46,19 @@ internal sealed class InstanceSupervisor(
 
     // The autonomous supervisor lifecycle events kgsm-lib forwards to kgsm (dash CLI form), all
     // stamped actor=system / origin=system — engine actions no human drove. The watchdog is the
-    // sole observer of a crash AND the sole driver of the recovery respawn, so it is the sole
-    // emitter of these. A USER-driven start/restart is NOT emitted here: that routes through the
-    // kgsm command layer (exit 211/213), which emits its own event with the user's provenance —
-    // emitting here too would double-emit. EventRestarted fires ONLY for the supervisor's own
-    // crash-recovery respawn (ReconcileRestartPending), which never shells kgsm.
+    // sole observer of a crash AND the sole driver of the recovery respawn / boot bring-up, so it
+    // is the sole emitter of these. A USER-driven start/restart is NOT emitted here: that routes
+    // through the kgsm command layer (exit 211/213), which emits its own event with the user's
+    // provenance — emitting here too would double-emit. EventRestarted fires ONLY for the
+    // supervisor's own crash-recovery respawn (ReconcileRestartPending); EventStarted ONLY for an
+    // autonomous boot bring-up of a dead enabled instance (RespawnFresh) — neither shells kgsm.
+    // (Boot-autostart is a fresh bring-up, not a crash recovery: downstream it is audited but
+    // deliberately NOT linked as an alert's resolution.actionId — see kgsm-api
+    // KgsmAuditConsumer.IsRecoveryAction, which excludes the system-origin start specifically.)
     private const string EventCrashed = "instance-crashed";
     private const string EventFailed = "instance-failed";
     private const string EventRestarted = "instance-restarted";
+    private const string EventStarted = "instance-started";
 
     // ---- control verbs ----------------------------------------------------------------------
 
@@ -391,6 +396,11 @@ internal sealed class InstanceSupervisor(
             // ADOPTED-live path (AdoptLive) deliberately does NOT re-assert — its mapping persisted.
             OpenPortForwarding(si.Spec);
             logger.LogInformation("restore: spawned {Instance} ({Reason})", name, reason);
+            // Autonomous boot bring-up of a dead enabled instance — emit instance-started (system/system)
+            // so the action is auditable downstream. NOT a crash recovery (there is no firing alert to
+            // heal at a clean boot), so kgsm-api records the row but does not bridge it as a
+            // resolution.actionId. The ADOPTED-live path (AdoptLive) stays silent — no state change.
+            EmitSystemEvent(EventStarted, name);
             return true;
         }
 

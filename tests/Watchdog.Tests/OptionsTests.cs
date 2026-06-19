@@ -8,6 +8,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// AOT-clean alternative to config binding). Each test fully controls the env vars it reads and
 /// restores them, so the suite is order-independent.
 /// </summary>
+[Collection(EnvironmentCollection.Name)] // mutates process-global env vars — serialize with the other env-touching classes
 public sealed class OptionsTests
 {
     /// <summary>Set a batch of env vars for the duration of the using-scope, restoring prior values.</summary>
@@ -145,6 +146,36 @@ public sealed class OptionsTests
     {
         using var _ = new EnvScope(("KGSM_WATCHDOG_STATE_FILE", "/var/lib/kgsm-watchdog/state.json"));
         Assert.Equal("/var/lib/kgsm-watchdog/state.json", WatchdogOptions.FromEnvironment().StateFile);
+    }
+
+    [Fact]
+    public void InstancesDir_defaults_empty_so_the_ingester_derives_it_lazily()
+    {
+        // Same lazy-derivation reason as StateFile: the real default (under the dropped user's HOME)
+        // can only resolve after the bootstrap privilege drop, so the ingester derives it lazily.
+        using var _ = new EnvScope(("KGSM_WATCHDOG_INSTANCES_DIR", null));
+        Assert.Equal(string.Empty, WatchdogOptions.FromEnvironment().InstancesDir);
+    }
+
+    [Fact]
+    public void InstancesDir_reads_explicit_override()
+    {
+        using var _ = new EnvScope(("KGSM_WATCHDOG_INSTANCES_DIR", "/srv/kgsm/instances"));
+        Assert.Equal("/srv/kgsm/instances", WatchdogOptions.FromEnvironment().InstancesDir);
+    }
+
+    [Fact]
+    public void PlayerPresencePollMs_defaults_and_floors_low_values()
+    {
+        using (var _ = new EnvScope(("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS", null)))
+            Assert.Equal(1000, WatchdogOptions.FromEnvironment().PlayerPresencePollMs);
+
+        // Below the 50ms floor is rejected back to the default (ParseInt min guard).
+        using (var _ = new EnvScope(("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS", "10")))
+            Assert.Equal(1000, WatchdogOptions.FromEnvironment().PlayerPresencePollMs);
+
+        using (var _ = new EnvScope(("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS", "250")))
+            Assert.Equal(250, WatchdogOptions.FromEnvironment().PlayerPresencePollMs);
     }
 
     [Fact]

@@ -11,6 +11,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// restore" instead of throwing and wedging boot. Each test points the store at a private temp file
 /// via <see cref="WatchdogOptions.StateFile"/>, so nothing touches a real HOME.
 /// </summary>
+[Collection(EnvironmentCollection.Name)] // default-path tests mutate HOME/XDG_DATA_HOME — serialize with the other env-touching classes
 public sealed class DesiredStateStoreTests : IDisposable
 {
     private readonly string _dir;

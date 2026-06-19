@@ -110,6 +110,26 @@ public sealed class WatchdogOptions
     /// </summary>
     public string StateFile { get; init; } = string.Empty;
 
+    // ---- Player presence: container event-channel ingester ------------------------------------
+
+    /// <summary>
+    /// KGSM's instances directory — the root the player-presence ingester watches for container event
+    /// channels (<c>&lt;root&gt;/&lt;blueprint&gt;/&lt;instance&gt;/events/events.ndjson</c>, each instance
+    /// dir a symlink to its working dir). <c>KGSM_WATCHDOG_INSTANCES_DIR</c>. <b>Empty (the default)</b>
+    /// means "derive it lazily" as <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm/instances</c> — resolved
+    /// AFTER the privilege drop, so <c>HOME</c> is the dropped KGSM user's (mirrors
+    /// <see cref="StateFile"/>; the watchdog does not inherit KGSM's <c>KGSM_INSTANCES_DIR</c> env). Set
+    /// this only to relocate it.
+    /// </summary>
+    public string InstancesDir { get; init; } = string.Empty;
+
+    /// <summary>
+    /// How often the player-presence ingester scans for channels and tails them.
+    /// <c>KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS</c>. Default <c>1000</c>. Presence latency is bounded by
+    /// this; cheap at this scale (a handful of files), so 1 Hz is plenty.
+    /// </summary>
+    public int PlayerPresencePollMs { get; init; } = 1000;
+
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
@@ -146,6 +166,8 @@ public sealed class WatchdogOptions
             RestartGraceSeconds = ParseInt(Env("KGSM_WATCHDOG_RESTART_GRACE_SEC"), defaults.RestartGraceSeconds, min: 0),
             RestartPolicy = ParseRestartPolicy(Env("KGSM_WATCHDOG_RESTART_POLICY"), defaults.RestartPolicy),
             StateFile = Env("KGSM_WATCHDOG_STATE_FILE") is { Length: > 0 } st ? st : defaults.StateFile,
+            InstancesDir = Env("KGSM_WATCHDOG_INSTANCES_DIR") is { Length: > 0 } id ? id : defaults.InstancesDir,
+            PlayerPresencePollMs = ParseInt(Env("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS"), defaults.PlayerPresencePollMs, min: 50),
         };
     }
 
@@ -190,6 +212,8 @@ public sealed class WatchdogOptions
         "KGSM_WATCHDOG_RESTART_GRACE_SEC",
         "KGSM_WATCHDOG_RESTART_POLICY",
         "KGSM_WATCHDOG_STATE_FILE",
+        "KGSM_WATCHDOG_INSTANCES_DIR",
+        "KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS",
     ];
 
     /// <summary>
@@ -263,6 +287,10 @@ public sealed class WatchdogOptions
 
         Section("Boot persistence (auto-start across restarts — replaces systemd enable/WantedBy)");
         Row("KGSM_WATCHDOG_STATE_FILE", "[~/.local/share/kgsm-watchdog/desired-state.json]", "desired-running set restored on boot; default under the KGSM user's data dir");
+
+        Section("Player presence (container event-channel ingester)");
+        Row("KGSM_WATCHDOG_INSTANCES_DIR", "[~/.local/share/kgsm/instances]", "kgsm instances dir watched for container events/events.ndjson channels");
+        Row("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS", $"[{d.PlayerPresencePollMs}]", "how often presence channels are scanned and tailed");
 
         sb.AppendLine();
         sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");

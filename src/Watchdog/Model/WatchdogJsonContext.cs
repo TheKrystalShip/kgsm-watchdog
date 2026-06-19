@@ -14,4 +14,5 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 [JsonSerializable(typeof(ReadyState))]
 [JsonSerializable(typeof(PersistedDesiredState))]
 [JsonSerializable(typeof(string[]))] // GET /enabled — the boot-autostart name set
+[JsonSerializable(typeof(PlayerPresenceLine))] // one NDJSON line of a container's player-presence channel
 internal sealed partial class WatchdogJsonContext : JsonSerializerContext;

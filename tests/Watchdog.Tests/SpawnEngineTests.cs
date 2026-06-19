@@ -7,6 +7,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// daemon runs over <c>executable_arguments</c> before the launcher word-splits them. (The fork
 /// itself needs a real instance + cgroup and is exercised live, not in the unit suite.)
 /// </summary>
+[Collection(EnvironmentCollection.Name)] // ExpandEnvironment tests mutate process env vars — serialize with the other env-touching classes
 public sealed class SpawnEngineTests
 {
     [Fact]

@@ -22,6 +22,21 @@ internal static partial class NativeMethods
     // access(2) mode bits.
     internal const int W_OK = 2;
 
+    // statx(2) — read an event-channel file's inode for rotation detection. AT_FDCWD resolves a
+    // relative/absolute path from the cwd; mask STATX_INO requests only the inode; flags 0 means
+    // FOLLOW symlinks (the kgsm instances dir reaches each events file THROUGH the instance→working_dir
+    // symlink, so we must traverse it). statx has a fixed, architecture-independent struct layout
+    // (unlike struct stat) — that is exactly why it is used here: stx_ino sits at a stable byte
+    // offset on every arch, so the inode is read with no fragile struct marshalling.
+    internal const int AT_FDCWD = -100;
+    internal const uint STATX_INO = 0x100;
+
+    /// <summary>Byte offset of <c>stx_ino</c> within <c>struct statx</c> (fixed across architectures).</summary>
+    internal const int StatxInoOffset = 32;
+
+    /// <summary>Size of <c>struct statx</c>; the kernel writes the whole struct, so the buffer must be full-size.</summary>
+    internal const int StatxBufferSize = 256;
+
     /// <summary>Effective uid of the daemon — 0 means we booted as root and must self-bootstrap + drop.</summary>
     [LibraryImport("libc", SetLastError = true)]
     internal static partial uint geteuid();
@@ -32,6 +47,16 @@ internal static partial class NativeMethods
     /// </summary>
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int access(string pathname, int mode);
+
+    /// <summary>
+    /// statx(2) — fetch an inode (and only an inode, via <see cref="STATX_INO"/>) for a path,
+    /// following symlinks. The result is written into <paramref name="buf"/> (a full
+    /// <see cref="StatxBufferSize"/>-byte <c>struct statx</c>); the caller reads <c>stx_ino</c> at
+    /// <see cref="StatxInoOffset"/>. Returns 0 on success, -1 on error (read errno via
+    /// <see cref="Marshal.GetLastPInvokeError"/> — e.g. ENOENT when the channel does not exist yet).
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int statx(int dirfd, string pathname, int flags, uint mask, byte[] buf);
 
     /// <summary>
     /// chown(2) — used during the root-boot delegation to hand the cgroup subtree and the

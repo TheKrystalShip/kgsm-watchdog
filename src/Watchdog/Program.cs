@@ -59,6 +59,12 @@ builder.Services.AddHostedService<CrashWatcher>();
 // optimization, runs off the startup path.
 builder.Services.AddHostedService<StartupMemoryTrimmer>();
 
+// Player-presence ingester: the watchdog's CONTAINER role. Tails each container instance's
+// events/events.ndjson channel and re-emits player join/left as kgsm wire events (origin=system).
+// Pure file-reader + forwarder — never shells docker, never supervises containers; additive to the
+// native supervision above. Self-resolves the kgsm instances dir post-bootstrap.
+builder.Services.AddHostedService<PlayerPresenceIngester>();
+
 // Control plane: a unix domain socket (no TCP port; the socket's filesystem perms are the
 // security boundary, same model as kgsm-monitor).
 builder.WebHost.ConfigureKestrel(kestrel =>

@@ -8,6 +8,11 @@
 > clients** that issue lifecycle commands over a unix socket. This deliberately
 > breaks KGSM's historical "stateless / no warm process" rule — accepted
 > eyes-open, because the daemon **is** the watchdog the project always wanted.
+>
+> **Logging** follows the ecosystem convention (`../logging-convention.md`):
+> `Microsoft.Extensions.Logging` → `AddSystemdConsole()` (journald `<N>` priority prefix),
+> levels from `appsettings.json` `Logging` + env (`Logging__LogLevel__Default`, default
+> `Information`). The `CreateSlimBuilder` host binds the section explicitly via `AddConfiguration`.
 
 ---
 

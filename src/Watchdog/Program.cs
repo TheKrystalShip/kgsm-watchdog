@@ -25,6 +25,15 @@ if (string.IsNullOrEmpty(options.KgsmPath))
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+// Ecosystem-standard logging (see ../tks/logging-convention.md): one journald-native SystemdConsole
+// sink (the <N> syslog priority prefix lets `journalctl -p` filter by level). AddConfiguration binds the
+// "Logging" section from appsettings.json + env overrides (Logging__LogLevel__Default=Debug) — wired
+// explicitly so the level knob is deterministic on the slim builder rather than relying on an implicit
+// default. The watchdog's own knobs still come from env (WatchdogOptions.FromEnvironment); logging only.
+builder.Logging.ClearProviders();
+builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+builder.Logging.AddSystemdConsole();
+
 builder.Services.AddSingleton(options);
 
 // The single KGSM chokepoint — used ONLY to read instance config (and, in Inc 2, to watch

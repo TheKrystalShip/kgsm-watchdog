@@ -39,10 +39,18 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </para>
 /// <para>Not thread-safe by design — one tail per file, driven by a single poll loop.</para>
 /// </summary>
-internal sealed class EventChannelTail(string path)
+internal sealed class EventChannelTail(string path, bool primeAtEnd = false)
 {
     /// <summary>The absolute channel path this tail follows (used for instance-name derivation + logging).</summary>
     public string Path { get; } = path;
+
+    // When true, the FIRST attach to an existing file seeks to its current end instead of offset 0, so a
+    // pre-existing append-only log (the native game log, which the watchdog opens with >> and never
+    // rotates) is NOT replayed from the start — only lines appended after we attach are emitted. A later
+    // rotation (inode change) still re-reads the fresh file from 0. Off for the container NDJSON channel
+    // (the shim writes a fresh per-session file, so reading from 0 is exactly right).
+    private readonly bool _primeAtEnd = primeAtEnd;
+    private bool _primed;
 
     private ulong? _inode;
     private long _offset;
@@ -72,9 +80,18 @@ internal sealed class EventChannelTail(string path)
             return [];
         }
 
-        // Fresh inode ⇒ new session ⇒ start over. (Primary rotation signal per the contract.)
+        // Fresh inode ⇒ new file. On the very FIRST attach with primeAtEnd, seek to EOF so an existing
+        // append-only native log isn't replayed; every later inode change (rotation / new session) reads
+        // the fresh file from 0. Without primeAtEnd this is the container path's "new session ⇒ read from
+        // 0" (the primary rotation signal per the contract).
         if (_inode != inode)
-            ResetTo(inode);
+        {
+            if (_primeAtEnd && !_primed)
+                PrimeAtEnd(inode);
+            else
+                ResetTo(inode);
+        }
+        _primed = true;
 
         long length;
         try
@@ -149,6 +166,17 @@ internal sealed class EventChannelTail(string path)
         _inode = inode;
         _offset = 0;
         _pending.Clear();
+    }
+
+    // First-attach seek-to-end: adopt the inode but start the offset at the current file length, so the
+    // existing content of an append-only log is skipped and only subsequent appends are read. A failed
+    // length read falls back to 0 (read from the start) rather than losing the file.
+    private void PrimeAtEnd(ulong? inode)
+    {
+        _inode = inode;
+        _pending.Clear();
+        try { _offset = new FileInfo(Path).Length; }
+        catch { _offset = 0; }
     }
 
     /// <summary>

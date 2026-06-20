@@ -88,6 +88,46 @@ public sealed class EventChannelTailTests : IDisposable
         Assert.Equal(new[] { "win-1", "win-2" }, tail.ReadNewLines());
     }
 
+    // ---- primeAtEnd: first-attach-at-EOF for the native append-only log -----------------------
+
+    [Fact]
+    public void PrimeAtEnd_skips_existing_content_on_first_attach_then_reads_appends()
+    {
+        // A pre-existing, append-only native game log must NOT be replayed from the start.
+        File.WriteAllText(_file, "history-1\nhistory-2\n");
+
+        var tail = new EventChannelTail(_file, primeAtEnd: true);
+        Assert.Empty(tail.ReadNewLines()); // first attach seeks to EOF — history skipped
+
+        File.AppendAllText(_file, "fresh-1\nfresh-2\n");
+        Assert.Equal(new[] { "fresh-1", "fresh-2" }, tail.ReadNewLines()); // only post-attach lines
+    }
+
+    [Fact]
+    public void Default_without_primeAtEnd_reads_existing_content_from_zero()
+    {
+        // The container channel (no primeAtEnd) reads its fresh per-session file from the start.
+        File.WriteAllText(_file, "existing-1\nexisting-2\n");
+
+        var tail = new EventChannelTail(_file); // primeAtEnd defaults false
+        Assert.Equal(new[] { "existing-1", "existing-2" }, tail.ReadNewLines());
+    }
+
+    [Fact]
+    public void PrimeAtEnd_still_reads_a_rotated_file_from_zero()
+    {
+        File.WriteAllText(_file, "history\n");
+        var tail = new EventChannelTail(_file, primeAtEnd: true);
+        Assert.Empty(tail.ReadNewLines()); // first attach skips history
+
+        // External rotation (new inode) → the fresh file IS read from 0; primeAtEnd is first-attach only.
+        string replacement = Path.Combine(_dir, "rotated.tmp");
+        File.WriteAllText(replacement, "after-rotate-1\nafter-rotate-2\n");
+        File.Move(replacement, _file, overwrite: true);
+
+        Assert.Equal(new[] { "after-rotate-1", "after-rotate-2" }, tail.ReadNewLines());
+    }
+
     // ---- rotation: inode change --------------------------------------------------------------
 
     [Fact]

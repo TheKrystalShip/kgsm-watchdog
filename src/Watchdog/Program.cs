@@ -65,6 +65,12 @@ builder.Services.AddHostedService<StartupMemoryTrimmer>();
 // native supervision above. Self-resolves the kgsm instances dir post-bootstrap.
 builder.Services.AddHostedService<PlayerPresenceIngester>();
 
+// Player-presence ingester: the watchdog's NATIVE role. Tails each native instance's own game log
+// (instance.LogFile, which SpawnEngine already targets) and emits the SAME player join/left wire events
+// (origin=system), matching the blueprint's player_*_regex (read off the Instance via kgsm-lib) with the
+// pure NativeLogMatcher. Additive + decoupled from supervision; no spawn-path change.
+builder.Services.AddHostedService<NativePlayerPresenceIngester>();
+
 // Control plane: a unix domain socket (no TCP port; the socket's filesystem perms are the
 // security boundary, same model as kgsm-monitor).
 builder.WebHost.ConfigureKestrel(kestrel =>

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 
@@ -54,5 +55,41 @@ public sealed class UpnpServiceTests
         var args = UpnpService.BuildUpnpcArgs(open: true, "empty-01", []);
 
         Assert.Equal(["-e", "empty-01", "-r"], args);
+    }
+
+    // The two gate paths return BEFORE shelling upnpc, so they are unit-testable (unlike the
+    // exit-code → Applied/Failed mapping, which needs a real IGD and is exercised live). They prove
+    // the inert-by-default contract: a disabled instance (the default) does nothing → Skipped → the
+    // supervisor emits no event. A non-Applied outcome is exactly what gates the audit event.
+
+    [Fact]
+    public async Task OpenAsync_returns_Skipped_when_port_forwarding_disabled()
+    {
+        var svc = new UpnpService(NullLogger<UpnpService>.Instance);
+        // Disabled even though ports ARE configured — the gate short-circuits before any upnpc call.
+        var instance = new Instance
+        {
+            Name = "factorio-test",
+            EnablePortForwarding = false,
+            Ports = [new PortMapping { Start = 34197, End = 34197, Protocol = "udp" }],
+        };
+
+        Assert.Equal(UpnpOutcome.Skipped, await svc.OpenAsync(instance));
+        Assert.Equal(UpnpOutcome.Skipped, await svc.CloseAsync(instance));
+    }
+
+    [Fact]
+    public async Task OpenAsync_returns_Skipped_when_enabled_but_no_ports()
+    {
+        var svc = new UpnpService(NullLogger<UpnpService>.Instance);
+        // Enabled but nothing to forward → a clean no-op (no upnpc call), so Skipped (no event).
+        var instance = new Instance
+        {
+            Name = "no-ports-01",
+            EnablePortForwarding = true,
+            Ports = [],
+        };
+
+        Assert.Equal(UpnpOutcome.Skipped, await svc.OpenAsync(instance));
     }
 }

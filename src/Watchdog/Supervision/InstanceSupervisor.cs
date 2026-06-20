@@ -594,17 +594,28 @@ internal sealed class InstanceSupervisor(
     /// </summary>
     private void OpenPortForwarding(Instance spec) => _ = Task.Run(async () =>
     {
-        try { await upnp.OpenAsync(spec).ConfigureAwait(false); }
+        try
+        {
+            // Only a confirmed mapping (upnpc exit 0) emits the audit event — the watchdog is the
+            // actor that drove the router change, so it stamps system/system and renders the ports
+            // back to the canonical UFW string the kgsm events-emit positional arg expects.
+            if (await upnp.OpenAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied)
+                EmitSystemEvent("instance-upnp-opened", spec.Name, spec.Ports.ToUfwSpec());
+        }
         catch (Exception ex) { logger.LogWarning(ex, "UPnP open task faulted for {Instance}", spec.Name); }
     });
 
     /// <summary>
     /// Fire-and-forget, best-effort UPnP close on a deliberate stop. Same off-the-gate, swallow-failures
-    /// posture as <see cref="OpenPortForwarding"/>.
+    /// posture as <see cref="OpenPortForwarding"/>; a confirmed removal emits the close event.
     /// </summary>
     private void ClosePortForwarding(Instance spec) => _ = Task.Run(async () =>
     {
-        try { await upnp.CloseAsync(spec).ConfigureAwait(false); }
+        try
+        {
+            if (await upnp.CloseAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied)
+                EmitSystemEvent("instance-upnp-closed", spec.Name, spec.Ports.ToUfwSpec());
+        }
         catch (Exception ex) { logger.LogWarning(ex, "UPnP close task faulted for {Instance}", spec.Name); }
     });
 

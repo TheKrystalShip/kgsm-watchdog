@@ -5,6 +5,19 @@ using TheKrystalShip.KGSM.Core.Models;
 namespace TheKrystalShip.KGSM.Watchdog.PortForwarding;
 
 /// <summary>
+/// The outcome of a UPnP open/close attempt, so the supervisor can emit an audit event ONLY on a
+/// confirmed transition (never a fabricated one).
+/// <list type="bullet">
+/// <item><see cref="Skipped"/> — gated off (forwarding disabled or no ports), or a harmless close of
+/// a mapping that did not exist (upnpc IGD error 714) — nothing changed, no event.</item>
+/// <item><see cref="Applied"/> — upnpc confirmed the mapping change (exited 0) — emit the event.</item>
+/// <item><see cref="Failed"/> — the operator asked for it and upnpc could not deliver (missing binary,
+/// non-zero on open, or timeout) — logged, no event.</item>
+/// </list>
+/// </summary>
+internal enum UpnpOutcome { Skipped, Applied, Failed }
+
+/// <summary>
 /// Opens / closes a native instance's UPnP port mappings on the local IGD by shelling
 /// <c>upnpc</c> (miniupnpc) — the same backend the KGSM management script used. The watchdog owns
 /// this because UPnP is <b>process-lifetime</b> state: the mapping must open on a fresh bring-up,
@@ -26,21 +39,28 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     // cap is the second line of defence (and bounds the work the thread-pool task holds).
     private static readonly TimeSpan UpnpTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>Open the instance's UPnP mappings (no-op unless <c>enable_port_forwarding</c>).</summary>
-    public Task OpenAsync(Instance instance, CancellationToken ct = default)
+    /// <summary>
+    /// Open the instance's UPnP mappings (no-op unless <c>enable_port_forwarding</c>). Returns the
+    /// <see cref="UpnpOutcome"/> so the caller emits an audit event only on a confirmed mapping.
+    /// </summary>
+    public Task<UpnpOutcome> OpenAsync(Instance instance, CancellationToken ct = default)
         => ApplyAsync(instance, open: true, ct);
 
-    /// <summary>Close the instance's UPnP mappings (no-op unless <c>enable_port_forwarding</c>).</summary>
-    public Task CloseAsync(Instance instance, CancellationToken ct = default)
+    /// <summary>
+    /// Close the instance's UPnP mappings (no-op unless <c>enable_port_forwarding</c>). Returns the
+    /// <see cref="UpnpOutcome"/> so the caller emits an audit event only on a confirmed removal.
+    /// </summary>
+    public Task<UpnpOutcome> CloseAsync(Instance instance, CancellationToken ct = default)
         => ApplyAsync(instance, open: false, ct);
 
-    private async Task ApplyAsync(Instance instance, bool open, CancellationToken ct)
+    private async Task<UpnpOutcome> ApplyAsync(Instance instance, bool open, CancellationToken ct)
     {
         string action = open ? "open" : "close";
 
         // Per-instance gate — parity with the bash _enable_upnp guard. No global toggle (§5·3).
+        // Disabled → nothing happens → Skipped (no event). This is the default (inert) path.
         if (!instance.EnablePortForwarding)
-            return;
+            return UpnpOutcome.Skipped;
 
         // Expand the canonical structured ports (kgsm-lib already parsed + validated them off the
         // `instances info --json` surface) into the individual external ports upnpc opens one at a
@@ -50,10 +70,10 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
         {
             logger.LogInformation(
                 "UPnP {Action} skipped for {Instance}: no ports configured", action, instance.Name);
-            return;
+            return UpnpOutcome.Skipped;
         }
 
-        await RunUpnpcAsync(BuildUpnpcArgs(open, instance.Name, ports), open, instance.Name, ct)
+        return await RunUpnpcAsync(BuildUpnpcArgs(open, instance.Name, ports), open, instance.Name, ct)
             .ConfigureAwait(false);
     }
 
@@ -90,7 +110,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
         return args;
     }
 
-    private async Task RunUpnpcAsync(
+    private async Task<UpnpOutcome> RunUpnpcAsync(
         IReadOnlyList<string> args, bool open, string instanceName, CancellationToken ct)
     {
         string action = open ? "open" : "close";
@@ -115,11 +135,11 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
         {
             // upnpc missing (miniupnpc not installed) or otherwise unspawnable. Best-effort, exactly
             // like the bash path logging and continuing — UPnP is an opt-in convenience, never a hard
-            // supervision dependency.
+            // supervision dependency. Nothing was mapped → Failed (no event).
             logger.LogWarning(ex,
                 "UPnP {Action} for {Instance}: could not launch upnpc (is miniupnpc installed?)",
                 action, instanceName);
-            return;
+            return UpnpOutcome.Failed;
         }
 
         using (proc)
@@ -141,9 +161,14 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
 
                 if (proc.ExitCode == 0)
                 {
+                    // A confirmed mapping change — the ONLY path that emits an audit event upstream.
+                    // Note: all ports go in one upnpc call, so exit 0 means the call succeeded, not a
+                    // per-port confirmation; the event claims the full requested set (best-effort).
                     logger.LogInformation("UPnP {Action} for {Instance}: ok", action, instanceName);
+                    return UpnpOutcome.Applied;
                 }
-                else if (open)
+
+                if (open)
                 {
                     // Open failing is real signal: the operator asked for forwarding and didn't get it.
                     string detail = !string.IsNullOrEmpty(stderr) ? stderr : stdout;
@@ -151,17 +176,17 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
                         "UPnP open for {Instance}: upnpc exited {Code}, continuing without port forwarding{Detail}",
                         instanceName, proc.ExitCode,
                         string.IsNullOrEmpty(detail) ? "" : $" — {detail}");
+                    return UpnpOutcome.Failed;
                 }
-                else
-                {
-                    // Close fires unconditionally (no bash-style state-file guard under supervision), so
-                    // a non-zero on close is usually just "nothing to delete" (no mapping was opened, or
-                    // the lease expired — upnpc returns IGD error 714). End-state is correct either way;
-                    // this is routine, not a problem — Information, not Warning, so stops stay quiet.
-                    logger.LogInformation(
-                        "UPnP close for {Instance}: upnpc exited {Code} (likely no active mapping — harmless)",
-                        instanceName, proc.ExitCode);
-                }
+
+                // Close fires unconditionally (no bash-style state-file guard under supervision), so
+                // a non-zero on close is usually just "nothing to delete" (no mapping was opened, or
+                // the lease expired — upnpc returns IGD error 714). Nothing changed → Skipped (no
+                // event — never fabricate a close that removed nothing). Information, so stops stay quiet.
+                logger.LogInformation(
+                    "UPnP close for {Instance}: upnpc exited {Code} (likely no active mapping — harmless)",
+                    instanceName, proc.ExitCode);
+                return UpnpOutcome.Skipped;
             }
             catch (OperationCanceledException)
             {
@@ -175,6 +200,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
                 // teardown can fault them — swallow either way; we've already handled the timeout).
                 await ObserveQuietly(stdoutTask).ConfigureAwait(false);
                 await ObserveQuietly(stderrTask).ConfigureAwait(false);
+                return UpnpOutcome.Failed;
             }
         }
     }

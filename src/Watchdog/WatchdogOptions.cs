@@ -130,6 +130,16 @@ public sealed class WatchdogOptions
     /// </summary>
     public int PlayerPresencePollMs { get; init; } = 1000;
 
+    // ---- Console stream: live follow of a native instance's stdout ----------------------------
+
+    /// <summary>
+    /// How often the <c>GET /console/{name}/follow</c> handler polls a native instance's log file for
+    /// newly-appended lines. <c>KGSM_WATCHDOG_CONSOLE_POLL_MS</c>. Default <c>250</c> — tighter than the
+    /// presence poll because a human is watching the stream live, so latency matters; still cheap (one
+    /// stat + a short read per connected client). Floored at 50ms.
+    /// </summary>
+    public int ConsolePollMs { get; init; } = 250;
+
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
@@ -168,6 +178,7 @@ public sealed class WatchdogOptions
             StateFile = Env("KGSM_WATCHDOG_STATE_FILE") is { Length: > 0 } st ? st : defaults.StateFile,
             InstancesDir = Env("KGSM_WATCHDOG_INSTANCES_DIR") is { Length: > 0 } id ? id : defaults.InstancesDir,
             PlayerPresencePollMs = ParseInt(Env("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS"), defaults.PlayerPresencePollMs, min: 50),
+            ConsolePollMs = ParseInt(Env("KGSM_WATCHDOG_CONSOLE_POLL_MS"), defaults.ConsolePollMs, min: 50),
         };
     }
 
@@ -214,6 +225,7 @@ public sealed class WatchdogOptions
         "KGSM_WATCHDOG_STATE_FILE",
         "KGSM_WATCHDOG_INSTANCES_DIR",
         "KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS",
+        "KGSM_WATCHDOG_CONSOLE_POLL_MS",
     ];
 
     /// <summary>
@@ -292,14 +304,19 @@ public sealed class WatchdogOptions
         Row("KGSM_WATCHDOG_INSTANCES_DIR", "[~/.local/share/kgsm/instances]", "kgsm instances dir watched for container events/events.ndjson channels");
         Row("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS", $"[{d.PlayerPresencePollMs}]", "how often presence channels are scanned and tailed");
 
+        Section("Console stream (live follow of a native instance's stdout)");
+        Row("KGSM_WATCHDOG_CONSOLE_POLL_MS", $"[{d.ConsolePollMs}]", "how often /console/{instance}/follow polls the log for new lines");
+
         sb.AppendLine();
         sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");
-        sb.AppendLine("  GET  /health             supervisor readiness (200 ready / 503 not + reason)");
-        sb.AppendLine("  GET  /ready              deprecated alias of /health (removed next release)");
-        sb.AppendLine("  POST /start/{instance}   spawn into its cgroup, desired-state = running");
-        sb.AppendLine("  POST /stop/{instance}    graceful stop -> drain -> cgroup.kill, desired-state = stopped");
-        sb.AppendLine("  GET  /status/{instance}  desired/phase/populated/pid/restarts");
-        sb.AppendLine("  GET  /list               all supervised instances");
+        sb.AppendLine("  GET  /health                    supervisor readiness (200 ready / 503 not + reason)");
+        sb.AppendLine("  GET  /ready                     deprecated alias of /health (removed next release)");
+        sb.AppendLine("  POST /start/{instance}          spawn into its cgroup, desired-state = running");
+        sb.AppendLine("  POST /stop/{instance}           graceful stop -> drain -> cgroup.kill, desired-state = stopped");
+        sb.AppendLine("  GET  /status/{instance}         desired/phase/populated/pid/restarts");
+        sb.AppendLine("  GET  /list                      all supervised instances");
+        sb.AppendLine("  GET  /console/{instance}?tail=N last <=N lines of stdout (native only; finite text/plain)");
+        sb.AppendLine("  GET  /console/{instance}/follow live stdout follow from connect (native only; chunked text/plain)");
 
         return sb.ToString();
     }

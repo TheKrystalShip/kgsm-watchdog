@@ -179,6 +179,20 @@ public sealed class OptionsTests
     }
 
     [Fact]
+    public void ConsolePollMs_defaults_and_floors_low_values()
+    {
+        using (var _ = new EnvScope(("KGSM_WATCHDOG_CONSOLE_POLL_MS", null)))
+            Assert.Equal(250, WatchdogOptions.FromEnvironment().ConsolePollMs);
+
+        // Below the 50ms floor is rejected back to the default (ParseInt min guard).
+        using (var _ = new EnvScope(("KGSM_WATCHDOG_CONSOLE_POLL_MS", "10")))
+            Assert.Equal(250, WatchdogOptions.FromEnvironment().ConsolePollMs);
+
+        using (var _ = new EnvScope(("KGSM_WATCHDOG_CONSOLE_POLL_MS", "500")))
+            Assert.Equal(500, WatchdogOptions.FromEnvironment().ConsolePollMs);
+    }
+
+    [Fact]
     public void Help_documents_every_known_var()
     {
         // Completeness guard: add a knob to FromEnvironment + KnownEnvVars but forget to document it

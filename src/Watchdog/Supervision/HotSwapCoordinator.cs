@@ -26,13 +26,9 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </summary>
 internal sealed class HotSwapCoordinator
 {
-    /// <summary>Wire event emitted (system/system) when a swap is refused at the safety gate.</summary>
-    private const string EventSwapAborted = "watchdog-hotswap-aborted";
-
     /// <summary>How long the <c>--selfcheck</c> probe of the new binary may take before it's deemed a failure.</summary>
     private static readonly TimeSpan SelfcheckTimeout = TimeSpan.FromSeconds(10);
 
-    private readonly InstanceSupervisor _supervisor;
     private readonly ILogger<HotSwapCoordinator> _logger;
 
     /// <summary>
@@ -63,7 +59,6 @@ internal sealed class HotSwapCoordinator
         Func<string, int>? selfcheckRunner = null,
         Func<string, bool>? executeSwap = null)
     {
-        _supervisor = supervisor;
         _logger = logger;
         _selfcheck = selfcheckRunner ?? RunSelfcheckSubprocess;
         _executeSwap = executeSwap ?? supervisor.PrepareAndExecHotSwap;
@@ -98,10 +93,12 @@ internal sealed class HotSwapCoordinator
             int code = SafeSelfcheck(target);
             if (code != 0)
             {
+                // Log-only (the plan's documented fallback): a dedicated kgsm wire event for this would
+                // need a new event type registered across kgsm/kgsm-lib/kgsm-api; not worth that contract
+                // churn for an operator-facing condition the journal already surfaces loudly here.
                 _logger.LogCritical(
                     "hot-swap: ABORTED — `{Target} --selfcheck` exited {Code} (timeout/fail). Staying on the running image; " +
                     "games untouched. Fix the deployed binary and re-run `systemctl reload`.", target, code);
-                _supervisor.EmitHotSwapEvent(EventSwapAborted, $"selfcheck exit {code}");
                 return Task.CompletedTask;
             }
 

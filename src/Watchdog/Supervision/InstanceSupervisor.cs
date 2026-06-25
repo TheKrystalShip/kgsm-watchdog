@@ -875,21 +875,6 @@ internal sealed class InstanceSupervisor(
         return false;
     }
 
-    /// <summary>
-    /// Emit an autonomous supervisor system event (actor=system / origin=system) on behalf of a caller
-    /// that doesn't hold the supervisor's private emit path — e.g. the <c>HotSwapCoordinator</c> reporting
-    /// an aborted swap. Fire-and-forget + best-effort, exactly like the internal emit. <paramref name="data"/>
-    /// is the event's positional payload (e.g. the abort reason); may be empty.
-    /// </summary>
-    public void EmitHotSwapEvent(string dashEventName, params string[] data)
-    {
-        _ = Task.Run(() =>
-        {
-            try { events.EmitWithProvenance(dashEventName, "system", "system", data); }
-            catch (Exception ex) { logger.LogWarning(ex, "Failed to emit {Event} (event dropped)", dashEventName); }
-        });
-    }
-
     public InstanceState? Status(string name)
     {
         // The enabled set is independent of the live table — an instance can be enabled-but-not-tracked

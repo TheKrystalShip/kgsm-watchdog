@@ -38,10 +38,14 @@ Environment=KGSM_WATCHDOG_GID=1000
 # '-' makes it optional (no failure if absent). Copy deploy/kgsm-watchdog.env.example to this path.
 EnvironmentFile=-/etc/kgsm-watchdog/kgsm-watchdog.env
 
-# Control socket lives here. systemd creates the dir; the root bootstrap re-chowns it to the
-# target user so the dropped daemon can bind the socket.
-RuntimeDirectory=kgsm-watchdog
-RuntimeDirectoryMode=0750
+# Control + events sockets live under /run/kgsm-watchdog. This unit deliberately does NOT use
+# systemd `RuntimeDirectory=`: it boots as root and DROPS to the KGSM uid, and on `systemctl reload`
+# systemd RE-CHOWNS a RuntimeDirectory back to the unit's user (root). That would leave the dropped,
+# re-exec'd daemon (Inc 7 hot-swap, running as the KGSM uid) unable to bind the socket — EACCES — and
+# crash the swap. Instead the root bootstrap creates the dir, locks it 0750, and chowns it to the
+# target user ONCE; it then stays owned by that user across reloads/hot-swaps. /run is tmpfs, so the
+# dir is recreated by the bootstrap on each boot. (The rootless unit DOES use RuntimeDirectory — there
+# the run-user owns it, so the reload re-chown is a no-op and this problem cannot arise.)
 
 Restart=always
 RestartSec=2

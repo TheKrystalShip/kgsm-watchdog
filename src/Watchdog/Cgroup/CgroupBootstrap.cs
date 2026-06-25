@@ -174,7 +174,22 @@ internal sealed class CgroupBootstrap(
         string? dir = Path.GetDirectoryName(options.SocketPath);
         if (string.IsNullOrEmpty(dir))
             return;
+        // The root-boot unit does NOT use systemd RuntimeDirectory= (it would re-chown the dir to root
+        // on `systemctl reload` and break the dropped re-exec's socket bind — see that unit's header).
+        // So the root bootstrap is the SOLE owner of the socket dir: create it, lock it to 0750, and
+        // hand it to the target user. It then stays owned by that user across a hot-swap re-exec (which
+        // runs as that user and only re-binds — it cannot chown), so the bind succeeds.
         Directory.CreateDirectory(dir);
+        try
+        {
+            File.SetUnixFileMode(dir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "could not set mode 0750 on socket dir {Dir}", dir);
+        }
         if (uid is uint u && gid is uint g)
             Chown(dir, u, g);
     }

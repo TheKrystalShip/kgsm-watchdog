@@ -1,4 +1,5 @@
 using System.Text;
+using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 namespace TheKrystalShip.KGSM.Watchdog;
@@ -232,6 +233,12 @@ public sealed class WatchdogOptions
     /// Any <c>KGSM_WATCHDOG_*</c> environment variables that are set but not recognised — almost always
     /// a typo silently falling back to a default. Logged as a warning at startup so the config surface
     /// is not invisible (the cost of stringly-typed env config; see PLAN §8 discussion).
+    /// <para>
+    /// The self-re-exec hot-swap handoff (<see cref="HotSwapHandoff.EnvVarName"/>) shares the
+    /// <c>KGSM_WATCHDOG_</c> prefix but is an internal IPC channel set by the predecessor image just before
+    /// the <c>execv</c>, NOT an operator config knob — so it is excluded here rather than listed in
+    /// <see cref="KnownEnvVars"/> (which would force it into the <c>--help</c> reference).
+    /// </para>
     /// </summary>
     public static IReadOnlyList<string> UnknownConfigVars()
     {
@@ -239,7 +246,10 @@ public sealed class WatchdogOptions
         var unknown = new List<string>();
         foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
         {
-            if (e.Key is string key && key.StartsWith("KGSM_WATCHDOG_", StringComparison.Ordinal) && !known.Contains(key))
+            if (e.Key is string key
+                && key.StartsWith("KGSM_WATCHDOG_", StringComparison.Ordinal)
+                && key != HotSwapHandoff.EnvVarName   // internal hot-swap handoff channel, not config
+                && !known.Contains(key))
                 unknown.Add(key);
         }
         unknown.Sort(StringComparer.Ordinal);

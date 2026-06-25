@@ -86,6 +86,13 @@ builder.Services.AddSingleton<SupervisionStateStore>();
 builder.Services.AddSingleton<UpnpService>();
 builder.Services.AddSingleton<InstanceSupervisor>();
 
+// Inc 7 Phase 3+4 — the self-re-exec hot-swap (Option 3): on SIGHUP (systemctl reload) the daemon
+// execv's the freshly-deployed binary IN PLACE (same PID), carrying each live game's stdin-FIFO fd open
+// across the exec, so the game never sees stdin EOF. The coordinator runs the --selfcheck safety gate +
+// drives the supervisor's produce/exec; the listener bridges SIGHUP to it. SIGTERM is unchanged.
+builder.Services.AddSingleton<HotSwapCoordinator>();
+builder.Services.AddHostedService<HotSwapSignalListener>();
+
 // Boot auto-start (replaces systemd enable/WantedBy): restore the persisted desired-running set once
 // at startup — registered BEFORE the crash watcher so the table is fully restored (a plain
 // IHostedService's StartAsync is awaited) before the first reconcile tick runs.

@@ -69,21 +69,11 @@ internal static class ReExec
     {
         IntPtr pathPtr = IntPtr.Zero;
         IntPtr argvPtr = IntPtr.Zero;
-        // Track each arg allocation separately: the argv array holds the same pointers, but we free our own
-        // list to be explicit and independent of how many slots we wrote before any early failure.
         var argPtrs = new IntPtr[argv.Count];
         try
         {
             pathPtr = Marshal.StringToCoTaskMemUTF8(path);
-
-            // (count + 1) entries: one pointer per arg, plus a trailing NULL terminator execv requires.
-            argvPtr = Marshal.AllocCoTaskMem((argv.Count + 1) * IntPtr.Size);
-            for (int i = 0; i < argv.Count; i++)
-            {
-                argPtrs[i] = Marshal.StringToCoTaskMemUTF8(argv[i]);
-                Marshal.WriteIntPtr(argvPtr, i * IntPtr.Size, argPtrs[i]);
-            }
-            Marshal.WriteIntPtr(argvPtr, argv.Count * IntPtr.Size, IntPtr.Zero);
+            argvPtr = BuildStringArray(argv, argPtrs);
 
             // Returns only on failure; on success the image is replaced and control never comes back here.
             NativeMethods.execv(pathPtr, argvPtr);
@@ -91,13 +81,99 @@ internal static class ReExec
         }
         finally
         {
-            // Reached only when execv failed (or threw before the call) — clean up every allocation.
-            for (int i = 0; i < argPtrs.Length; i++)
-            {
-                if (argPtrs[i] != IntPtr.Zero) Marshal.FreeCoTaskMem(argPtrs[i]);
-            }
-            if (argvPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(argvPtr);
+            FreeStringArray(argPtrs, argvPtr);
             if (pathPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(pathPtr);
         }
+    }
+
+    /// <summary>
+    /// Like <see cref="Exec"/> but with an EXPLICIT environment (<c>execve</c>). This is the path the
+    /// hot-swap takes, because <c>Environment.SetEnvironmentVariable</c> does NOT reach libc <c>environ</c>
+    /// on net10 (verified 2026-06-25), so a handoff staged that way would be invisible to a plain
+    /// <c>execv</c>. The successor therefore receives <paramref name="env"/> verbatim — build it with
+    /// <see cref="BuildEnvp"/> (the current process environment + the handoff override) so it inherits the
+    /// daemon's full config plus the handoff. Same return contract: never returns on success, returns the
+    /// errno on failure; all unmanaged allocations are freed before returning.
+    /// </summary>
+    /// <returns>The errno from the failed <c>execve</c> (never returns on success).</returns>
+    internal static int ExecWithEnv(string path, IReadOnlyList<string> argv, IReadOnlyList<string> env)
+    {
+        IntPtr pathPtr = IntPtr.Zero;
+        IntPtr argvPtr = IntPtr.Zero;
+        IntPtr envpPtr = IntPtr.Zero;
+        var argPtrs = new IntPtr[argv.Count];
+        var envPtrs = new IntPtr[env.Count];
+        try
+        {
+            pathPtr = Marshal.StringToCoTaskMemUTF8(path);
+            argvPtr = BuildStringArray(argv, argPtrs);
+            envpPtr = BuildStringArray(env, envPtrs);
+
+            NativeMethods.execve(pathPtr, argvPtr, envpPtr);
+            return Marshal.GetLastPInvokeError();
+        }
+        finally
+        {
+            FreeStringArray(argPtrs, argvPtr);
+            FreeStringArray(envPtrs, envpPtr);
+            if (pathPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(pathPtr);
+        }
+    }
+
+    /// <summary>
+    /// Build the <c>envp</c> string list (<c>KEY=VALUE</c> entries) for an <c>execve</c>: a snapshot of the
+    /// CURRENT process environment, with one <paramref name="overrideKey"/> set to
+    /// <paramref name="overrideValue"/> (or removed when the value is null). Pure (no syscalls, no exec) so
+    /// it is unit-testable in isolation — the marshalling-correctness check the Phase 6 live exec cannot
+    /// give cheaply. Reads the environment via <see cref="Environment.GetEnvironmentVariables"/> (the CLR
+    /// view), which is fine because the successor will run on .NET and read it back through the same view —
+    /// the only thing libc-environ visibility actually blocked was the handoff staged AFTER process start.
+    /// </summary>
+    internal static List<string> BuildEnvp(string overrideKey, string? overrideValue)
+    {
+        var env = new List<string>();
+        bool wrote = false;
+        foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
+        {
+            if (e.Key is not string key)
+                continue;
+            if (string.Equals(key, overrideKey, StringComparison.Ordinal))
+            {
+                if (overrideValue is not null) { env.Add($"{key}={overrideValue}"); }
+                wrote = true; // skip the inherited value either way (override or removal)
+                continue;
+            }
+            env.Add($"{key}={e.Value}");
+        }
+        if (!wrote && overrideValue is not null)
+            env.Add($"{overrideKey}={overrideValue}");
+        return env;
+    }
+
+    /// <summary>
+    /// Marshal <paramref name="items"/> into a freshly-allocated, NULL-terminated <c>char**</c> of UTF-8
+    /// strings; the per-item pointers are also recorded in <paramref name="itemPtrs"/> so the caller can
+    /// free them. Returns the array pointer. AOT-safe (no reflection marshalling).
+    /// </summary>
+    private static IntPtr BuildStringArray(IReadOnlyList<string> items, IntPtr[] itemPtrs)
+    {
+        // (count + 1) entries: one pointer per item, plus the trailing NULL terminator execv/execve require.
+        IntPtr arr = Marshal.AllocCoTaskMem((items.Count + 1) * IntPtr.Size);
+        for (int i = 0; i < items.Count; i++)
+        {
+            itemPtrs[i] = Marshal.StringToCoTaskMemUTF8(items[i]);
+            Marshal.WriteIntPtr(arr, i * IntPtr.Size, itemPtrs[i]);
+        }
+        Marshal.WriteIntPtr(arr, items.Count * IntPtr.Size, IntPtr.Zero);
+        return arr;
+    }
+
+    private static void FreeStringArray(IntPtr[] itemPtrs, IntPtr arr)
+    {
+        for (int i = 0; i < itemPtrs.Length; i++)
+        {
+            if (itemPtrs[i] != IntPtr.Zero) Marshal.FreeCoTaskMem(itemPtrs[i]);
+        }
+        if (arr != IntPtr.Zero) Marshal.FreeCoTaskMem(arr);
     }
 }

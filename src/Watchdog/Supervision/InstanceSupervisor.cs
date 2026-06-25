@@ -4,8 +4,11 @@ using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
+using TheKrystalShip.KGSM.Watchdog.Interop;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
+using System.Text;
+using System.Text.Json;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -566,6 +569,325 @@ internal sealed class InstanceSupervisor(
         {
             _gate.Release();
         }
+    }
+
+    // ---- self-re-exec hot-swap (Inc 7 / Option 3) -------------------------------------------
+    // The producer (PrepareAndExecHotSwap, run in the OLD image just before the execv) and the consumer
+    // (AdoptFromHandoff, run in the NEW image at boot) are two halves of the SAME contract on either side
+    // of the same-PID exec. They MUST agree on the blob shape (HotSwapHandoff) and the env-var channel.
+
+    /// <summary>
+    /// Quiesce, serialize a hot-swap handoff for every live instance, shed <c>O_CLOEXEC</c> on each FIFO
+    /// fd, and <c>execv</c> the freshly-deployed binary <b>in place</b> (same PID). Runs entirely under the
+    /// supervisor gate so it serializes against reconcile + every control verb — the swap is atomic w.r.t.
+    /// the state table. On a SUCCESSFUL <c>execv</c> this NEVER returns (the image is replaced); the
+    /// successor reads the handoff in <see cref="AdoptFromHandoff"/>.
+    /// <para>
+    /// <b>Exec-failure recovery = process exit, not limp.</b> If <c>execv</c> returns (it failed — e.g. the
+    /// staged binary vanished between the safety-gate and the exec) we have already released every
+    /// <see cref="RunningInstance"/> handle without closing its fd, so the in-memory table no longer owns a
+    /// usable channel. Rather than soldier on with half-released handles, we restore the steady-state
+    /// invariants (re-set <c>O_CLOEXEC</c>, unset the handoff env var) and <see cref="Environment.Exit"/>
+    /// with a non-zero code so systemd's <c>Restart=always</c> bounces us; the proven Option-1 adoption path
+    /// (FIFO nodes survive on disk) then recovers console + graceful stop on the fresh boot. This trades a
+    /// brief, EOF-risky restart (only on the rare failed-exec, after the safety gate already passed
+    /// <c>--selfcheck</c>) for a guaranteed-consistent recovery instead of a silently-degraded daemon.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// Never returns on success. Returns <c>false</c> only on the (unreachable in practice) path where we
+    /// chose not to exit after a failed exec; the default is to <see cref="Environment.Exit"/>.
+    /// </returns>
+    public bool PrepareAndExecHotSwap(string targetPath)
+    {
+        // Acquire the gate for the whole produce-and-exec critical section. Synchronous Wait() (not
+        // WaitAsync) because on success we never come back to release it — the image is gone — and on
+        // failure we Environment.Exit, so the gate is moot either way.
+        _gate.Wait();
+
+        // The fds we shed O_CLOEXEC on, so an aborted exec can restore the steady-state invariant.
+        var shedFds = new List<int>();
+        try
+        {
+            // 1. Build the handoff from every LIVE instance with a real FIFO fd. An adopted instance whose
+            //    FIFO could not be re-opened (Current.FifoFd < 0) has no channel to carry — it stays on the
+            //    cgroup-only path and the successor re-derives it via the normal restore.
+            var handoff = new HotSwapHandoff();
+            foreach (var si in _instances.Values)
+            {
+                var cur = si.Current;
+                if (cur is null || cur.FifoFd < 0)
+                    continue;
+
+                handoff.Instances.Add(new HotSwapEntry
+                {
+                    Name = si.Name,
+                    FifoFd = cur.FifoFd,
+                    FifoPath = cur.FifoPath,
+                    ConsecutiveFailures = si.Restart.ConsecutiveFailures,
+                    GaveUp = si.Restart.GaveUp,
+                    Phase = si.Phase.ToString(),
+                    SpawnedAt = si.SpawnedAt,
+                    NextRestartAt = si.NextRestartAt,
+                    LastReason = si.LastReason,
+                    DesiredRunning = si.DesiredRunning,
+                });
+            }
+
+            // 2. Belt-and-suspenders: also flush the Phase-2 disk state, so the counters survive even if the
+            //    swap aborts mid-flight and the successor has to fall back to the normal restore.
+            PersistSupervisionState();
+
+            // 3. Encode the blob and build an EXPLICIT envp for execve. VERIFIED 2026-06-25:
+            //    Environment.SetEnvironmentVariable does NOT write through to libc environ on net10, so a
+            //    handoff staged that way is invisible to a plain execv. We therefore snapshot the current
+            //    environment + the handoff override (ReExec.BuildEnvp) and pass it to execve directly.
+            string json = JsonSerializer.Serialize(handoff, WatchdogJsonContext.Default.HotSwapHandoff);
+            string b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+            var envp = ReExec.BuildEnvp(HotSwapHandoff.EnvVarName, b64);
+
+            // 4. Shed O_CLOEXEC on each FIFO fd so it is inherited across the execv, then release the handle
+            //    WITHOUT closing the fd or deleting the FIFO node.
+            foreach (var si in _instances.Values)
+            {
+                var cur = si.Current;
+                if (cur is null || cur.FifoFd < 0)
+                    continue;
+
+                if (ReExec.ClearCloexec(cur.FifoFd))
+                    shedFds.Add(cur.FifoFd);
+                else
+                    logger.LogWarning(
+                        "hot-swap: could not clear O_CLOEXEC on {Instance} FIFO fd {Fd}; it may not survive the exec",
+                        si.Name, cur.FifoFd);
+
+                cur.ReleaseWithoutClosingFd();
+            }
+
+            logger.LogInformation(
+                "hot-swap: handing off {Count} live instance(s) and execv'ing {Target} in place (same PID {Pid})",
+                handoff.Instances.Count, targetPath, Environment.ProcessId);
+
+            // 5. Flush stdout/stderr — the only managed state the successor cannot recover. execve discards
+            //    everything else (threads, GC heap), so nothing else needs committing.
+            Console.Out.Flush();
+            Console.Error.Flush();
+
+            // 6. The point of no return — on success control never comes back here. execve (NOT execv) with
+            //    the explicit envp so the successor actually sees the handoff.
+            int err = ReExec.ExecWithEnv(targetPath, new[] { targetPath }, envp);
+
+            // --- exec FAILED (only path past the call) ---------------------------------------------------
+            logger.LogCritical(
+                "hot-swap: execve({Target}) FAILED with errno {Errno} — the old image is intact but its game handles " +
+                "are released; exiting {Code} so Restart=always brings us back and Option-1 adoption recovers control",
+                targetPath, err, 70);
+
+            // Restore the steady-state cloexec invariant on the fds we shed. (No handoff env var was set on
+            // THIS process — it only lived in the execve envp — so a Restart=always bounce naturally takes
+            // the normal restore path / Option 1, with no stale-fd adopt to guard against.)
+            foreach (int fd in shedFds)
+                ReExec.SetCloexec(fd);
+
+            Console.Out.Flush();
+            Console.Error.Flush();
+
+            // RECOMMENDED recovery: bounce rather than limp. We do not release the gate first — the process
+            // is about to die; the OS reclaims everything.
+            Environment.Exit(70);
+            return false; // unreachable; satisfies the compiler
+        }
+        catch (Exception ex)
+        {
+            // A throw before/around the exec (e.g. serialization) — same recovery posture: restore the
+            // invariant and bounce, never limp with released handles. (The handoff only ever lived in the
+            // execve envp, not this process's environment, so there is nothing to unset.)
+            logger.LogCritical(ex,
+                "hot-swap: produce/exec threw before replacing the image; exiting {Code} for a clean Restart=always recovery", 70);
+            foreach (int fd in shedFds)
+                ReExec.SetCloexec(fd);
+            Console.Out.Flush();
+            Console.Error.Flush();
+            Environment.Exit(70);
+            return false; // unreachable
+        }
+    }
+
+    /// <summary>
+    /// In the NEW image at boot, adopt every instance the predecessor handed off across the
+    /// <c>execv</c> — the no-EOF resume. Reads the base64'd handoff from
+    /// <see cref="HotSwapHandoff.EnvVarName"/>; absent → no-op (a plain start, not a swap). For each entry,
+    /// if the inherited FIFO fd is still open it builds an adopted <see cref="RunningInstance"/> directly
+    /// over THAT fd (NOT <c>ReopenFifo</c> — the continuously-open fd means the game never saw its writer
+    /// vanish, so a post-swap <c>/quit</c> is honored immediately), recovers the PID from the cgroup, and
+    /// restores counters/phase/timing/intent; an unexpectedly-invalid fd falls back to the Option-1 re-open
+    /// for that one instance, logged as a downgrade. After the loop the env var is UNSET so a later plain
+    /// restart never re-adopts stale fds. Runs FIRST in <see cref="StartupRestorer"/>, so the subsequent
+    /// <see cref="RestoreAsync"/>/<see cref="AdoptLiveOrphansAsync"/> skip these via their
+    /// <c>_instances.ContainsKey</c> guards.
+    /// </summary>
+    public void AdoptFromHandoff(CancellationToken ct = default)
+    {
+        string? blob = Environment.GetEnvironmentVariable(HotSwapHandoff.EnvVarName);
+        if (string.IsNullOrEmpty(blob))
+            return; // not a hot-swap boot — nothing handed off
+
+        HotSwapHandoff? handoff;
+        try
+        {
+            string json = Encoding.UTF8.GetString(Convert.FromBase64String(blob));
+            handoff = JsonSerializer.Deserialize(json, WatchdogJsonContext.Default.HotSwapHandoff);
+        }
+        catch (Exception ex)
+        {
+            // A malformed handoff must not wedge boot: log loudly and let the normal restore take over (the
+            // FIFO nodes survive on disk, so Option-1 adoption still recovers the channel). Unset it so the
+            // bad blob can't be re-read.
+            logger.LogError(ex,
+                "hot-swap: could not decode the handoff blob — falling back to the normal restore (Option 1)");
+            Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, null);
+            return;
+        }
+
+        if (handoff is null || handoff.Instances.Count == 0)
+        {
+            Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, null);
+            return;
+        }
+
+        if (!state.Ready)
+        {
+            // The slice bootstrap failed in the successor; we cannot supervise. Leave the env var unset so
+            // we don't retry on a later restart, and let the normal restore log the not-ready reason.
+            logger.LogError(
+                "hot-swap: supervisor not ready ({Detail}); cannot adopt {Count} handed-off instance(s)",
+                state.Detail, handoff.Instances.Count);
+            Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, null);
+            return;
+        }
+
+        _gate.Wait(ct);
+        try
+        {
+            var now = DateTime.UtcNow;
+            int adopted = 0, downgraded = 0;
+
+            foreach (var entry in handoff.Instances)
+            {
+                if (_instances.ContainsKey(entry.Name))
+                    continue; // defensive: already tracked (shouldn't happen — this runs first)
+
+                Instance? spec = null;
+                try { spec = instances.GetInstanceInfo(entry.Name); }
+                catch (Exception ex) { logger.LogWarning(ex, "hot-swap: kgsm-lib threw reading {Instance}", entry.Name); }
+
+                if (spec is null)
+                {
+                    // The spec vanished while we swapped. We still hold an inherited fd, but with no spec we
+                    // can't build a faithful handle (stop command/timeout unknown). Close the orphaned fd if
+                    // it's valid (we own it now) and skip — the cgroup-only orphan adopt will pick it up.
+                    if (ReExec.IsValidFd(entry.FifoFd))
+                        NativeMethods.close(entry.FifoFd);
+                    logger.LogWarning(
+                        "hot-swap: {Instance} was handed off but kgsm-lib now returns no config — skipping (closed inherited fd)",
+                        entry.Name);
+                    continue;
+                }
+
+                if (AdoptHandoffEntry(entry, spec, now))
+                    adopted++;
+                else
+                    downgraded++;
+            }
+
+            logger.LogInformation(
+                "hot-swap: adopted {Adopted} instance(s) via inherited fds, {Downgraded} downgraded to FIFO re-open (of {Total} handed off)",
+                adopted, downgraded, handoff.Instances.Count);
+        }
+        finally
+        {
+            // ALWAYS unset, even on a throw mid-loop: a later plain restart must never re-adopt stale fds.
+            Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, null);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Adopt one handed-off entry. Returns true if it adopted the INHERITED fd directly (the seamless
+    /// path), false if it had to downgrade to an Option-1 FIFO re-open (or cgroup-only) because the
+    /// inherited fd unexpectedly did not survive. Pure-ish decision around the fd validity check; the
+    /// caller holds the gate.
+    /// </summary>
+    private bool AdoptHandoffEntry(HotSwapEntry entry, Instance spec, DateTime now)
+    {
+        var si = new SupervisedInstance
+        {
+            Name = entry.Name,
+            Spec = spec,
+            DesiredRunning = entry.DesiredRunning,
+            SpawnedAt = entry.SpawnedAt ?? now,
+            NextRestartAt = entry.NextRestartAt,
+        };
+        // Restore phase (forward-compat: an unknown name leaves the default Running) and counters.
+        if (Enum.TryParse<SupervisionPhase>(entry.Phase, ignoreCase: false, out var phase))
+            si.Phase = phase;
+        si.Restart.Restore(entry.ConsecutiveFailures, entry.GaveUp);
+
+        int? pid = cgroups.FirstPid(entry.Name);
+
+        bool inheritedFdValid = ReExec.IsValidFd(entry.FifoFd);
+        if (inheritedFdValid)
+        {
+            // The seamless path: adopt the SAME continuously-open fd the predecessor held. No ReopenFifo —
+            // the game never saw its stdin writer vanish, so a post-swap /quit is honored immediately.
+            si.Current = RunningInstance.Adopt(
+                entry.Name, entry.FifoFd, entry.FifoPath, spec.StopCommand, spec.StopCommandTimeoutSeconds, pid, logger);
+            // Restore the steady-state invariant on the adopted fd — it was shed for the exec only.
+            ReExec.SetCloexec(entry.FifoFd);
+            si.LastReason = "adopted via hot-swap handoff — console+graceful stop continuous, no EOF";
+            _instances[entry.Name] = si;
+            logger.LogInformation(
+                "hot-swap: adopted {Instance} via inherited fd {Fd} (pid {Pid}) — console+graceful stop continuous, no EOF",
+                entry.Name, entry.FifoFd, pid);
+            return true;
+        }
+
+        // Downgrade: the inherited fd is gone (unexpected — it should have survived). Fall back to Option 1
+        // (re-open the surviving FIFO node from disk); if even that fails, cgroup-only until the next respawn.
+        int fd = spawnEngine.ReopenFifo(spec.SocketFile);
+        if (fd >= 0)
+        {
+            si.Current = RunningInstance.Adopt(
+                entry.Name, fd, spec.SocketFile, spec.StopCommand, spec.StopCommandTimeoutSeconds, pid, logger);
+            si.LastReason = "adopted via hot-swap handoff (inherited fd gone — FIFO re-opened; brief EOF window possible)";
+            logger.LogWarning(
+                "hot-swap: {Instance} inherited fd {Fd} did not survive — DOWNGRADED to FIFO re-open (Option 1)",
+                entry.Name, entry.FifoFd);
+        }
+        else
+        {
+            si.LastReason = "adopted via hot-swap handoff (inherited fd gone, FIFO re-open failed — cgroup-only until respawn)";
+            logger.LogWarning(
+                "hot-swap: {Instance} inherited fd {Fd} did not survive AND FIFO re-open failed — cgroup-only supervision",
+                entry.Name, entry.FifoFd);
+        }
+        _instances[entry.Name] = si;
+        return false;
+    }
+
+    /// <summary>
+    /// Emit an autonomous supervisor system event (actor=system / origin=system) on behalf of a caller
+    /// that doesn't hold the supervisor's private emit path — e.g. the <c>HotSwapCoordinator</c> reporting
+    /// an aborted swap. Fire-and-forget + best-effort, exactly like the internal emit. <paramref name="data"/>
+    /// is the event's positional payload (e.g. the abort reason); may be empty.
+    /// </summary>
+    public void EmitHotSwapEvent(string dashEventName, params string[] data)
+    {
+        _ = Task.Run(() =>
+        {
+            try { events.EmitWithProvenance(dashEventName, "system", "system", data); }
+            catch (Exception ex) { logger.LogWarning(ex, "Failed to emit {Event} (event dropped)", dashEventName); }
+        });
     }
 
     public InstanceState? Status(string name)

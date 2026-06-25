@@ -129,10 +129,14 @@ internal static partial class NativeMethods
     /// AOT-safe, marshalled by hand to avoid any reflection-based string/array marshalling:
     /// <paramref name="path"/> is a pointer to a NUL-terminated UTF-8 path, and <paramref name="argv"/> is a
     /// pointer to a NULL-terminated array of pointers to NUL-terminated UTF-8 argument strings (by convention
-    /// <c>argv[0]</c> is the program name). The new image inherits the current environment (so callers stage
-    /// the handoff via <see cref="Environment.SetEnvironmentVariable(string,string?)"/>, which libc-backed on
-    /// Linux updates the <c>environ</c> execv inherits — no envp marshalling needed) and every open fd that is
-    /// not <see cref="FD_CLOEXEC"/>.
+    /// <c>argv[0]</c> is the program name). The new image inherits every open fd that is not
+    /// <see cref="FD_CLOEXEC"/> and the current libc <c>environ</c>.
+    /// </para>
+    /// <para>
+    /// <b>Caveat (verified on net10, 2026-06-25):</b> <c>Environment.SetEnvironmentVariable</c> does NOT
+    /// write through to libc <c>environ</c> on the CLR, so a value staged that way is NOT visible to
+    /// <c>execv</c>. To carry a handoff variable across the swap, marshal an explicit <c>envp</c> and call
+    /// <see cref="execve"/> instead. <c>execv</c> is kept for argv-only re-execs.
     /// </para>
     /// <para>
     /// On success execv NEVER returns — the calling image is gone. It returns only on FAILURE (-1, errno set),
@@ -142,4 +146,16 @@ internal static partial class NativeMethods
     /// </summary>
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int execv(IntPtr path, IntPtr argv);
+
+    /// <summary>
+    /// execve(2) — like <see cref="execv"/> but with an explicit, hand-marshalled environment
+    /// (<paramref name="envp"/>: a NULL-terminated array of pointers to NUL-terminated UTF-8
+    /// <c>KEY=VALUE</c> strings). This is the path the hot-swap uses: because
+    /// <c>Environment.SetEnvironmentVariable</c> does not reach libc <c>environ</c> on net10, the only
+    /// reliable way to hand the base64 handoff to the successor image is to build <c>envp</c> ourselves
+    /// (the current environment + the handoff var) and pass it here. Same return contract as
+    /// <see cref="execv"/>: never returns on success, returns -1 with errno on failure.
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int execve(IntPtr path, IntPtr argv, IntPtr envp);
 }

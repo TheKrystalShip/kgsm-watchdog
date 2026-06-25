@@ -83,6 +83,16 @@ internal sealed class RunningInstance : IDisposable
     public int StopTimeoutSeconds { get; }
 
     /// <summary>
+    /// The raw stdin-FIFO write fd the daemon holds open. Exposed only for the self-re-exec hot-swap
+    /// (Inc 7 / Option 3): the coordinator sheds <c>O_CLOEXEC</c> on this fd so it survives the
+    /// <c>execv</c>, hands its number to the successor, then releases the handle without closing it.
+    /// </summary>
+    internal int FifoFd => _fifoFd;
+
+    /// <summary>The stdin-FIFO node path — carried in the hot-swap handoff for the Option-1 re-open fallback.</summary>
+    internal string FifoPath => _fifoPath;
+
+    /// <summary>
     /// The launcher/game leader's exit code if it has exited, else null. After the launcher's
     /// <c>exec</c>, this <see cref="Process"/> <em>is</em> the game leader, so a non-zero/​signal exit
     /// (≥128) means a crash and <c>0</c> means a clean shutdown — the reconcile loop's discriminator.
@@ -141,6 +151,29 @@ internal sealed class RunningInstance : IDisposable
     /// surviving node on adoption and restore console + graceful stop.
     /// </summary>
     public void ReleaseKeepingFifo() => Close(deleteFifo: false);
+
+    /// <summary>
+    /// Mark the handle disposed WITHOUT closing the FIFO fd and WITHOUT deleting the FIFO node — used by
+    /// the self-re-exec hot-swap (Inc 7 / Option 3) just before the <c>execv</c>. The fd must stay OPEN so
+    /// it is inherited (its <c>O_CLOEXEC</c> already shed) by the successor image, which adopts it directly
+    /// — re-opening would be a new inode the game cannot see, and closing it would momentarily leave the
+    /// game's stdin without a writer (the very EOF gap Option 3 exists to eliminate). The FIFO node must
+    /// persist on disk for the Option-1 fallback. Setting <c>_disposed</c> here makes a later
+    /// <see cref="Dispose"/>/<see cref="ReleaseKeepingFifo"/> a no-op, so the fd is never double-closed even
+    /// if an aborted swap re-runs ordinary shutdown.
+    /// </summary>
+    internal void ReleaseWithoutClosingFd()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+
+        // Deliberately do NOT close _fifoFd (it must survive the exec) and do NOT delete _fifoPath.
+        // Dispose the managed Process wrapper only — it never owned the fd, and the successor recovers the
+        // PID from the cgroup, so dropping the wrapper here frees the handle without affecting the game.
+        try { Process?.Dispose(); }
+        catch { /* already gone */ }
+    }
 
     private void Close(bool deleteFifo)
     {

@@ -11,8 +11,20 @@
 >
 > **Logging** follows the ecosystem convention (`../logging-convention.md`):
 > `Microsoft.Extensions.Logging` → `AddSystemdConsole()` (journald `<N>` priority prefix),
-> levels from `appsettings.json` `Logging` + env (`Logging__LogLevel__Default`, default
-> `Information`). The `CreateSlimBuilder` host binds the section explicitly via `AddConfiguration`.
+> levels from `kgsm-watchdog.settings.json` `Logging` + env (`Logging__LogLevel__Default`, default
+> `Information`). The settings file is renamed from `appsettings.json` (collision-proof across the
+> ecosystem's many `appsettings.json`-shipping services) and loaded explicitly from
+> `AppContext.BaseDirectory` — `CreateSlimBuilder` under systemd leaves the content root at `/`, so the
+> framework's default discovery finds nothing; `deploy.sh` installs it beside the binary. The
+> `CreateSlimBuilder` host binds the `Logging` section via `AddConfiguration`. `"Microsoft.AspNetCore":
+> "Warning"` there silences ~5-Info-lines-per-request chatter that otherwise floods journald (rate-limiting
+> useful lines) and allocates on every poll.
+>
+> **Idle memory** — see [memory note] / `MemoryTrimmer`: the ~50 MB idle floor is genuine (≈30 MB live
+> ASP.NET-Core/AOT managed heap with committed == live + ~13 MB binary + native; GC knobs can't shrink it).
+> The fix targets *creep*: a Workstation-GC daemon never GCs at idle, so polling + 1 Hz ticks ratchet RSS up
+> unbounded (56 → 100 MB / 40 min) — `MemoryTrimmer` re-trims (compacting gen-2 + `malloc_trim`) every 120 s
+> when the working set grew ≥ 8 MB since the last trim, capping it.
 
 ---
 

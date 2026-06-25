@@ -22,6 +22,13 @@ internal static partial class NativeMethods
     // access(2) mode bits.
     internal const int W_OK = 2;
 
+    // fcntl(2) commands + the close-on-exec flag. Used by the self-re-exec hot-swap (Inc 7): a FIFO
+    // write-fd is opened O_CLOEXEC in steady state (so a spawned game never inherits sibling fds), but
+    // must shed FD_CLOEXEC for the instant of the execv so it survives into the new daemon image.
+    internal const int F_GETFD = 1;
+    internal const int F_SETFD = 2;
+    internal const int FD_CLOEXEC = 1;
+
     // statx(2) — read an event-channel file's inode for rotation detection. AT_FDCWD resolves a
     // relative/absolute path from the cwd; mask STATX_INO requests only the inode; flags 0 means
     // FOLLOW symlinks (the kgsm instances dir reaches each events file THROUGH the instance→working_dir
@@ -105,4 +112,34 @@ internal static partial class NativeMethods
     /// <summary>setresuid(2) — drop real/effective/saved uid. Called LAST; after this the daemon is unprivileged.</summary>
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int setresuid(uint ruid, uint euid, uint suid);
+
+    /// <summary>
+    /// fcntl(2) — file-descriptor control. The watchdog uses it only with the descriptor-flags commands
+    /// (<see cref="F_GETFD"/>/<see cref="F_SETFD"/>) to read or clear <see cref="FD_CLOEXEC"/> on a FIFO fd
+    /// around the self-re-exec swap, and as a cheap "is this fd open?" probe (<c>F_GETFD</c> returns -1 with
+    /// EBADF on a closed/invalid fd). Returns -1 on error (read errno via
+    /// <see cref="Marshal.GetLastPInvokeError"/>); the meaning of a non-negative result is command-specific.
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int fcntl(int fd, int cmd, int arg);
+
+    /// <summary>
+    /// execv(3) — replace the current process image with the program at <paramref name="path"/>.
+    /// <para>
+    /// AOT-safe, marshalled by hand to avoid any reflection-based string/array marshalling:
+    /// <paramref name="path"/> is a pointer to a NUL-terminated UTF-8 path, and <paramref name="argv"/> is a
+    /// pointer to a NULL-terminated array of pointers to NUL-terminated UTF-8 argument strings (by convention
+    /// <c>argv[0]</c> is the program name). The new image inherits the current environment (so callers stage
+    /// the handoff via <see cref="Environment.SetEnvironmentVariable(string,string?)"/>, which libc-backed on
+    /// Linux updates the <c>environ</c> execv inherits — no envp marshalling needed) and every open fd that is
+    /// not <see cref="FD_CLOEXEC"/>.
+    /// </para>
+    /// <para>
+    /// On success execv NEVER returns — the calling image is gone. It returns only on FAILURE (-1, errno set),
+    /// in which case the original image continues running intact, which is what makes a pre-exec validation
+    /// gate trustworthy.
+    /// </para>
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int execv(IntPtr path, IntPtr argv);
 }

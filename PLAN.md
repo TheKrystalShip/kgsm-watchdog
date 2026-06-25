@@ -433,10 +433,33 @@ Refs: [systemd File Descriptor Store](https://systemd.io/FILE_DESCRIPTOR_STORE/)
 
 ---
 
-### Increment 7 — Option 3: self-re-exec hot-swap  ◀ BUILT (2026-06-25); live-validation in progress
+### Increment 7 — Option 3: self-re-exec hot-swap  ◀ BUILT + LIVE-VALIDATED (2026-06-25)
 
-> **Build note (2026-06-25):** all phases implemented (parallel subagents, integrated to `main`); build
-> 0-warn, tests green, AOT 0-warn. **Open-risk #1 resolved during the build: it was TRUE** — on .NET 10
+> **Validated live on the test host (2026-06-25), factorio-test.** A genuine version-delta hot-swap
+> (`systemctl reload` → SIGHUP → `execve`) was proven end-to-end: daemon **MainPID unchanged**, the game
+> **PID unchanged** (zero downtime), **no new `Got EOF on stdin`** in the game log (the exact thing Option 1
+> can't deliver), an **immediate graceful `/stop` → "stopped gracefully"** right after the swap, and the
+> **restart counter preserved** across it. Also verified: the `--selfcheck` **safety gate aborts** a swap to
+> a broken binary and stays on the running image (games untouched); and Phase 2's **counters survive an
+> unclean `kill -9`** of the daemon (rehydrated from disk on the systemd restart). `deploy.sh` default path
+> reports `hot-swap verified … on UNCHANGED PID … ✓`.
+>
+> **Three bugs found in live validation and fixed (commits `c9dbebb`, `ee2d567`):**
+> 1. **EACCES on the re-exec'd socket bind.** The root-boot unit used systemd `RuntimeDirectory=`, which
+>    systemd RE-CHOWNS to the unit user (root) on `systemctl reload`. The uid-dropped, re-exec'd daemon then
+>    couldn't bind the control socket and crashed (SIGABRT → systemd `Restart=always` masked it as a normal
+>    restart — caught via a temporary bind-probe). **Fix:** drop `RuntimeDirectory=` from the root-boot unit
+>    (kept in the rootless unit, where the run-user owns it); the root bootstrap's `PrepareSocketDir` is now
+>    the sole owner — creates the dir, locks it 0750, chowns it to the target user, and it then persists
+>    across reloads/hot-swaps.
+> 2. **Abort emitted an unregistered kgsm event** (`watchdog-hotswap-aborted` → "Invalid event type"). **Fix:**
+>    log-only (the plan's documented fallback); the abort is already surfaced loudly to the journal.
+> 3. **`deploy.sh` verify mis-reported a successful swap** — it substring-matched `--version`'s combined
+>    `X+<hash>` against the `/version` JSON `{version,commit}`, which never contains that combined form.
+>    **Fix:** compare on the commit hash.
+>
+> **Build note:** all phases implemented (parallel subagents, integrated to `main`); build 0-warn, tests 166,
+> AOT 0-warn. **Open-risk #1 resolved during the build: it was TRUE** — on .NET 10
 > `Environment.SetEnvironmentVariable` does NOT write through to libc `environ`, so the planned
 > `SetEnvironmentVariable` + `execv` would not carry the handoff. Implemented the plan's documented
 > fallback instead: marshal an explicit `envp` (current env + the handoff override) and call **`execve`**.

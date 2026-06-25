@@ -58,4 +58,43 @@ public sealed class SpawnEngineTests
             "-dedicated -configfile=/opt/7dtd/install/serverconfig.xml",
             SpawnEngine.ExpandEnvironment("-dedicated -configfile=$instance_install_dir/serverconfig.xml", resolve));
     }
+
+    [Fact]
+    public void ValidateSpawnable_empty_descriptor_reports_no_usable_info_not_a_blank_field()
+    {
+        // The bug: an unpopulated descriptor (no name) used to fall through to the per-field check and
+        // throw "{name}: executable_file is empty" with a BLANK name → the crash alert read
+        // "start failed: : executable_file is empty" (a missing field). It must now name the real cause
+        // and never produce the empty interpolated field.
+        string? msg = SpawnEngine.ValidateSpawnable(new TheKrystalShip.KGSM.Core.Models.Instance());
+
+        Assert.Equal("instance descriptor is empty (kgsm returned no usable info)", msg);
+        Assert.DoesNotContain(": :", $"start failed: {msg}"); // the doubled colon is gone
+    }
+
+    [Fact]
+    public void ValidateSpawnable_named_but_missing_exe_keeps_the_name()
+    {
+        // A real, resolved instance with a genuinely empty executable_file still names itself — the
+        // per-field message is honest because the name is present.
+        string? msg = SpawnEngine.ValidateSpawnable(
+            new TheKrystalShip.KGSM.Core.Models.Instance { Name = "factorio-test" });
+
+        Assert.Equal("factorio-test: executable_file is empty", msg);
+    }
+
+    [Fact]
+    public void ValidateSpawnable_fully_populated_descriptor_is_null()
+    {
+        var inst = new TheKrystalShip.KGSM.Core.Models.Instance
+        {
+            Name = "factorio-test",
+            ExecutableFile = "./factorio",
+            SocketFile = "/run/factorio-test.in",
+            LogFile = "/var/log/factorio-test.log",
+            InstallDir = "/opt/factorio-test",
+        };
+
+        Assert.Null(SpawnEngine.ValidateSpawnable(inst));
+    }
 }

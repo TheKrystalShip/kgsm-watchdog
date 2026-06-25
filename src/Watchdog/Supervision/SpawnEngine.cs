@@ -41,17 +41,19 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
     /// </summary>
     public RunningInstance Spawn(Instance instance)
     {
-        string name = instance.Name;
+        // Fail fast on a malformed/unpopulated descriptor with an honest, name-safe message — before any
+        // cgroup/FIFO side effects. See ValidateSpawnable: an unpopulated spec (no name) reports "no
+        // usable info" instead of a per-field error whose {name} prefix would be blank, the missing
+        // field that surfaced as `start failed: : executable_file is empty` in a crash alert.
+        string? invalid = ValidateSpawnable(instance);
+        if (invalid is not null) throw new InvalidOperationException(invalid);
 
+        string name = instance.Name;
         string launchDir = FirstNonEmpty(instance.LaunchDir, instance.WorkingDir, instance.InstallDir);
         string exe = instance.ExecutableFile;
         string fifo = instance.SocketFile;
         string log = instance.LogFile;
 
-        if (string.IsNullOrEmpty(exe)) throw new InvalidOperationException($"{name}: executable_file is empty");
-        if (string.IsNullOrEmpty(fifo)) throw new InvalidOperationException($"{name}: socket_file is empty");
-        if (string.IsNullOrEmpty(log)) throw new InvalidOperationException($"{name}: log_file is empty");
-        if (string.IsNullOrEmpty(launchDir)) throw new InvalidOperationException($"{name}: no launch/working/install dir");
         if (!Directory.Exists(launchDir)) throw new InvalidOperationException($"{name}: launch dir missing: {launchDir}");
 
         // Faithful to the bash native path's security gate: reject command-substitution patterns.
@@ -125,6 +127,34 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
 
     private static string FirstNonEmpty(params string[] candidates)
         => candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? string.Empty;
+
+    /// <summary>
+    /// Validate that a resolved instance descriptor is spawnable, returning an honest, name-safe error
+    /// message or <c>null</c> when it is fully populated. Pure (no I/O) so the spawn path can fail fast
+    /// before any cgroup/FIFO side effect, and so it is unit-testable without a live cgroup.
+    /// <para>
+    /// The empty-descriptor case is first and deliberate: a spec that never resolved (no name — e.g.
+    /// kgsm returned no usable info) reports that plainly, rather than a per-field message whose
+    /// <c>{name}</c> prefix would be blank. That blank prefix was the missing field behind the crash
+    /// alert reading <c>start failed: : executable_file is empty</c>. Every later message below is
+    /// reached only with a non-empty name, so a failure reason always identifies the instance.
+    /// </para>
+    /// </summary>
+    internal static string? ValidateSpawnable(Instance instance)
+    {
+        string name = instance.Name;
+        if (string.IsNullOrEmpty(name))
+            return "instance descriptor is empty (kgsm returned no usable info)";
+        if (string.IsNullOrEmpty(instance.ExecutableFile))
+            return $"{name}: executable_file is empty";
+        if (string.IsNullOrEmpty(instance.SocketFile))
+            return $"{name}: socket_file is empty";
+        if (string.IsNullOrEmpty(instance.LogFile))
+            return $"{name}: log_file is empty";
+        if (string.IsNullOrEmpty(FirstNonEmpty(instance.LaunchDir, instance.WorkingDir, instance.InstallDir)))
+            return $"{name}: no launch/working/install dir";
+        return null;
+    }
 
     private static void TryDeleteFifo(string fifo)
     {

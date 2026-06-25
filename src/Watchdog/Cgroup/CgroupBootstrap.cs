@@ -182,9 +182,10 @@ internal sealed class CgroupBootstrap(
         Directory.CreateDirectory(dir);
         try
         {
-            File.SetUnixFileMode(dir,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-                UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
+            if (OperatingSystem.IsLinux()) // guards the analyzer (CA1416); the daemon is Linux-only anyway
+                File.SetUnixFileMode(dir,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
         }
         catch (Exception ex)
         {

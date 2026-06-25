@@ -48,6 +48,14 @@ internal sealed class InstanceSupervisor(
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
 
+    // PIDs of hot-swap-ADOPTED instances we must reap ourselves. A game that survives a same-PID execve
+    // stays OUR child, but the re-exec'd image holds no managed Process for it (it adopted it as
+    // Process=null), so when that child later exits nothing waitpid()s it and it lingers as a zombie until
+    // the daemon next restarts. The 1 Hz reaper (ReapOrphanedChildren) sweeps exactly these pids — never a
+    // blanket waitpid(-1), which would race the CLR reaping its OWN children and corrupt their exit codes.
+    // A live pid waitpid()s to 0 (kept); a reaped or never-ours pid drops out. Bounded by the instance count.
+    private readonly ConcurrentDictionary<int, byte> _reapable = new();
+
     // The autonomous supervisor lifecycle events kgsm-lib forwards to kgsm (dash CLI form), all
     // stamped actor=system / origin=system — engine actions no human drove. The watchdog is the
     // sole observer of a crash AND the sole driver of the recovery respawn / boot bring-up, so it
@@ -835,6 +843,12 @@ internal sealed class InstanceSupervisor(
 
         int? pid = cgroups.FirstPid(entry.Name);
 
+        // This game came across the execve as OUR child (same-PID swap) and we hold no managed Process for
+        // it — so WE are now responsible for reaping it when it exits. Track its pid for the reaper. (True
+        // for both fd paths below: the fd state doesn't change the process parentage.)
+        if (pid is int adoptedPid && adoptedPid > 0)
+            _reapable[adoptedPid] = 0;
+
         bool inheritedFdValid = ReExec.IsValidFd(entry.FifoFd);
         if (inheritedFdValid)
         {
@@ -874,6 +888,40 @@ internal sealed class InstanceSupervisor(
         _instances[entry.Name] = si;
         return false;
     }
+
+    /// <summary>
+    /// Reap any zombie left behind by a hot-swap-adopted instance that has exited. Such a game survived a
+    /// same-PID <c>execve</c> as our child, but the re-exec'd image holds no managed <c>Process</c> for it,
+    /// so the runtime never reaps it — without this it lingers as a zombie until the daemon next restarts.
+    /// Driven by the 1 Hz <see cref="CrashWatcher"/> tick. Lock-free and gate-free: it only touches
+    /// <c>_reapable</c> (concurrent) and the <c>waitpid</c> syscall, never the supervision table. It targets
+    /// ONLY the specific adopted pids — never <c>waitpid(-1)</c> — so it cannot reap a CLR-owned child and
+    /// corrupt its exit code. <c>waitpid(WNOHANG)</c> never blocks and never kills: a live child returns 0
+    /// (kept for next tick); a reaped or never-ours child drops out of the set.
+    /// </summary>
+    public void ReapOrphanedChildren()
+    {
+        if (_reapable.IsEmpty)
+            return;
+
+        foreach (var pid in _reapable.Keys)
+        {
+            int result = NativeMethods.waitpid(pid, out _, NativeMethods.WNOHANG);
+            if (ShouldStopReaping(result, pid))
+            {
+                _reapable.TryRemove(pid, out _);
+                if (result == pid)
+                    logger.LogDebug("reaped exited hot-swap-adopted child pid {Pid}", pid);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Pure decision for <see cref="ReapOrphanedChildren"/>: stop tracking a pid once <c>waitpid</c> reports
+    /// it reaped (<paramref name="waitpidResult"/> == <paramref name="pid"/>) or that it is not/no longer our
+    /// child (a negative result, e.g. ECHILD). A zero result means "still alive" — keep tracking it.
+    /// </summary>
+    internal static bool ShouldStopReaping(int waitpidResult, int pid) => waitpidResult == pid || waitpidResult < 0;
 
     public InstanceState? Status(string name)
     {

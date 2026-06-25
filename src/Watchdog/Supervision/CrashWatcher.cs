@@ -33,6 +33,10 @@ internal sealed class CrashWatcher(
             {
                 try
                 {
+                    // Reap any zombie left by a hot-swap-adopted instance that exited (the re-exec'd image
+                    // owns no managed Process for it). Gate-free and independent of reconcile; runs every
+                    // tick so a removed-but-zombied adopted child is cleaned even when the table is empty.
+                    supervisor.ReapOrphanedChildren();
                     supervisor.Reconcile();
                 }
                 catch (Exception ex)

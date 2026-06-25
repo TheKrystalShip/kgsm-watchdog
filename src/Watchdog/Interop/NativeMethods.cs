@@ -123,6 +123,21 @@ internal static partial class NativeMethods
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int fcntl(int fd, int cmd, int arg);
 
+    /// <summary><c>waitpid</c> option: return immediately (0) if no matching child has exited yet.</summary>
+    internal const int WNOHANG = 1;
+
+    /// <summary>
+    /// waitpid(2) — reap a specific child. The watchdog uses it ONLY to reap a known hot-swap-ADOPTED
+    /// instance (a game that survived a same-PID <c>execve</c> and so is still our child, but for which the
+    /// re-exec'd image holds no managed <see cref="System.Diagnostics.Process"/>, so the runtime never reaps
+    /// it). Always called with <see cref="WNOHANG"/>, so it never blocks: returns the pid when it reaps a
+    /// zombie, 0 if that child is still alive, or -1 (ECHILD) if it is not / no longer our child. It targets
+    /// only those specific adopted pids — NEVER <c>waitpid(-1)</c> — so it cannot race the CLR reaping the
+    /// children IT spawned (the launcher, --selfcheck, kgsm-lib calls), which would corrupt their exit codes.
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int waitpid(int pid, out int wstatus, int options);
+
     /// <summary>
     /// execv(3) — replace the current process image with the program at <paramref name="path"/>.
     /// <para>

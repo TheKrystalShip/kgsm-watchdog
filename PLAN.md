@@ -397,10 +397,19 @@ Three ways to close it (smallest → most seamless):
   `waitpid`, so it needs only a working `SendLine` — which the re-opened fd provides. Net: **console +
   graceful stop survive any restart cause** (update *or* crash/OOM), no respawn needed. The only residual
   loss for an adopted instance is the exit *code* (`ExitCode=null` — a non-child has no `waitpid`; the
-  cgroup gives liveness, not status). *Limit:* a tiny window between daemon death and the next boot's adopt
-  where no writer holds the FIFO; and a game spawned by a *pre-fix* daemon (FIFO already deleted) stays
-  cgroup-only until its next respawn. Tests: `RunningInstanceTests` (adopted PID/no-exit-code; release-keeps
-  / dispose-deletes the FIFO), `CgroupManagerTests.FirstPid`. AOT clean.
+  cgroup gives liveness, not status). *Limit (LIVE-CONFIRMED 2026-06-25):* the FIFO node survives a daemon
+  bounce and is re-opened (pid recovered, `/list` reads "full control"), and a freshly-spawned instance
+  stops gracefully — BUT during the ~4 s daemon-down window the FIFO momentarily has **no writer**, so an
+  EOF-sensitive game closes its stdin: factorio logged `InterruptibleStdioStream: Got EOF on stdin; closing`
+  exactly at the bounce, after which the re-opened `/quit` is not honored and the stop falls back to
+  `cgroup.kill` until the next respawn. The daemon's *write* side is fully restored; whether the *game* still
+  listens depends on its EOF tolerance. This daemon-down EOF gap is unavoidable for a process-restart
+  approach and is exactly what **Option 3** (same PID, fds never close → the game never sees EOF) eliminates
+  — concrete motivation for the chosen long-term direction. (Option 1 still fully helps EOF-tolerant games,
+  recovers the honest PID, and — crucially — stops the daemon DELETING live FIFOs, the prerequisite for
+  Options 2/3.) A game spawned by a *pre-fix* daemon (FIFO already deleted) stays cgroup-only until its next
+  respawn. Tests: `RunningInstanceTests` (adopted PID/no-exit-code; release-keeps / dispose-deletes the
+  FIFO), `CgroupManagerTests.FirstPid`. AOT clean.
 - **Option 2 — systemd fd store (`FDSTORE=1`).** Idiomatic zero-loss across a *restart*: stash the FIFO fds
   via `sd_notify(FDSTORE=1, FDNAME=<instance>)`; systemd hands them back through `sd_listen_fds()` on the
   next start, so the fds never close → no gap at all. Needs `FileDescriptorStoreMax=N` in the unit, and

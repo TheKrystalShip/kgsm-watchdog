@@ -276,6 +276,20 @@ dotnet publish "$PROJECT" -c Release -r "$RID" -o "$PUBLISH_DIR"
 log "ensuring install dir ${PREFIX}"
 $SUDO install -d -m 0755 "$PREFIX"
 
+# Settings file → beside the binary, where the daemon loads it from AppContext.BaseDirectory (Program.cs).
+# WITHOUT this the daemon never sees its settings (the slim builder's content root is "/" under systemd),
+# so e.g. the ASP.NET log level silently stays at the chatty Information default. Installed BEFORE the swap
+# below so the (re-)exec'd daemon reads the matching settings. 0644 = world-readable, so the uid-dropped
+# daemon (and a hot-swap re-exec running as that uid) can read it. Shipped app defaults → overwrite on every
+# deploy to stay version-matched with the binary (operator overrides go through env vars, not this file).
+SETTINGS_SRC="$PUBLISH_DIR/kgsm-watchdog.settings.json"
+if [[ -f "$SETTINGS_SRC" ]]; then
+    log "installing settings → ${PREFIX}/kgsm-watchdog.settings.json"
+    $SUDO install -m 0644 "$SETTINGS_SRC" "$PREFIX/kgsm-watchdog.settings.json"
+else
+    err "warning: ${SETTINGS_SRC} not found in publish output — daemon will fall back to built-in defaults."
+fi
+
 # Env file (optional in the unit): create from template if absent, never clobber.
 if [[ ! -f "$ENV_FILE" ]]; then
     log "creating ${ENV_FILE} from template (optional overrides)"

@@ -54,11 +54,26 @@ if (string.IsNullOrEmpty(options.KgsmPath))
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+// Load the daemon's settings file from beside the binary. Two reasons it must be explicit:
+//   1. CreateSlimBuilder under a systemd unit with no WorkingDirectory leaves the content root at "/", so
+//      the framework's default appsettings.json discovery finds nothing — the file's settings (logging
+//      levels today, more to come) silently never applied. Resolve it from AppContext.BaseDirectory (the
+//      binary's own directory, /opt/kgsm-watchdog), where deploy installs it — independent of cwd/content root.
+//   2. It is named kgsm-watchdog.settings.json, NOT appsettings.json, so it can never collide with a sibling
+//      ecosystem service's config if they ever share a directory (every .NET project ships an appsettings.json).
+// optional:true so a missing file never stops the daemon; env vars (Logging__LogLevel__*) still override it.
+builder.Configuration.AddJsonFile(
+    Path.Combine(AppContext.BaseDirectory, "kgsm-watchdog.settings.json"), optional: true, reloadOnChange: false);
+
 // Ecosystem-standard logging (see ../tks/logging-convention.md): one journald-native SystemdConsole
 // sink (the <N> syslog priority prefix lets `journalctl -p` filter by level). AddConfiguration binds the
-// "Logging" section from appsettings.json + env overrides (Logging__LogLevel__Default=Debug) — wired
+// "Logging" section from the settings file + env overrides (Logging__LogLevel__Default=Debug) — wired
 // explicitly so the level knob is deterministic on the slim builder rather than relying on an implicit
-// default. The watchdog's own knobs still come from env (WatchdogOptions.FromEnvironment); logging only.
+// default. This is also where "Microsoft.AspNetCore": "Warning" (in the settings file) takes effect, which
+// silences ASP.NET's ~5-Information-lines-per-request chatter — at Information the surfaces' constant
+// /health·/list·/enabled polling both floods journald (rate-limiting away useful lines) and allocates on
+// every poll, feeding the heap growth the MemoryTrimmer then has to reclaim. The watchdog's own knobs still
+// come from env (WatchdogOptions.FromEnvironment); logging only.
 builder.Logging.ClearProviders();
 builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
 builder.Logging.AddSystemdConsole();
@@ -102,10 +117,12 @@ builder.Services.AddHostedService<StartupRestorer>();
 // clock; the supervisor holds all the state and makes all the decisions (one decision point).
 builder.Services.AddHostedService<CrashWatcher>();
 
-// One-shot post-startup heap trim: hands the startup allocation spike back to the OS once idle (the
-// GC otherwise holds ~75 MB of committed-but-free heap that a 1 Hz poller never collects). Pure
-// optimization, runs off the startup path.
-builder.Services.AddHostedService<StartupMemoryTrimmer>();
+// Heap trimmer: hands free memory back to the OS — once after startup, then periodically when activity
+// has grown the resident set and the daemon has settled again. A Workstation-GC daemon that allocates
+// almost nothing at idle never triggers a GC on its own, so each burst of control-plane traffic ratchets
+// RSS up and it stays up; this returns it (compacting gen-2 collect + malloc_trim), growth-gated so a
+// genuinely idle daemon just ticks. Pure optimization, runs off the startup path.
+builder.Services.AddHostedService<MemoryTrimmer>();
 
 // Player-presence ingester: the watchdog's CONTAINER role. Tails each container instance's
 // events/events.ndjson channel and re-emits player join/left as kgsm wire events (origin=system).

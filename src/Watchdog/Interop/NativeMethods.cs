@@ -173,4 +173,18 @@ internal static partial class NativeMethods
     /// </summary>
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int execve(IntPtr path, IntPtr argv, IntPtr envp);
+
+    /// <summary>
+    /// malloc_trim(3) — return free memory from the top of the main glibc arena (and, on modern glibc,
+    /// other arenas) to the OS. The periodic <see cref="Supervision.MemoryTrimmer"/> calls it AFTER an
+    /// aggressive compacting <c>GC.Collect</c>: the GC hands back its own committed heap, but the native
+    /// allocations behind the control plane (Kestrel/socket churn, kgsm-lib subprocess plumbing) go
+    /// through glibc <c>malloc</c>, which by default keeps freed chunks cached in the arena rather than
+    /// <c>munmap</c>-ing them — so they linger on the RSS until this is called. <paramref name="pad"/> is
+    /// the number of bytes to leave available at the top (0 = release as much as possible). Returns 1 if
+    /// memory was actually released, 0 otherwise. glibc-only (the deploy target); a no-op-or-absent libc
+    /// would surface as a P/Invoke failure, so the caller guards it in a try/catch as pure optimization.
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int malloc_trim(nuint pad);
 }

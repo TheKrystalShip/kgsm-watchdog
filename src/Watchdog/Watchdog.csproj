@@ -52,6 +52,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The daemon's settings file, renamed from appsettings.json so it can't collide with a sibling
+         ecosystem service's config if they ever share a directory. The Web SDK only auto-copies the
+         literal "appsettings.json", so the renamed file needs an explicit item to reach bin/ + publish/.
+         Program.cs loads it from AppContext.BaseDirectory; deploy installs it beside the binary. -->
+    <Content Update="kgsm-watchdog.settings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Expose internal primitives (CgroupManager, WatchdogOptions) to the test project. -->
     <InternalsVisibleTo Include="Watchdog.Tests" />
   </ItemGroup>

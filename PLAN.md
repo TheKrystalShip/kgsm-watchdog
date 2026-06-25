@@ -433,7 +433,14 @@ Refs: [systemd File Descriptor Store](https://systemd.io/FILE_DESCRIPTOR_STORE/)
 
 ---
 
-### Increment 7 — Option 3: self-re-exec hot-swap (the detailed plan)  ◀ PLANNED (2026-06-25)
+### Increment 7 — Option 3: self-re-exec hot-swap  ◀ BUILT (2026-06-25); live-validation in progress
+
+> **Build note (2026-06-25):** all phases implemented (parallel subagents, integrated to `main`); build
+> 0-warn, tests green, AOT 0-warn. **Open-risk #1 resolved during the build: it was TRUE** — on .NET 10
+> `Environment.SetEnvironmentVariable` does NOT write through to libc `environ`, so the planned
+> `SetEnvironmentVariable` + `execv` would not carry the handoff. Implemented the plan's documented
+> fallback instead: marshal an explicit `envp` (current env + the handoff override) and call **`execve`**.
+> Proven in a standalone harness; confirmed live below.
 
 The end state of Inc 6's Option 3, spelled out. **Goal:** a watchdog binary update with **zero** game
 downtime and **no** loss of console or graceful stop — even for an EOF-sensitive game like factorio that

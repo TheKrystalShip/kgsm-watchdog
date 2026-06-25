@@ -211,9 +211,13 @@ hot_swap() {
                 ver_ok=1
             else
                 body="$(http_version || true)"
-                # Match the expected informational version anywhere in the JSON body
-                # ({"version":"…","commit":"…"}); avoids a JSON parser dependency.
-                [[ -n "$body" && "$body" == *"$expected_version"* ]] && ver_ok=1
+                # The /version body is JSON ({"version":"X","commit":"<hash>"}); `--version` prints the
+                # COMBINED informational form "X+<hash>". Compare on the COMMIT HASH (the part after the
+                # last '+'), which the JSON carries verbatim — the combined "X+hash" string never appears
+                # in the JSON, so a naive whole-string substring match always misses. `${v##*+}` leaves
+                # the whole string when the build has no '+hash' (non-SourceLink build), a safe fallback.
+                local expected_token="${expected_version##*+}"
+                [[ -n "$body" && "$body" == *"$expected_token"* ]] && ver_ok=1
             fi
         fi
         # (ii) PID unchanged

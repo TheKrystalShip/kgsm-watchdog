@@ -16,4 +16,5 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 [JsonSerializable(typeof(PersistedSupervisionState))] // companion supervision-state.json (restart counters survive any daemon death)
 [JsonSerializable(typeof(string[]))] // GET /enabled — the boot-autostart name set
 [JsonSerializable(typeof(PlayerPresenceLine))] // one NDJSON line of a container's player-presence channel
+[JsonSerializable(typeof(WatchdogVersionInfo))] // GET /version — build identity for the hot-swap deploy
 internal sealed partial class WatchdogJsonContext : JsonSerializerContext;

@@ -12,6 +12,35 @@ if (args.Any(a => a is "--help" or "-h" or "help"))
     return 0;
 }
 
+// Inc 7 Phase 0 — the hot-swap safety-gate contract. Both branches run BEFORE the host is built and
+// BEFORE CgroupBootstrap: a swap must be able to interrogate the freshly-deployed binary as a cheap
+// subprocess WITHOUT it binding the control socket, entering the slice, or touching cgroups.
+
+// --version: one line, the compiled-in informational version, exit 0.
+if (args.Any(a => a is "--version"))
+{
+    Console.WriteLine(VersionInfo.Informational);
+    return 0;
+}
+
+// --selfcheck: a no-side-effect runnability probe the swap coordinator invokes on the NEW binary
+// before committing to an exec. It only confirms the binary loads and its config parses — it MUST NOT
+// bind the socket, run CgroupBootstrap, or touch cgroups. Fast and pure.
+if (args.Any(a => a is "--selfcheck"))
+{
+    try
+    {
+        WatchdogOptions.FromEnvironment(); // throws if KGSM_WATCHDOG_* config is malformed
+        Console.WriteLine($"selfcheck ok {VersionInfo.Informational}");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"selfcheck FAILED: {ex.Message}");
+        return 1;
+    }
+}
+
 var options = WatchdogOptions.FromEnvironment();
 
 // Unlike the monitor, the watchdog cannot run "headless" without KGSM: it reads each instance's

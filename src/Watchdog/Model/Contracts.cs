@@ -25,3 +25,35 @@ public sealed record InstanceState(
 
 /// <summary>Readiness of the supervisor itself: whether it is in-slice and able to spawn.</summary>
 public sealed record ReadyState(bool Ready, string Detail);
+
+/// <summary>
+/// The running daemon's build identity (Inc 7 Phase 0): the assembly informational version split
+/// into its semantic <c>version</c> and the source-control <c>commit</c> hash (the <c>+&lt;hash&gt;</c>
+/// suffix SourceLink stamps on the informational version). Served by <c>GET /version</c> so the
+/// hot-swap deploy can confirm the post-swap build directly — never fabricated; both fields come from
+/// the compiled-in <see cref="System.Reflection.AssemblyInformationalVersionAttribute"/>.
+/// </summary>
+public sealed record WatchdogVersionInfo(
+    [property: System.Text.Json.Serialization.JsonPropertyName("version")] string Version,
+    [property: System.Text.Json.Serialization.JsonPropertyName("commit")] string Commit)
+{
+    /// <summary>
+    /// Pure, side-effect-free parse of an informational-version string into its semantic version and
+    /// (optional) commit hash. SourceLink stamps the informational version as
+    /// <c>&lt;version&gt;+&lt;commit-hash&gt;</c>; everything before the first <c>'+'</c> is the
+    /// version, everything after is the commit. No <c>'+'</c> → the whole string is the version and
+    /// the commit is empty. A null/empty input yields version <c>"0.0.0"</c> with no commit so the
+    /// surface never returns a null field. Kept static + pure so it is unit-testable apart from the
+    /// reflection that reads the attribute.
+    /// </summary>
+    public static WatchdogVersionInfo FromInformational(string? informational)
+    {
+        if (string.IsNullOrEmpty(informational))
+            return new WatchdogVersionInfo("0.0.0", "");
+
+        var plus = informational.IndexOf('+');
+        return plus < 0
+            ? new WatchdogVersionInfo(informational, "")
+            : new WatchdogVersionInfo(informational[..plus], informational[(plus + 1)..]);
+    }
+}

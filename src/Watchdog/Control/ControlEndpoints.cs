@@ -1,3 +1,4 @@
+using System.Reflection;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
@@ -76,5 +77,28 @@ internal static class ControlEndpoints
         // The persisted boot-autostart name set — the authoritative source for "is it enabled?".
         app.MapGet("/enabled", (InstanceSupervisor sup) =>
             Results.Json(sup.EnabledNames(), WatchdogJsonContext.Default.StringArray));
+
+        // The running daemon's build identity (Inc 7 Phase 0). The hot-swap deploy curls this after a
+        // reload to confirm the new binary is live; the same version is what `--version` prints. Read
+        // from the compiled-in informational version (never fabricated), split into version + commit.
+        app.MapGet("/version", () =>
+            Results.Json(
+                WatchdogVersionInfo.FromInformational(VersionInfo.Informational),
+                WatchdogJsonContext.Default.WatchdogVersionInfo));
     }
+}
+
+/// <summary>
+/// The assembly informational version, read once (Inc 7 Phase 0). SourceLink stamps it as
+/// <c>&lt;version&gt;+&lt;commit&gt;</c>; <see cref="WatchdogVersionInfo.FromInformational"/> splits it.
+/// Falls back to the plain assembly version string when no informational attribute is present. Shared by
+/// <c>GET /version</c> and the top-of-<c>Main</c> <c>--version</c>/<c>--selfcheck</c> branches.
+/// </summary>
+internal static class VersionInfo
+{
+    public static readonly string Informational =
+        Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+        ?? "0.0.0";
 }

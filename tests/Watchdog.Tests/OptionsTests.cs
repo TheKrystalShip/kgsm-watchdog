@@ -38,16 +38,13 @@ public sealed class OptionsTests
         using var _ = new EnvScope(
             ("KGSM_WATCHDOG_SOCKET", null),
             ("KGSM_WATCHDOG_SOCKET_MODE", null),
-            ("KGSM_WATCHDOG_CGROUP_BASE", null),
-            ("KGSM_WATCHDOG_UID", null),
-            ("SUDO_UID", null));
+            ("KGSM_WATCHDOG_CGROUP_BASE", null));
 
         var opts = WatchdogOptions.FromEnvironment();
 
         Assert.Equal("/run/kgsm-watchdog/control.sock", opts.SocketPath);
         Assert.Equal("kgsm.slice", opts.CgroupBaseName);
         Assert.Equal("/sys/fs/cgroup/kgsm.slice", opts.CgroupBasePath);
-        Assert.Null(opts.TargetUid);
     }
 
     [Fact]
@@ -83,34 +80,6 @@ public sealed class OptionsTests
         var opts = WatchdogOptions.FromEnvironment();
 
         Assert.Equal(new[] { "cpu", "memory" }, opts.CgroupControllers);
-    }
-
-    [Fact]
-    public void TargetUid_explicit_overrides_sudo()
-    {
-        using var _ = new EnvScope(
-            ("KGSM_WATCHDOG_UID", "1000"),
-            ("KGSM_WATCHDOG_GID", "1000"),
-            ("SUDO_UID", "0"));
-
-        var opts = WatchdogOptions.FromEnvironment();
-
-        Assert.Equal(1000u, opts.TargetUid);
-        Assert.Equal(1000u, opts.TargetGid);
-    }
-
-    [Fact]
-    public void TargetUid_falls_back_to_sudo()
-    {
-        using var _ = new EnvScope(
-            ("KGSM_WATCHDOG_UID", null),
-            ("SUDO_UID", "1001"),
-            ("SUDO_GID", "1002"));
-
-        var opts = WatchdogOptions.FromEnvironment();
-
-        Assert.Equal(1001u, opts.TargetUid);
-        Assert.Equal(1002u, opts.TargetGid);
     }
 
     [Fact]

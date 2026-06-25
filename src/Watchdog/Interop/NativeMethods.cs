@@ -4,8 +4,9 @@ namespace TheKrystalShip.KGSM.Watchdog.Interop;
 
 /// <summary>
 /// The libc surface the watchdog needs that .NET does not expose: FIFO creation,
-/// holding a raw FIFO fd open as the stdin keepalive, and the privilege drop after
-/// the root-boot cgroup bootstrap. All entries are source-generated
+/// holding a raw FIFO fd open as the stdin keepalive, the self-re-exec hot-swap
+/// (fcntl/execve), inode rotation detection (statx), and the cgroup-writability
+/// probe (access). All entries are source-generated
 /// <see cref="LibraryImportAttribute"/> p/invokes (not <c>DllImport</c>) so the
 /// daemon stays Native-AOT clean.
 /// <para>
@@ -44,10 +45,6 @@ internal static partial class NativeMethods
     /// <summary>Size of <c>struct statx</c>; the kernel writes the whole struct, so the buffer must be full-size.</summary>
     internal const int StatxBufferSize = 256;
 
-    /// <summary>Effective uid of the daemon — 0 means we booted as root and must self-bootstrap + drop.</summary>
-    [LibraryImport("libc", SetLastError = true)]
-    internal static partial uint geteuid();
-
     /// <summary>
     /// access(2) — the faithful equivalent of bash <c>[[ -w "$dir" ]]</c> used by the cgroup
     /// support probe: returns 0 when the caller may write <paramref name="pathname"/>.
@@ -64,14 +61,6 @@ internal static partial class NativeMethods
     /// </summary>
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int statx(int dirfd, string pathname, int flags, uint mask, byte[] buf);
-
-    /// <summary>
-    /// chown(2) — used during the root-boot delegation to hand the cgroup subtree and the
-    /// runtime socket directory to the target user, so the daemon can manage them after it
-    /// drops privilege. Pass <c>0xFFFFFFFF</c> for an id to leave it unchanged.
-    /// </summary>
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int chown(string pathname, uint owner, uint group);
 
     /// <summary>
     /// Create a FIFO (named pipe) at <paramref name="pathname"/>. The watchdog owns the
@@ -96,22 +85,6 @@ internal static partial class NativeMethods
     /// <summary>close(2).</summary>
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int close(int fd);
-
-    /// <summary>
-    /// setgroups(2) — replace the supplementary group list. Called FIRST in the drop so we
-    /// do not keep root's supplementary groups (a privileged context still possible after
-    /// setresuid otherwise).
-    /// </summary>
-    [LibraryImport("libc", SetLastError = true)]
-    internal static partial int setgroups(nuint size, uint[] list);
-
-    /// <summary>setresgid(2) — drop real/effective/saved gid. Called BEFORE setresuid (still privileged to do so).</summary>
-    [LibraryImport("libc", SetLastError = true)]
-    internal static partial int setresgid(uint rgid, uint egid, uint sgid);
-
-    /// <summary>setresuid(2) — drop real/effective/saved uid. Called LAST; after this the daemon is unprivileged.</summary>
-    [LibraryImport("libc", SetLastError = true)]
-    internal static partial int setresuid(uint ruid, uint euid, uint suid);
 
     /// <summary>
     /// fcntl(2) — file-descriptor control. The watchdog uses it only with the descriptor-flags commands

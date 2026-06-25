@@ -147,9 +147,10 @@ builder.WebHost.ConfigureKestrel(kestrel =>
 
 var app = builder.Build();
 
-// Boot sequence runs BEFORE the socket binds (app.Run): it delegates + enters the cgroup slice
-// and, if we booted as root, drops privilege and prepares the socket directory — so the socket is
-// bound by the already-unprivileged daemon. A failed bootstrap does not crash the daemon; it sets
+// Boot sequence runs BEFORE the socket binds (app.Run): under systemd delegation it discovers the
+// daemon's own delegated cgroup base (/proc/self/cgroup), enters the supervisor leaf, and enables
+// controllers on the base — no root step, no privilege drop (systemd User= runs us as the KGSM user;
+// RuntimeDirectory= owns the socket dir). A failed bootstrap does not crash the daemon; it sets
 // SupervisorState.Ready=false and /start returns the reason (so the control plane stays diagnosable).
 app.Services.GetRequiredService<CgroupBootstrap>().Run();
 

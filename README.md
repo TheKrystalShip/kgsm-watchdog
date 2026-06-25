@@ -59,13 +59,12 @@ dotnet publish src/Watchdog/Watchdog.csproj -c Release -r linux-x64   # expect 0
 
 ## Run
 
-Boot as root once; the daemon delegates the slice, enters it, and drops to the KGSM user:
-
-```bash
-sudo KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm \
-     KGSM_WATCHDOG_UID=$(id -u) KGSM_WATCHDOG_GID=$(id -g) \
-     ./kgsm-watchdog
-```
+The daemon runs under **systemd cgroup delegation** — as the KGSM user, no root, no privilege
+drop. systemd places it in `kgsm.slice` (`Delegate=yes`) and hands it the
+`kgsm.slice/kgsm-watchdog.service` subtree; the daemon discovers that base from
+`/proc/self/cgroup` and creates per-instance cgroups under it. Use the deploy script (below) —
+it installs the unit and starts the service. (Running the binary by hand outside a delegated
+cgroup reports `/health` 503 with the reason.)
 
 Control plane (HTTP/1.1 over the unix socket — `curl --unix-socket`):
 
@@ -81,16 +80,31 @@ curl --unix-socket $S -X POST http://x/stop/my-server
 The watchdog supervises **native standalone** instances only; it no-ops on systemd/container
 instances (those are owned by systemd / Docker).
 
-## Deploy (three boot variants)
+## Deploy
 
-All three live in [`deploy/`](deploy/); pick one per host. Configuration is shared via
+systemd-only, one unit ([`deploy/kgsm-watchdog.service`](deploy/)): `User=`/`Group=` (the KGSM
+user, templated by `deploy.sh`), `Slice=kgsm.slice`, `Delegate=yes`. Configuration is shared via
 [`kgsm-watchdog.env.example`](deploy/kgsm-watchdog.env.example).
 
-| Variant | File | Model |
-|---|---|---|
-| **systemd, root-boot** *(recommended)* | `kgsm-watchdog.service` | Starts as root, self-delegates `kgsm.slice`, drops to the KGSM user. Most-tested. |
-| **systemd, rootless** *(advanced)* | `kgsm-watchdog.rootless.service` | Never root: `User=kgsm`, `Slice=kgsm.slice`, `Delegate=yes`. **Requires `kgsm system setup-cgroups` first** (see the file header). |
-| **OpenRC** | `kgsm-watchdog.openrc` | Same root-boot model for non-systemd hosts (Alpine/Gentoo); `supervise-daemon` respawns. |
+```bash
+./deploy/deploy.sh           # hot-swap if running (zero-downtime re-exec), else cold install
+```
+
+systemd creates `kgsm.slice` + the delegated `kgsm.slice/kgsm-watchdog.service` subtree, enables
+the controllers, and chowns the subtree to the user — so per-instance cgroups (and their
+`memory`/`pids`/`io` controllers) live below the service cgroup and **survive `daemon-reload`**.
+(Children must NOT sit as siblings under `kgsm.slice`: systemd reconciles a slice's own
+`subtree_control` and would strip their controllers — the bug PLAN Increment 8 fixes.)
+
+**Fully rootless, enforced.** The daemon and every game it spawns run as the unprivileged
+`User=` with **zero capabilities** — no root step, no privilege drop (systemd's `User=` runs
+it directly; the delegated subtree is owner-writable, needing no privilege). The unit locks
+this in with `NoNewPrivileges=yes` + `CapabilityBoundingSet=` (empty). It also sets
+`KillMode=process` so games (which live under the service cgroup) **survive a daemon
+stop/restart** and are re-adopted, rather than being killed with the daemon. Stop a *game*
+with `kgsm stop <instance>` — stopping the daemon leaves games running. (One caveat: a daemon
+*cold* restart/crash re-charges a surviving game's memory metric from zero until it next
+restarts; hot-swap deploys and host reboots are unaffected — see PLAN §4.)
 
 ## Clients (Increment 3)
 
@@ -124,12 +138,9 @@ startup (it would otherwise silently fall back to its default).
 | `KGSM_WATCHDOG_SOCKET` | `/run/kgsm-watchdog/control.sock` | control unix-domain socket path |
 | `KGSM_WATCHDOG_SOCKET_MODE` | `0660` | octal perms applied to the control socket |
 | `KGSM_WATCHDOG_CGROUP_MOUNT` | `/sys/fs/cgroup` | cgroup v2 mount point |
-| `KGSM_WATCHDOG_CGROUP_BASE` | `kgsm.slice` | KGSM's delegated base cgroup |
+| `KGSM_WATCHDOG_CGROUP_BASE` | `kgsm.slice` | fallback base only; the real base is discovered from `/proc/self/cgroup` under delegation (= `kgsm.slice/kgsm-watchdog.service`) |
 | `KGSM_WATCHDOG_CGROUP_CONTROLLERS` | `cpu memory io pids` | controllers enabled on the base subtree |
-| `KGSM_WATCHDOG_SUPERVISOR_LEAF` | `supervisor` | leaf cgroup the daemon itself lives in |
-| `KGSM_WATCHDOG_UID` | `$SUDO_UID` | uid to drop to / chown the delegated subtree to |
-| `KGSM_WATCHDOG_GID` | `$SUDO_GID` | gid counterpart |
-| `KGSM_WATCHDOG_HOME` | *(from `/etc/passwd`)* | `HOME` for the dropped user (kgsm-lib reads XDG dirs from it) |
+| `KGSM_WATCHDOG_SUPERVISOR_LEAF` | `supervisor` | leaf cgroup the daemon itself lives in (under the delegated base) |
 | `KGSM_WATCHDOG_POLL_INTERVAL_MS` | `1000` | how often each instance's `cgroup.events` is polled |
 | `KGSM_WATCHDOG_RESTART_POLICY` | `always` | `always` = restart any exit; `on-failure` = leave clean code-0 exits stopped |
 | `KGSM_WATCHDOG_RESTART_BASE_DELAY_MS` | `1000` | first-restart delay; doubles each consecutive failure |

@@ -20,8 +20,29 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
     private readonly WatchdogOptions _opts = options;
     private readonly ILogger<CgroupManager> _log = logger;
 
-    /// <summary>Absolute path of KGSM's delegated cgroup base (e.g. <c>/sys/fs/cgroup/kgsm.slice</c>).</summary>
-    public string Base => _opts.CgroupBasePath;
+    // Runtime-discovered delegated base (the daemon's own systemd service cgroup, from
+    // /proc/self/cgroup — set by CgroupBootstrap). Null until discovery runs, in which case we
+    // fall back to the configured CgroupBasePath. See CgroupDiscovery / PLAN Increment 8.
+    private string? _resolvedBase;
+
+    /// <summary>
+    /// Absolute path of KGSM's delegated cgroup base — the daemon's own systemd-delegated service
+    /// cgroup once <see cref="UseResolvedBase"/> has been called (e.g.
+    /// <c>/sys/fs/cgroup/kgsm.slice/kgsm-watchdog.service</c>), else the configured fallback
+    /// (<see cref="WatchdogOptions.CgroupBasePath"/>). Per-instance cgroups are children of this.
+    /// </summary>
+    public string Base => _resolvedBase ?? _opts.CgroupBasePath;
+
+    /// <summary>
+    /// Adopt the delegated base discovered at runtime from <c>/proc/self/cgroup</c> (PLAN Inc 8). This
+    /// is authoritative over the configured <c>CgroupBaseName</c>, which becomes a fallback used only
+    /// when discovery fails. Set once at bootstrap, before any cgroup is created.
+    /// </summary>
+    public void UseResolvedBase(string absoluteBase)
+    {
+        if (!string.IsNullOrEmpty(absoluteBase))
+            _resolvedBase = absoluteBase;
+    }
 
     /// <summary>The supervisor leaf the daemon lives in (e.g. <c>/sys/fs/cgroup/kgsm.slice/supervisor</c>).</summary>
     public string SupervisorPath => $"{Base}/{_opts.SupervisorLeaf}";

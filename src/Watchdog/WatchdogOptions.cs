@@ -58,16 +58,6 @@ public sealed class WatchdogOptions
     /// </summary>
     public string SupervisorLeaf { get; init; } = "supervisor";
 
-    /// <summary>
-    /// uid to drop to after the root-boot bootstrap, and the owner the delegated subtree is
-    /// chowned to. <c>KGSM_WATCHDOG_UID</c>, else <c>SUDO_UID</c> (set by <c>sudo</c>), else null.
-    /// Null with euid 0 means we stay root and log a warning (games would run as root — not desired).
-    /// </summary>
-    public uint? TargetUid { get; init; }
-
-    /// <summary>gid counterpart to <see cref="TargetUid"/>. <c>KGSM_WATCHDOG_GID</c>, else <c>SUDO_GID</c>, else null.</summary>
-    public uint? TargetGid { get; init; }
-
     // ---- Increment 2: crash detection + restart ----------------------------------------------
 
     /// <summary>
@@ -167,8 +157,6 @@ public sealed class WatchdogOptions
             CgroupBaseName = Env("KGSM_WATCHDOG_CGROUP_BASE") is { Length: > 0 } cb ? cb : defaults.CgroupBaseName,
             CgroupControllers = ParseControllers(Env("KGSM_WATCHDOG_CGROUP_CONTROLLERS")) ?? defaults.CgroupControllers,
             SupervisorLeaf = Env("KGSM_WATCHDOG_SUPERVISOR_LEAF") is { Length: > 0 } sl ? sl : defaults.SupervisorLeaf,
-            TargetUid = ParseId(Env("KGSM_WATCHDOG_UID")) ?? ParseId(Env("SUDO_UID")),
-            TargetGid = ParseId(Env("KGSM_WATCHDOG_GID")) ?? ParseId(Env("SUDO_GID")),
             PollIntervalMs = ParseInt(Env("KGSM_WATCHDOG_POLL_INTERVAL_MS"), defaults.PollIntervalMs, min: 50),
             RestartBaseDelayMs = ParseInt(Env("KGSM_WATCHDOG_RESTART_BASE_DELAY_MS"), defaults.RestartBaseDelayMs, min: 0),
             RestartMaxDelayMs = ParseInt(Env("KGSM_WATCHDOG_RESTART_MAX_DELAY_MS"), defaults.RestartMaxDelayMs, min: 0),
@@ -213,9 +201,6 @@ public sealed class WatchdogOptions
         "KGSM_WATCHDOG_CGROUP_BASE",
         "KGSM_WATCHDOG_CGROUP_CONTROLLERS",
         "KGSM_WATCHDOG_SUPERVISOR_LEAF",
-        "KGSM_WATCHDOG_UID",
-        "KGSM_WATCHDOG_GID",
-        "KGSM_WATCHDOG_HOME",
         "KGSM_WATCHDOG_POLL_INTERVAL_MS",
         "KGSM_WATCHDOG_RESTART_BASE_DELAY_MS",
         "KGSM_WATCHDOG_RESTART_MAX_DELAY_MS",
@@ -289,14 +274,9 @@ public sealed class WatchdogOptions
 
         Section("Cgroup layout (rarely changed)");
         Row("KGSM_WATCHDOG_CGROUP_MOUNT", $"[{d.CgroupMountPoint}]", "cgroup v2 mount point");
-        Row("KGSM_WATCHDOG_CGROUP_BASE", $"[{d.CgroupBaseName}]", "KGSM's delegated base cgroup");
+        Row("KGSM_WATCHDOG_CGROUP_BASE", $"[{d.CgroupBaseName}]", "fallback base only; the real base is discovered from /proc/self/cgroup (systemd delegation)");
         Row("KGSM_WATCHDOG_CGROUP_CONTROLLERS", $"[{string.Join(' ', d.CgroupControllers)}]", "controllers enabled on the base subtree");
-        Row("KGSM_WATCHDOG_SUPERVISOR_LEAF", $"[{d.SupervisorLeaf}]", "leaf cgroup the daemon itself lives in");
-
-        Section("Privilege drop (root-boot path)");
-        Row("KGSM_WATCHDOG_UID", "[SUDO_UID]", "uid to drop to / chown the subtree to");
-        Row("KGSM_WATCHDOG_GID", "[SUDO_GID]", "gid counterpart");
-        Row("KGSM_WATCHDOG_HOME", "[from /etc/passwd]", "HOME for the dropped user (kgsm-lib reads XDG dirs from it)");
+        Row("KGSM_WATCHDOG_SUPERVISOR_LEAF", $"[{d.SupervisorLeaf}]", "leaf cgroup the daemon itself lives in (under the delegated base)");
 
         Section("Supervision: crash detection + restart");
         Row("KGSM_WATCHDOG_POLL_INTERVAL_MS", $"[{d.PollIntervalMs}]", "how often cgroup.events is polled for liveness");
@@ -330,9 +310,6 @@ public sealed class WatchdogOptions
 
         return sb.ToString();
     }
-
-    private static uint? ParseId(string? value)
-        => uint.TryParse(value, out uint id) ? id : null;
 
     private static int ParseInt(string? value, int fallback, int min)
         => int.TryParse(value, out int v) && v >= min ? v : fallback;

@@ -5,66 +5,74 @@ After=network.target
 
 [Service]
 Type=simple
-# Native-AOT single-file binary.
-#
-# Increment 1 model: the daemon boots as ROOT and self-bootstraps the delegated kgsm.slice
-# (this subsumes `kgsm system setup-cgroups`), enters kgsm.slice/supervisor, then DROPS to the
-# KGSM user. After the drop there is NO further privilege escalation — every game spawn is an
-# intra-slice cgroup move the unprivileged daemon is allowed to make. The only privileged moment
-# is this boot, which is normal daemon behaviour.
+# Native-AOT single-file binary. SYSTEMD-DELEGATION model (PLAN Increment 8): the daemon runs as the
+# KGSM user from the start — NO root step, NO privilege drop. systemd places the service in kgsm.slice
+# and hands it a DELEGATED cgroup subtree (kgsm.slice/kgsm-watchdog.service): it enables the controllers
+# on the slice and chowns the service subtree to User=. The daemon discovers that base from
+# /proc/self/cgroup and creates each per-instance cgroup UNDER it (kgsm.slice/kgsm-watchdog.service/<inst>),
+# NOT as a sibling under kgsm.slice. That distinction is load-bearing: systemd reconciles a slice's OWN
+# cgroup.subtree_control on every `daemon-reload` (stripping the controllers off cgroups it does not
+# manage — which made per-server memory metrics read 0), but it leaves the delegated subtree below the
+# service untouched.
 ExecStart=/opt/kgsm-watchdog/kgsm-watchdog
 
 # `systemctl reload` → SIGHUP → the daemon re-execs the freshly-deployed binary IN PLACE (same PID,
-# same children, open fds carried across the execve), so a binary update is a zero-downtime hot-swap
-# rather than a process bounce. Type stays `simple`: the same-PID execve is transparent to systemd's
-# main-PID tracking, so no fd store is needed. (Inc 7 Phase 3 wires the SIGHUP handler in the daemon;
-# deploy/deploy.sh's default path drives this — see its HOT-swap branch.)
+# same children, open fds carried across the execve) — a zero-downtime hot-swap, not a process bounce.
+# On re-exec the daemon is already in kgsm.slice/kgsm-watchdog.service/supervisor; base discovery folds
+# the supervisor leaf back to the same delegated base, so the layout is stable across swaps.
 ExecReload=/bin/kill -HUP $MAINPID
 
-# Configuration is via environment variables. The full, authoritative list (with defaults) is
-# printed by the binary itself: `/opt/kgsm-watchdog/kgsm-watchdog --help`. The three below are the
-# ones a typical install must set; everything else has a working default. A complete, commented
-# template ships as deploy/kgsm-watchdog.env.example.
-#
-# REQUIRED: path to kgsm.sh (read-only, via kgsm-lib, for each instance's spawn config). Point at
-# the packaged launcher, not a copy under /home.
-Environment=KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm
-# The user to drop to after the root bootstrap, and the owner the delegated cgroup subtree +
-# runtime socket dir are chowned to. SET THESE to your KGSM user's numeric uid/gid.
-Environment=KGSM_WATCHDOG_UID=1000
-Environment=KGSM_WATCHDOG_GID=1000
+# Run as the KGSM user (deploy/deploy.sh rewrites these to the installing user). A uid is also accepted.
+# UID/GID are no longer needed — there is no privilege drop; systemd runs us as this user directly.
+User=kgsm
+Group=kgsm
 
-# Optional: keep the rest of the knobs in a file instead of inline Environment= lines. The leading
-# '-' makes it optional (no failure if absent). Copy deploy/kgsm-watchdog.env.example to this path.
+# Delegated cgroup subtree: systemd creates kgsm.slice + kgsm.slice/kgsm-watchdog.service, enables the
+# controllers, and chowns the service subtree to User= so the daemon manages it unprivileged. This is
+# what keeps the controllers enabled across daemon-reload (the bug Inc 8 fixes).
+Slice=kgsm.slice
+Delegate=yes
+
+# REQUIRED: absolute path to kgsm.sh (read-only, via kgsm-lib, for each instance's spawn config). Point
+# at the packaged launcher, not a copy under /home. The full env reference: `kgsm-watchdog --help`.
+Environment=KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm
+# Optional: keep the rest of the knobs in a file. The leading '-' makes it optional (no failure if absent).
 EnvironmentFile=-/etc/kgsm-watchdog/kgsm-watchdog.env
 
-# Control + events sockets live under /run/kgsm-watchdog. This unit deliberately does NOT use
-# systemd `RuntimeDirectory=`: it boots as root and DROPS to the KGSM uid, and on `systemctl reload`
-# systemd RE-CHOWNS a RuntimeDirectory back to the unit's user (root). That would leave the dropped,
-# re-exec'd daemon (Inc 7 hot-swap, running as the KGSM uid) unable to bind the socket — EACCES — and
-# crash the swap. Instead the root bootstrap creates the dir, locks it 0750, and chowns it to the
-# target user ONCE; it then stays owned by that user across reloads/hot-swaps. /run is tmpfs, so the
-# dir is recreated by the bootstrap on each boot. (The rootless unit DOES use RuntimeDirectory — there
-# the run-user owns it, so the reload re-chown is a no-op and this problem cannot arise.)
+# Control + events sockets live under /run/kgsm-watchdog. systemd creates it owned by User= — safe now
+# that no root→user drop happens (the root-boot unit avoided RuntimeDirectory= because a `reload`
+# re-chowned it back to root and broke the dropped daemon's socket bind; with User= that cannot arise).
+RuntimeDirectory=kgsm-watchdog
+RuntimeDirectoryMode=0750
 
 Restart=always
 RestartSec=2
 
-# The daemon writes cgroup control files under /sys/fs/cgroup, so do NOT enable a read-only /sys
-# (ProtectKernelTunables) here, and do NOT hide /home/data dirs where game servers may live
-# (ProtectHome).
-# RestrictAddressFamilies applies to EVERY process the service spawns, not just the daemon. The
-# daemon itself only talks over unix sockets, but its children do not: native game servers need
-# INET/INET6 for their listen sockets, and the UPnP helper (upnpc) needs them for its SOAP call
-# to the IGD. AF_UNIX alone seccomp-kills both ("Address family not supported by protocol").
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# KillMode=process is LOAD-BEARING under the delegated layout: the games live UNDER this service's
+# cgroup (kgsm.slice/kgsm-watchdog.service/<inst>). The default `control-group` would SIGTERM/SIGKILL
+# the whole cgroup on stop/restart — killing every running game. `process` kills ONLY the daemon (the
+# main PID); the games keep running and the freshly-started daemon RE-ADOPTS them (LivePopulatedInstances).
+# This preserves "games outlive a daemon bounce" — the same property the old root-boot model got for free
+# by keeping games OUTSIDE the service cgroup. Stop a *game* with `kgsm stop <inst>`, not by stopping the daemon.
+KillMode=process
 
-# This root-boot unit is the recommended, most-tested variant. Two other boot
-# variants ship alongside it:
-#   - deploy/kgsm-watchdog.rootless.service — never starts as root; takes the
-#     delegated path (User=kgsm, Slice=kgsm.slice, Delegate=yes). Requires
-#     `kgsm system setup-cgroups` first; see that file's header.
-#   - deploy/kgsm-watchdog.openrc — the same root-boot model for non-systemd hosts.
+# ── Rootless lock-in (PLAN Inc 8) ─────────────────────────────────────────────
+# The daemon and every game it spawns run as the unprivileged User= with ZERO capabilities — cgroup
+# management happens entirely inside the systemd-delegated, user-owned subtree, which needs no privilege.
+# Enforce that so it can never silently regress:
+#   - NoNewPrivileges: no setuid/setcap binary in the tree can ever gain privilege (covers spawned games too).
+#   - CapabilityBoundingSet= (empty): the daemon and its children can hold no capabilities at all.
+# (Games bind only high ports; an unprivileged user already cannot bind <1024 without cap_net_bind_service,
+# which is intentionally not granted.)
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+
+# The daemon writes cgroup control files under its delegated subtree, so do NOT enable a read-only /sys
+# (ProtectKernelTunables), and do NOT hide /home (ProtectHome) where game-server data may live.
+# RestrictAddressFamilies applies to EVERY process the service spawns, not just the daemon: native game
+# servers need INET/INET6 for their listen sockets, and the UPnP helper (upnpc) needs them for its SOAP
+# call to the IGD. AF_UNIX alone seccomp-kills both ("Address family not supported by protocol").
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

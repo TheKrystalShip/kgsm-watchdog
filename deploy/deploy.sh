@@ -27,14 +27,18 @@
 # binary lacking these, prefer `--cold`. The HOT path here fails CLOSED: a non-zero --selfcheck on
 # the NEW binary aborts the deploy before anything is installed (the running daemon is untouched).
 #
-# Installs the ROOT-BOOT variant (the recommended, most-tested unit): the daemon boots as root,
-# self-bootstraps kgsm.slice, then DROPS to the KGSM user. That drop target (KGSM_WATCHDOG_UID/GID)
-# is set to the invoking user's numeric uid/gid, so a fresh host needs no dedicated 'kgsm' user.
-# (The rootless variant — deploy/kgsm-watchdog.rootless.service — needs `kgsm system setup-cgroups`
-# and a real kgsm user first; deploy it by hand if you specifically want a never-root daemon.)
+# Installs the SYSTEMD-DELEGATION unit (the one canonical unit; PLAN Inc 8): the daemon runs as the
+# KGSM user from the start (no root, no privilege drop). systemd places it in kgsm.slice with
+# Delegate=yes and hands it the kgsm.slice/kgsm-watchdog.service subtree; the daemon discovers that base
+# at runtime and creates per-instance cgroups under it. User=/Group= are rewritten to the invoking user,
+# so a fresh host needs no dedicated 'kgsm' user (override with KGSM_WATCHDOG_USER/GROUP).
+#
+# NOTE: the FIRST migration from the old root-boot unit to this one must be a COLD swap (--cold): the
+# running daemon is root in the old kgsm.slice/<inst> layout; a hot-swap would re-exec it in place
+# without re-placing it under delegation. After that, hot-swaps are fine (same delegated layout).
 #
 #   * binary → /opt/kgsm-watchdog/kgsm-watchdog,
-#   * unit   → kgsm-watchdog.service with KGSM_WATCHDOG_UID/GID rewritten to your uid/gid,
+#   * unit   → kgsm-watchdog.service with User=/Group= rewritten to your user,
 #   * verified by an actual "ok"/200 from GET /health over the control unix socket.
 #
 # Non-interactive: SUDO='sudo -A' SUDO_ASKPASS=/path/to/askpass ./deploy/deploy.sh
@@ -68,9 +72,10 @@ UNIT_SRC="$REPO_DIR/deploy/kgsm-watchdog.service"
 ENV_EXAMPLE="$REPO_DIR/deploy/kgsm-watchdog.env.example"
 PUBLISH_DIR="$REPO_DIR/artifacts/publish"
 RID="${RID:-linux-x64}"
-# The user the daemon drops to after the root bootstrap (owner of the cgroup subtree + socket dir).
-WD_UID="${KGSM_WATCHDOG_UID:-$(id -u)}"
-WD_GID="${KGSM_WATCHDOG_GID:-$(id -g)}"
+# The user the daemon runs as (systemd delegates the cgroup subtree + owns the socket dir to it).
+# No privilege drop any more — systemd starts the daemon as this user directly (PLAN Inc 8).
+WD_USER="${KGSM_WATCHDOG_USER:-$(id -un)}"
+WD_GROUP="${KGSM_WATCHDOG_GROUP:-$(id -gn)}"
 SUDO="${SUDO:-sudo}"
 
 # Health is HTTP-over-unix-socket; path matches the unit's RuntimeDirectory.
@@ -127,19 +132,23 @@ http_version() {
     curl -fsS --max-time 2 --unix-socket "$WD_SOCK" http://localhost/version 2>/dev/null
 }
 
-# COLD swap (legacy): stop → install over the path → start. Used for a first install or with --cold.
+# COLD swap (full restart): reload unit → stop → install → start. Used for a first install or with
+# --cold. daemon-reload happens BEFORE the stop so the stop honors the NEW unit's KillMode=process —
+# otherwise systemd would kill the games (which live under the service cgroup) with the daemon. The
+# fresh start is also what applies unit-level directives a hot-swap can't (NoNewPrivileges,
+# CapabilityBoundingSet, User=, KillMode) — see hot_swap's note.
 cold_swap() {
-    log "stopping ${SERVICE}"
+    if [[ "$UNIT_CHANGED" -eq 1 ]]; then
+        log "reloading systemd (unit changed) before stop — so KillMode=process + hardening apply this cycle"
+        $SUDO systemctl daemon-reload
+    fi
+
+    log "stopping ${SERVICE} (KillMode=process → games keep running, re-adopted on start)"
     $SUDO systemctl stop "$SERVICE" 2>/dev/null || true
     STOPPED=1
 
     log "installing binary → ${BIN}"
     $SUDO install -m 0755 "$PUBLISH_DIR/kgsm-watchdog" "$BIN"
-
-    if [[ "$UNIT_CHANGED" -eq 1 ]]; then
-        log "reloading systemd"
-        $SUDO systemctl daemon-reload
-    fi
 
     log "enabling + starting ${SERVICE}"
     $SUDO systemctl enable --now "$SERVICE" >/dev/null 2>&1 || $SUDO systemctl start "$SERVICE"
@@ -188,6 +197,13 @@ hot_swap() {
         # The ExecReload itself still just SIGHUPs the (same) MainPID → in-place swap of the new bin.
         log "reloading systemd (unit changed)"
         $SUDO systemctl daemon-reload
+        # IMPORTANT: a SIGHUP execve keeps the running process's existing privilege + kill settings.
+        # systemd applies unit-level directives (User=/Group=, KillMode=, NoNewPrivileges=,
+        # CapabilityBoundingSet=, Slice=/Delegate=) only when it STARTS the service fresh — NOT on a
+        # hot-swap. The binary is updated live below, but if you changed any of those directives, run
+        # a `--cold` deploy (or `systemctl restart`) to actually apply them.
+        err "note: unit changed — the binary hot-swaps live, but unit-level directives (User=, KillMode,"
+        err "      NoNewPrivileges, CapabilityBoundingSet, Slice/Delegate) need '--cold' to take effect."
     fi
 
     # (c) TRIGGER — ExecReload=/bin/kill -HUP $MAINPID → the daemon re-execs the new binary in place.
@@ -260,7 +276,7 @@ hot_swap() {
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    err "do NOT run this as root — run it as the KGSM user (the daemon drops to YOUR uid/gid)."
+    err "do NOT run this as root — run it as the KGSM user (systemd runs the daemon as YOUR user)."
     err "it builds as you and sudo's only the systemd steps."
     exit 1
 fi
@@ -297,13 +313,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
     $SUDO install -m 0644 "$ENV_EXAMPLE" "$ENV_FILE"
 fi
 
-# Unit: substitute the drop-to uid/gid, install only if changed.
+# Unit: substitute the run-as User=/Group= (the delegation owner), install only if changed.
 TMP_UNIT="$(mktemp)"
-sed "s/^Environment=KGSM_WATCHDOG_UID=.*/Environment=KGSM_WATCHDOG_UID=${WD_UID}/; \
-     s/^Environment=KGSM_WATCHDOG_GID=.*/Environment=KGSM_WATCHDOG_GID=${WD_GID}/" "$UNIT_SRC" > "$TMP_UNIT"
+sed "s/^User=.*/User=${WD_USER}/; \
+     s/^Group=.*/Group=${WD_GROUP}/" "$UNIT_SRC" > "$TMP_UNIT"
 UNIT_CHANGED=0
 if ! cmp -s "$TMP_UNIT" "$UNIT_DST"; then
-    log "installing systemd unit → ${UNIT_DST} (drops to uid=${WD_UID} gid=${WD_GID})"
+    log "installing systemd unit → ${UNIT_DST} (runs as User=${WD_USER} Group=${WD_GROUP}, Slice=kgsm.slice Delegate=yes)"
     $SUDO install -m 0644 "$TMP_UNIT" "$UNIT_DST"
     UNIT_CHANGED=1
 fi

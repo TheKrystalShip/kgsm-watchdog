@@ -80,25 +80,62 @@ memory `kgsm-watchdog` / `kgsm-cgroup-supervision`.)
 
 ## 4. Boot & privilege model (the load-bearing sequence)
 
-The daemon is started once at boot and self-bootstraps its cgroup, then drops
-privilege. Two entry contexts, one code path:
+> **As-built since Increment 8 (2026-06-25).** The host is **systemd-only**; the old
+> root-boot self-bootstrap + openrc variants are gone (their history is in §7 Inc 1
+> and Inc 8). The model below is **systemd cgroup delegation**.
 
-- **Started as root** (non-systemd init script, or a root systemd unit): create
-  `kgsm.slice` + enable controllers + `chown` the subtree to the kgsm user
-  (subsumes `kgsm system setup-cgroups`), create + enter `kgsm.slice/supervisor`,
-  then **drop to the kgsm user** (uid change does NOT change cgroup membership — it
-  stays in-slice). Everything after is unprivileged.
-- **Placed by systemd with delegation** (`User=kgsm`, `Slice=kgsm.slice`,
-  `Delegate=yes`): it's already in a writable delegated cgroup → detect that and
-  **skip** the root bootstrap.
+The daemon runs as the KGSM user from the start — **no root step, no privilege drop**.
+systemd does the privileged cgroup setup via the unit (`User=kgsm`, `Slice=kgsm.slice`,
+`Delegate=yes`): it creates `kgsm.slice` + `kgsm.slice/kgsm-watchdog.service`, enables
+the controllers on the slice, and **chowns the service subtree to the user**. The boot
+sequence is then just (`CgroupBootstrap`, `CgroupDiscovery`):
 
-After bootstrap: forks are born in `kgsm.slice/supervisor`; per-instance moves to
-`kgsm.slice/<inst>` are intra-slice and unprivileged. **No per-operation
-escalation, ever.** The only privileged moment is boot — normal daemon behavior.
+1. **Discover** the delegated base from `/proc/self/cgroup` — the daemon's own service
+   cgroup `kgsm.slice/kgsm-watchdog.service` (or its parent, when an Inc-7 hot-swap
+   re-exec has already moved it into the supervisor leaf). Never a hardcoded `kgsm.slice`.
+2. **Enter** the supervisor leaf: create `<base>/supervisor` and move into it — cgroup v2
+   forbids enabling `subtree_control` on a cgroup that holds processes, and the daemon is
+   born in the base.
+3. **Enable controllers** on the (now process-free) base so each per-instance child
+   inherits them.
 
-> Relationship to Increment 0's `kgsm system setup-cgroups`: kept as a manual /
-> diagnostic tool and for non-daemon use, but the daemon's root-boot path performs
-> the same delegation itself, so a separate setup run becomes optional.
+After bootstrap: forks are born in `<base>/supervisor`; per-instance moves to
+`<base>/<inst>` (= `kgsm.slice/kgsm-watchdog.service/<inst>`) are unprivileged. **No
+per-operation escalation, ever.**
+
+> **Fully rootless — and enforced.** The daemon and every game it spawns run as the
+> unprivileged `User=` with **zero capabilities** (cgroup management is just owner-writes
+> inside the user-owned delegated subtree). The unit locks this in: `NoNewPrivileges=yes`
+> + `CapabilityBoundingSet=` (empty), so neither the daemon nor a spawned game can ever
+> gain a privilege. The only privileged actor is systemd (PID 1) doing the one-time
+> delegation when it starts the unit — standard `User=`+`Delegate=yes`, not the daemon
+> escalating.
+
+> **`KillMode=process` is load-bearing.** Games live *under* the service cgroup, so the
+> default `control-group` kill would SIGKILL them on every `systemctl stop/restart`.
+> `process` kills only the daemon; games keep running and the next daemon re-adopts them
+> (the "games outlive a daemon bounce" property the old root-boot model got for free by
+> keeping games outside the service cgroup).
+>
+> Caveat (cgroup v2, inherent): a daemon **cold restart/crash** while a game survives
+> re-charges that game's `memory.current` from zero — systemd clears the service cgroup's
+> `subtree_control` on a fresh start, momentarily detaching the memory controller, and
+> already-resident pages are not retroactively re-charged. It self-heals on the next game
+> restart. **Not** triggered by the normal paths: hot-swap (execve, no stop) preserves the
+> charge, and a host reboot respawns games fresh (charged from birth).
+
+> **Why children live under the *service* cgroup, not as siblings under the slice.**
+> systemd reconciles a slice's OWN `cgroup.subtree_control` on every `daemon-reload`
+> (stripping the controllers off cgroups it does not manage). With the old
+> `kgsm.slice/<inst>` sibling layout that wiped `memory`/`pids`/`io` off every instance
+> — `cpu.stat` is unconditional so CPU survived, but `memory.current` vanished and the
+> monitor read **0** (the bug Inc 8 fixes). systemd leaves the delegated subtree *below
+> the service* untouched, so the controllers persist. The per-instance path is coupled
+> to the unit name; kgsm must surface the matching `cgroup_path` (`config_cgroup_base_name
+> = kgsm.slice/kgsm-watchdog.service`), the monitor follows it. See Increment 8.
+
+> `kgsm system setup-cgroups` (Increment 0) is now **legacy** — systemd does the
+> delegation. Kept only as a non-systemd / diagnostic tool.
 
 ## 5. Control protocol (clients → daemon)
 
@@ -148,9 +185,14 @@ kgsm-watchdog/
 │       └── ControlEndpoints.cs    (start/stop/status/list)
 ├── tests/Watchdog.Tests/
 └── deploy/
-    ├── kgsm-watchdog.service      (systemd: User=kgsm, Slice=kgsm.slice, Delegate=yes)
-    └── kgsm-watchdog.openrc       (non-systemd init: root → enter slice → drop privs)
+    └── kgsm-watchdog.service      (systemd, the ONE canonical unit: User=kgsm,
+                                    Slice=kgsm.slice, Delegate=yes — see Inc 8)
 ```
+
+> Inc 8 collapses the three former units (`kgsm-watchdog.service` root-boot +
+> `kgsm-watchdog.rootless.service` + `kgsm-watchdog.openrc`) into a single
+> delegated systemd unit. openrc and the root-boot self-bootstrap are dropped
+> (systemd-only host).
 
 ---
 
@@ -629,6 +671,95 @@ Refs (Option 3 mechanics): [execve(2)](https://man7.org/linux/man-pages/man2/exe
 
 ---
 
+### Increment 8 — systemd cgroup delegation (fix per-server memory metric)  ◀ BUILT + LIVE-VALIDATED (2026-06-25)
+
+**Why (the bug).** kgsm-web's per-server **memory** chart read **0** while CPU
+worked. Root cause (diagnosed + proven live on `hotrod`, 2026-06-25): the
+watchdog's base `kgsm.slice` is a **`.slice`-named cgroup with no systemd unit**,
+so systemd adopts it as an *implicit* slice it believes it owns (`Act. Units: 0`)
+and, on **every `systemctl daemon-reload`**, resets `kgsm.slice/cgroup.subtree_control`
+to empty — wiping the watchdog's `+cpu +memory +io +pids`. Consequence in the
+per-instance cgroup:
+
+- `cpu.stat` exists **unconditionally** in every cgroup v2 dir → CPU keeps working.
+- `memory.current` / `pids.current` / `io.stat` exist **only when the controller is
+  enabled in the parent's `subtree_control`** → they vanish → the monitor's
+  `CgroupSampler` reads `memory.current`-missing as **0** (honest, not fabricated —
+  the no-fabricate invariant held).
+
+The pipeline (monitor → api `MetricsMapping` 1:1 → `MetricsPump` ~1s push on
+`servers/{id}/metrics` → web) was never at fault.
+
+**Empirical evidence (live, reproducible):**
+
+| Test | Result |
+|---|---|
+| `daemon-reload` with the bare `kgsm.slice` | `subtree_control` `[cpu io memory pids]`→`[]`; `memory.current` vanishes. Reproducible. |
+| `kgsm.slice` unit with `Delegate=yes` but **no tracked member** | Does **NOT** help — still wiped. |
+| Base **not** named `*.slice` (e.g. `/sys/fs/cgroup/kgsm`) | Survives `daemon-reload` ×N (this was "Option B"). |
+| **Delegated service, instances UNDER the service cgroup** (this increment) | systemd enables `[cpuset cpu io memory pids]` on the slice, **chowns the service cgroup + its `subtree_control` to the kgsm user**, and **leaves everything below the service untouched** across `daemon-reload` ×2. Robust. ✅ |
+
+**Secondary nuance (must design around it):** enabling the memory controller on a
+cgroup that *already* has a running process does **not** retroactively charge its
+faulted pages (observed `memory.current` = 0 vs ~380 MB RSS). Accurate accounting
+requires the instance to be **(re)spawned into a cgroup that already has the
+controller** — which the delegated model gives for free on every spawn.
+
+**Decision.** Host is **systemd-only** → drop openrc and the root-boot
+self-bootstrap. Adopt **textbook systemd delegation**: the watchdog runs as a real
+systemd service (`User=kgsm`, `Slice=kgsm.slice`, `Delegate=yes`) and manages each
+instance cgroup as a child of **its own delegated service cgroup**
+(`kgsm.slice/kgsm-watchdog.service/<inst>`), **not** as a sibling under
+`kgsm.slice`. systemd then owns controller-enablement + ownership and stops
+reconciling the delegated subtree. Chosen over Option B (rename base off `.slice`)
+because it is the systemd-correct design *and* deletes the manual
+create-slice/enable/chown/drop-privilege bootstrap. (Option B was the smaller
+fallback; rejected since openrc — its only real advantage, one code path across
+init systems — is gone.)
+
+**Tasks** (all done 2026-06-25)
+
+- [x] **Deploy/unit.** `deploy/kgsm-watchdog.service` is the single canonical delegated
+      unit (`Type=simple`, `User=`/`Group=` templated by deploy.sh, `Slice=kgsm.slice`,
+      `Delegate=yes`, `RuntimeDirectory=kgsm-watchdog` — safe now that no root→user drop
+      happens). **Deleted** `kgsm-watchdog.openrc` + `kgsm-watchdog.rootless.service`.
+      `deploy.sh` rewrites `User=`/`Group=` (was UID/GID) and installs the unit.
+- [x] **Bootstrap rework (`CgroupBootstrap`).** Root-boot dance removed. New flow:
+      discover the delegated base, create + enter the supervisor sub-leaf, enable
+      controllers on the delegated base. No privilege step.
+- [x] **Base discovery, not hardcode (`CgroupDiscovery` + `CgroupManager.UseResolvedBase`).**
+      Base derived from `/proc/self/cgroup` at startup (folds the supervisor leaf back on a
+      hot-swap re-exec); `CgroupBaseName` is now only a discovery-failure fallback.
+- [x] **kgsm coordination = shared config, identical by construction.** kgsm
+      `config_cgroup_base_name` → `kgsm.slice/kgsm-watchdog.service` (config.default.ini +
+      migration `004_v3_to_v4` + core/cgroup.sh fallback); the watchdog logs the resolved
+      base and the value kgsm must match. **Monitor unchanged** (reads `CgroupPath`).
+- [x] **`kgsm system setup-cgroups` marked legacy** (help + config/cgroup.sh comments).
+- [x] **Tests.** Watchdog 182 green incl. new `CgroupDiscoveryTests`; AOT publish 0-warn.
+      kgsm: migration 004 tests + cgroup/merge/instances suites green.
+- [x] **Live migration on hotrod.** Stopped factorio + old root daemon, removed the stale
+      manual `kgsm.slice`, cold-deployed the delegated unit, restarted factorio. Validated:
+      daemon in `kgsm.slice/kgsm-watchdog.service/supervisor`; `memory.current` = 345M from
+      birth; monitor `memBytes` ≈ 343 MiB; **survives `daemon-reload` ×2**.
+- [x] **Docs.** §4 rewritten, §6 tree updated, this increment + README, openrc refs removed.
+
+**Result.** The original bug is durably fixed: `systemctl daemon-reload` no longer wipes
+the controllers (systemd leaves the delegated subtree below the service alone), so
+per-server memory survives. The hotrod hand-stopgap (controllers re-enabled on
+`kgsm.slice`) is superseded by this real fix.
+
+**Rootless locked in as canon (2026-06-25 follow-up).** The runtime is fully rootless and
+now *enforced* (validated live on hotrod): daemon + games run as the unprivileged user with
+`NoNewPrivs=1`, empty `CapabilityBoundingSet`, `CapEff=0`. Added `KillMode=process` so games
+(now under the service cgroup) outlive a daemon stop/restart and are re-adopted — without it
+the default `control-group` would kill every game on restart. Removed the dead root-drop
+config surface (`KGSM_WATCHDOG_UID/GID/HOME`, `TargetUid/Gid`, the geteuid/chown/setres*
+interop). Known caveat (see §4): a daemon cold-restart/crash re-charges a *surviving* game's
+`memory.current` from zero (self-heals on next game restart); hot-swap and fresh spawns are
+unaffected.
+
+---
+
 ## 8. Open questions / risks
 
 - **kgsm-lib distribution.** Monitor uses `PackageReference ...KGSM.Lib 1.1.0`;
@@ -648,6 +779,12 @@ Refs (Option 3 mechanics): [execve(2)](https://man7.org/linux/man-pages/man2/exe
 - **Container instances** stay Docker-managed (Docker owns their cgroup + restart);
   the watchdog only supervises **native** instances. Be explicit so the daemon
   no-ops on container/systemd kinds.
+- **Watchdog↔kgsm cgroup-base coordination (Inc 8).** Under systemd delegation the
+  base is `kgsm.slice/kgsm-watchdog.service` (coupled to the unit name), discovered
+  at runtime. kgsm must surface the *same* per-instance path in `Instance.CgroupPath`
+  or the monitor samples the wrong dir. Settle the contract: who is the authority for
+  the base path, and how kgsm learns it (report-from-daemon vs shared config vs
+  identical derivation). The monitor is downstream of `CgroupPath` and needs no change.
 
 ## 9. Source-of-truth pointers
 

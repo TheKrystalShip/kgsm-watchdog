@@ -14,6 +14,13 @@ Type=simple
 # is this boot, which is normal daemon behaviour.
 ExecStart=/opt/kgsm-watchdog/kgsm-watchdog
 
+# `systemctl reload` → SIGHUP → the daemon re-execs the freshly-deployed binary IN PLACE (same PID,
+# same children, open fds carried across the execve), so a binary update is a zero-downtime hot-swap
+# rather than a process bounce. Type stays `simple`: the same-PID execve is transparent to systemd's
+# main-PID tracking, so no fd store is needed. (Inc 7 Phase 3 wires the SIGHUP handler in the daemon;
+# deploy/deploy.sh's default path drives this — see its HOT-swap branch.)
+ExecReload=/bin/kill -HUP $MAINPID
+
 # Configuration is via environment variables. The full, authoritative list (with defaults) is
 # printed by the binary itself: `/opt/kgsm-watchdog/kgsm-watchdog --help`. The three below are the
 # ones a typical install must set; everything else has a working default. A complete, commented

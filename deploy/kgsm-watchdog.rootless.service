@@ -34,6 +34,13 @@ After=network.target
 Type=simple
 ExecStart=/opt/kgsm-watchdog/kgsm-watchdog
 
+# `systemctl reload` → SIGHUP → the daemon re-execs the freshly-deployed binary IN PLACE (same PID,
+# same children, open fds carried across the execve), so a binary update is a zero-downtime hot-swap
+# rather than a process bounce. Type stays `simple`: the same-PID execve is transparent to systemd's
+# main-PID tracking, so no fd store is needed. (Inc 7 Phase 3 wires the SIGHUP handler in the daemon;
+# deploy/deploy.sh's default path drives this — see its HOT-swap branch.)
+ExecReload=/bin/kill -HUP $MAINPID
+
 # Run as the KGSM user from the start — no privilege drop happens in this path.
 User=kgsm
 Group=kgsm

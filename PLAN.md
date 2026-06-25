@@ -458,6 +458,14 @@ Refs: [systemd File Descriptor Store](https://systemd.io/FILE_DESCRIPTOR_STORE/)
 >    `X+<hash>` against the `/version` JSON `{version,commit}`, which never contains that combined form.
 >    **Fix:** compare on the commit hash.
 >
+> **Post-validation hardening — zombie reaper (commit `a6766bd`, live-validated).** A hot-swap-adopted
+> instance is held `Process=null` and the game stays the daemon's child (same PID, no reparent-to-init), so
+> when it later exits nothing `waitpid`s it → it lingers as a zombie until the next daemon restart. Fix: track
+> each adopted pid (`_reapable`, registered in `AdoptHandoffEntry`) and reap it on the 1 Hz tick with
+> `waitpid(pid, WNOHANG)` — **only those specific pids, never `waitpid(-1)`**, which would race the CLR
+> reaping its own children and corrupt their exit codes. Proven live: a post-swap stop left a zombie for ~1s,
+> then the reaper cleared it (0 zombies).
+>
 > **Build note:** all phases implemented (parallel subagents, integrated to `main`); build 0-warn, tests 166,
 > AOT 0-warn. **Open-risk #1 resolved during the build: it was TRUE** — on .NET 10
 > `Environment.SetEnvironmentVariable` does NOT write through to libc `environ`, so the planned

@@ -416,17 +416,166 @@ Three ways to close it (smallest → most seamless):
   note the store survives `systemctl restart` but **not** a separate stop+start unless
   `FileDescriptorStorePreserve=yes` — our `deploy/deploy.sh` currently does stop+start. From .NET/AOT it's a
   Unix-socket `sendmsg` + `SCM_RIGHTS` (no managed dep). Not built.
-- **Option 3 — self-re-exec hot-swap (`execve("/proc/self/exe")`, nginx/HAProxy-style). ◀ CHOSEN long-term direction (future work).**
-  On a signal (e.g. SIGUSR2) the daemon re-execs the updated binary **in place**: same PID, so the games
-  stay its children (**no reparenting to PID 1 at all**) and open fds survive the exec. Work: the FIFO fds
-  must not be `O_CLOEXEC` (we set it today at `SpawnEngine` — clear it before exec), serialize the
-  fd→instance map across the exec (env/`/run` state), and change the deploy to install-then-signal-re-exec
+- **Option 3 — self-re-exec hot-swap (`execve`, nginx/HAProxy-style). ◀ CHOSEN long-term direction. Detailed phased build plan: Increment 7 below.**
+  On a signal the daemon re-execs the updated binary **in place**: same PID, so the games
+  stay its children (**no reparenting to PID 1 at all**) and open fds survive the exec — the FIFO write-fd
+  never closes, so the game never sees the stdin EOF that defeats Option 1 for EOF-sensitive games. Work: the
+  FIFO fds must shed `O_CLOEXEC` at swap time (we set it today at `SpawnEngine` — clear it just before exec),
+  hand the fd→instance map + restart counters across the exec, and change the deploy to install-then-reload
   instead of bouncing the unit. Most code, but truly seamless — instances never notice an update. This is
   the bulletproof end state the user wants; Option 1 (above) is the pragmatic interim that already covers
-  the *crash/OOM* restart case Option 3 alone can't. Not built.
+  the *crash/OOM* restart case Option 3 alone can't. **Decisions locked (2026-06-25): trigger = SIGHUP via
+  `systemctl reload`; restart counters disk-persisted (survive an unclean daemon death too, not only a swap).**
+  Not built — see Increment 7 for the phased plan.
 
 Refs: [systemd File Descriptor Store](https://systemd.io/FILE_DESCRIPTOR_STORE/), [pidfd_open(2)](https://man7.org/linux/man-pages/man2/pidfd_open.2.html),
 [NGINX binary upgrade](https://0x0f.me/blog/nginx-zero-downtime-upgrade-code-analysis/), [HAProxy seamless reloads](https://www.haproxy.com/blog/truly-seamless-reloads-with-haproxy-no-more-hacks).
+
+---
+
+### Increment 7 — Option 3: self-re-exec hot-swap (the detailed plan)  ◀ PLANNED (2026-06-25)
+
+The end state of Inc 6's Option 3, spelled out. **Goal:** a watchdog binary update with **zero** game
+downtime and **no** loss of console or graceful stop — even for an EOF-sensitive game like factorio that
+Option 1 cannot fully cover. **The mechanism in one line:** on `systemctl reload` the daemon `execve()`s the
+freshly-deployed binary *in place* — same PID, and every open fd without `O_CLOEXEC` is carried into the new
+image, so each game's stdin-FIFO **write-fd stays open continuously across the swap** and the game never sees
+EOF on stdin. That continuity is the whole win and the one thing a process-restart (Option 1/2) can't give.
+
+**Decisions locked (asked + answered 2026-06-25):**
+- **Trigger = SIGHUP via `systemctl reload`.** `ExecReload=/bin/kill -HUP $MAINPID` + a `PosixSignal.SIGHUP`
+  handler. Host-local, zero cross-repo churn; because the swap keeps the **same PID**, systemd's main-PID
+  tracking never even notices (it is not a restart from systemd's view). A control-socket `/upgrade` command
+  was deferred — the binary must be on the host first, so a remote trigger buys little today.
+- **Restart counters are disk-persisted** (companion state file), so `ConsecutiveFailures` / `GaveUp` survive
+  an **unclean** daemon death (SIGKILL/OOM) too — not only a planned swap. Closes the counter-reset honesty
+  gap everywhere, and Phase 2 below is independently shippable value even before the swap exists.
+
+**Grounding facts (verified in this codebase, 2026-06-25):**
+- Host is `WebApplication.CreateSlimBuilder` + Kestrel on a unix socket; **no** `UseSystemd()`/`sd_notify`,
+  **no** signal handling today, unit is `Type=simple` `Restart=always` (`deploy/kgsm-watchdog.service`).
+- FIFO fds are opened `O_RDWR | O_CLOEXEC` (`SpawnEngine.cs:88`, and `ReopenFifo`). `O_CLOEXEC` is *correct*
+  in steady state — it stops a spawned game from inheriting sibling instances' fds — so the plan **keeps it
+  and clears it only for the instant of the exec**, then re-sets it in the new image.
+- `fcntl`/`execve` are **not** bound today; `NativeMethods` has `open/close/write/mkfifo/statx/...` only
+  (`Interop/NativeMethods.cs`). The self-exe path is available without P/Invoke via `Environment.ProcessPath`
+  (Native-AOT single-file runs in place — not extracted — so it resolves to the real install path).
+- The **control socket is Kestrel-owned and opaque** — it cannot be handed across the exec. Accepted
+  non-goal: the control plane blips for <1 s while the new image re-binds (the bind path already
+  `File.Delete`s + re-listens, `Program.cs:87`). **Games are unaffected** — their fds, cgroups, and PIDs are
+  untouched. Existing clients (kgsm-lib, the deploy health-poll) already tolerate transient unavailability.
+- State that **must** cross the swap: each live FIFO **fd number** (inherited as-is by execve), and per
+  instance `ConsecutiveFailures`/`GaveUp` (`RestartTracker`), `Phase`, `SpawnedAt`, `NextRestartAt`,
+  `LastReason`, `DesiredRunning` (`SupervisedInstance`). Safely **re-derived** in the new image: cgroup
+  liveness (`IsPopulated`), display PID (`FirstPid` ← `cgroup.procs`), and the spec (kgsm-lib).
+
+**Why `execve` is safe from a multi-threaded AOT runtime:** execve discards the entire process image — all
+CLR/AOT threads and GC/heap state vanish and a fresh image starts at `Main`. The only requirement is that
+everything the successor needs is committed **before** the call: the handoff (env + disk) and a log flush.
+On the AOT-clean path we hand-marshal a small `argv` and pass the handoff through the environment, so there
+is no managed state to preserve. `execve` replaces the image **only on success**; on any failure it returns
+and the *old* image continues intact — which is what makes the safety gate below trustworthy.
+
+Phases are ordered by dependency; **Phase 2 ships standalone value** (crash-resilient honest counters) even
+if the swap itself slips.
+
+- **Phase 0 — `--version` / `--selfcheck` + (optional) `GET /version`.** A swap must not exec a broken
+  binary. Add a top-of-`Main` arg branch (mirroring the existing `--help` block, before the host is built):
+  `--version` prints the assembly informational version and exits 0; `--selfcheck` runs a no-side-effect
+  validation (parse `WatchdogOptions`, confirm the binary loads — **without** binding the socket or touching
+  cgroups) and exits 0/non-zero. This is the contract the swap's safety gate (Phase 3) invokes as a
+  subprocess on the *new* binary before committing. Optionally expose `GET /version` (+ `WatchdogVersionInfo`
+  in `WatchdogJsonContext`) so the deploy script can confirm the post-swap build. *Small, independent,
+  zero-risk; testable on its own.*
+
+- **Phase 1 — native interop: `fcntl`, `execv`, cloexec helpers.** Add to `NativeMethods`: `fcntl(int fd,
+  int cmd, int arg)` with `F_GETFD=1`/`F_SETFD=2`/`FD_CLOEXEC=1`, and `execv(byte* path, byte** argv)`
+  (manually marshalled — build a NULL-terminated `char**` of UTF-8 argv via `Marshal`, AOT-safe; **prefer
+  `execv` + `Environment.SetEnvironmentVariable` over `execve`** so we never hand-marshal `envp` — on
+  .NET/Linux `SetEnvironmentVariable` calls libc `setenv`, updating the `environ` that `execv` inherits;
+  *verify this on net10 in this phase, fallback = marshal `envp` explicitly*). New `Interop/ReExec.cs`:
+  `ClearCloexec(fd)`/`SetCloexec(fd)` (fcntl `F_SETFD`), `Exec(path, argv)` (returns only on failure, with
+  errno). Capture the self path once at boot from `Environment.ProcessPath`. *Unit-test the pure argv-marshal
+  builder; `execv` itself is exercised only in the Phase 6 live test (it replaces the image).* Re-publish AOT
+  and confirm 0 ILC/IL2026/IL3050 — the hand-marshalling is the one place that can regress this.
+
+- **Phase 2 — disk-persist supervision counters (independently shippable).** New `PersistedSupervisionState`
+  + `InstanceRestartState { ConsecutiveFailures, GaveUp, Phase, SpawnedAt, NextRestartAt, LastReason }`,
+  registered in `WatchdogJsonContext` (source-gen, AOT). A `supervision-state.json` companion alongside
+  `desired-state.json` (reuse the `DesiredStateStore` pattern / its directory). Write on each meaningful
+  transition in `ReconcileOne` (crash registered, give-up, stability-reset) + on graceful stop/disable —
+  cheap, since counters only move on a crash. Add `RestartTracker.Restore(consecutiveFailures, gaveUp)`
+  (keeps encapsulation). On boot, a new `RehydrateCountersAsync` (run by `StartupRestorer` *after*
+  `RestoreAsync` + `AdoptLiveOrphansAsync`) re-applies persisted counters/phase/timing onto matching live
+  instances and prunes entries for instances that are gone. **Payoff even without the swap:** an OOM/SIGKILL
+  of the daemon no longer silently resets a crash-looping instance's counter to 0/5 — honest alerting across
+  *any* daemon death.
+
+- **Phase 3 — the hot-swap routine + SIGHUP trigger.** New `HotSwapCoordinator`:
+  1. **Guard** — refuse if a swap is already running, or `SupervisorState` not ready.
+  2. **Resolve** target = the boot-captured `Environment.ProcessPath`.
+  3. **Validate (safety gate)** — `Process.Start(path, "--selfcheck")` with a bounded timeout; require exit 0
+     (optionally diff `--version` to spot a no-op). **On failure → ABORT**: log loudly, emit a `system`-origin
+     event, stay on the old image. This is what makes a bad deploy survivable.
+  4. **Quiesce** — acquire the supervisor `_gate` (serializes against reconcile + control verbs; `CrashWatcher`
+     already `Wait(0)`-skips when the gate is held) and set a `_swapping` flag.
+  5. **Serialize handoff** — build `{ name → fifoFd, counters, phase, timing, desiredRunning }` for every live
+     `Current`; flush the Phase-2 disk file too (belt-and-suspenders); set
+     `KGSM_WATCHDOG_HOTSWAP_HANDOFF=<base64 json>` via `Environment.SetEnvironmentVariable`.
+  6. **Shed cloexec** — `ReExec.ClearCloexec(fd)` on each live FIFO fd so it survives the exec.
+  7. **Flush logs**, then `ReExec.Exec(path, [path, "--resumed"])`.
+  8. **On return (exec failed)** — re-`SetCloexec` the fds (restore the steady-state invariant), unset the env
+     var, clear `_swapping`, release the gate, log + emit. The old image soldiers on; no game harmed.
+  Register a `PosixSignal.SIGHUP` handler (in `Program.cs` or a tiny `IHostedService`) that kicks the
+  coordinator off the signal thread. **SIGTERM is unchanged** — a clean stop still `ReleaseKeepingFifo`s
+  (Option 1 remains the fallback for any non-hot-swap restart).
+
+- **Phase 4 — boot-time adopt-from-handoff (the no-EOF resume).** If `KGSM_WATCHDOG_HOTSWAP_HANDOFF` is set,
+  `StartupRestorer` takes the handoff path **before** the normal restore: per entry, verify the inherited fd
+  is still open (`fcntl(fd, F_GETFD) >= 0`), re-derive the spec, recover the PID from the cgroup, and build
+  `RunningInstance.Adopt(name, inheritedFd, …)` using **the inherited fd directly — NOT `ReopenFifo`** (same
+  continuously-open fd → no new inode → the game never saw its writer vanish → a post-swap `/quit` is honored
+  immediately). Restore counters/phase/timing from the handoff; re-`SetCloexec` the inherited fd. Mark these
+  done so the subsequent `RestoreAsync`/`AdoptLiveOrphans` skip them; then **unset the env var** and run the
+  normal restore for anything enabled-but-not-running. **Per-entry graceful degradation:** an unexpectedly
+  invalid fd falls back to `ReopenFifo` from disk (Option 1) for that one instance, logged as a downgrade.
+  This phase is exactly where the Option 1 EOF gap closes.
+
+- **Phase 5 — deploy + systemd.** Unit: add `ExecReload=/bin/kill -HUP $MAINPID` (type stays `simple`; the
+  same-PID execve is transparent — no fd store needed). `deploy/deploy.sh`: add a hot path that (1) publishes
+  the AOT binary to a staging file, (2) installs it as `<path>.new` **in the same dir then `mv -f` onto the
+  live path** — `rename(2)` is atomic and leaves the running process on its old (now-unlinked) inode while the
+  path points at the new one; **never `install`/`cp` over the running inode** (ETXTBSY / corrupts the mmap'd
+  image), (3) `systemctl reload kgsm-watchdog`, (4) verify: poll `/version` until it reports the new build,
+  confirm the **daemon PID is unchanged** (proves in-place swap, not a systemd restart), and confirm each
+  instance is still `populated` with an unchanged PID. Keep the current stop→install→start as an explicit
+  `--cold` fallback (and the existing failure-trap restart).
+
+- **Phase 6 — tests + live validation.**
+  - *Pure/unit:* `RestartTracker.Restore` round-trip; `PersistedSupervisionState` JSON round-trip (AOT
+    context); handoff blob serialize/deserialize; argv-marshal builder; coordinator **abort path** (a failing
+    `--selfcheck` leaves cloexec set + env unset + gate released). AOT publish 0-warn.
+  - *Live (factorio-test, sacrificial):* spawn factorio → crash it a couple times to push the restart counter
+    up → `deploy.sh` hot path. **Assert the headline wins:** (a) daemon PID **unchanged** across the swap;
+    (b) **no new `Got EOF on stdin`** line in factorio's log at the swap (the exact thing Option 1 could not
+    achieve); (c) a post-swap `/stop` is honored as a graceful `/quit` → "stopped gracefully", *not*
+    `cgroup.kill`; (d) `/version` shows the new build; (e) the restart counter **carried across** the swap;
+    (f) factorio PID unchanged (zero downtime).
+  - *Safety gate, live:* stage a deliberately-broken binary (`--selfcheck` exits non-zero) → `systemctl
+    reload` → assert the daemon **aborts**, stays on the old image, games untouched, loud log + event.
+  - *Crash-resilience, live (Phase 2 payoff):* `kill -9` the daemon (not a swap) → `Restart=always` brings it
+    back → assert counters are **restored from disk**.
+
+**Open risks to watch (revisit during build):** (1) `SetEnvironmentVariable`→`execv` visibility on net10 —
+verify in Phase 1, fallback is explicit `envp` marshalling. (2) A crash arriving *during* the quiesce window
+— the gate serializes it and the successor's first reconcile re-evaluates against live cgroup state, so it
+self-corrects; acceptable. (3) The <1 s control-socket blip — documented non-goal; preserving the Kestrel
+listener across exec would be a much larger lift (raw socket out of Kestrel) and is explicitly out of scope.
+
+Refs (Option 3 mechanics): [execve(2)](https://man7.org/linux/man-pages/man2/execve.2.html) (fd inheritance
+& `FD_CLOEXEC` semantics), [fcntl(2)](https://man7.org/linux/man-pages/man2/fcntl.2.html) (`F_SETFD`),
+[NGINX binary upgrade](https://0x0f.me/blog/nginx-zero-downtime-upgrade-code-analysis/),
+[HAProxy seamless reloads](https://www.haproxy.com/blog/truly-seamless-reloads-with-haproxy-no-more-hacks).
 
 ---
 

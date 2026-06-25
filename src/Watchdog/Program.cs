@@ -78,6 +78,9 @@ builder.Services.AddSingleton<CgroupBootstrap>();
 builder.Services.AddSingleton(BackoffPolicy.FromOptions(options));
 builder.Services.AddSingleton<SpawnEngine>();
 builder.Services.AddSingleton<DesiredStateStore>();
+// Inc 7 Phase 2 — companion supervision-state.json: persists restart counters / give-up latch so they
+// survive ANY daemon death (OOM/SIGKILL), not just a planned hot-swap. Injected into InstanceSupervisor.
+builder.Services.AddSingleton<SupervisionStateStore>();
 // UPnP port forwarding: process-lifetime network state the supervisor owns (opens on bring-up,
 // holds across crash-restart, closes on intended stop). Self-gates on enable_port_forwarding.
 builder.Services.AddSingleton<UpnpService>();

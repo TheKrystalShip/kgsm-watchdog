@@ -178,6 +178,29 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
         return false;
     }
 
+    /// <summary>
+    /// The instance names whose cgroup directly under <see cref="Base"/> currently holds a live process,
+    /// excluding the supervisor leaf the daemon itself runs in. Used at startup to re-adopt instances that
+    /// outlived a daemon restart (running but not in the persisted boot-autostart set). Returns empty when
+    /// the base is absent or after a host reboot — the cgroups died with the host — so it adds nothing then.
+    /// </summary>
+    public IReadOnlyList<string> LivePopulatedInstances()
+    {
+        if (!Directory.Exists(Base))
+            return [];
+
+        var live = new List<string>();
+        foreach (string dir in Directory.EnumerateDirectories(Base))
+        {
+            string name = Path.GetFileName(dir);
+            if (string.Equals(name, _opts.SupervisorLeaf, StringComparison.Ordinal))
+                continue; // the daemon's own leaf, not a game instance
+            if (IsPopulated(name))
+                live.Add(name);
+        }
+        return live;
+    }
+
     /// <summary>Atomically SIGKILL every process in the instance cgroup (whole subtree) via <c>cgroup.kill</c>.</summary>
     public bool Kill(string instanceName)
     {

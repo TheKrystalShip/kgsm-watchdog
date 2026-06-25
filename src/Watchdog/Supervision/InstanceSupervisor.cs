@@ -353,6 +353,62 @@ internal sealed class InstanceSupervisor(
     }
 
     /// <summary>
+    /// Re-adopt every instance whose cgroup is live but that is NOT already supervised — a process that
+    /// was running (started, perhaps never enabled for boot auto-start) and outlived a daemon restart.
+    /// Runs once at startup, right after <see cref="RestoreAsync"/>, so a daemon bounce never silently
+    /// drops supervision of a live game; the persisted-set restore alone left started-not-enabled
+    /// instances orphaned. After a host reboot there are no live cgroups, so this is a no-op then. The
+    /// decision reuses <see cref="RestorePlan.Classify"/> (cgroup populated by construction): native →
+    /// adopt, container/no-config → leave it (a live cgroup with no kgsm config is not ours to claim).
+    /// </summary>
+    public async Task AdoptLiveOrphansAsync(CancellationToken ct = default)
+    {
+        if (!state.Ready)
+            return; // RestoreAsync already logged why the supervisor isn't ready
+
+        var live = cgroups.LivePopulatedInstances();
+        if (live.Count == 0)
+            return;
+
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var now = DateTime.UtcNow;
+            int adopted = 0, skipped = 0;
+
+            foreach (var name in live)
+            {
+                if (_instances.ContainsKey(name))
+                    continue; // already restored via the persisted boot-autostart set
+
+                Instance? spec = null;
+                try { spec = instances.GetInstanceInfo(name); }
+                catch (Exception ex) { logger.LogWarning(ex, "adopt-orphan: kgsm-lib threw reading {Instance}", name); }
+
+                if (RestorePlan.Classify(cgroupPopulated: true, spec) == RestoreAction.Adopt)
+                {
+                    AdoptLive(name, spec!, now);
+                    adopted++;
+                }
+                else
+                {
+                    skipped++;
+                    logger.LogWarning(
+                        "adopt-orphan: live cgroup {Instance} is not an adoptable native instance — leaving it unsupervised", name);
+                }
+            }
+
+            logger.LogInformation(
+                "adopt-orphan complete: {Adopted} live instance(s) re-adopted after a daemon restart, {Skipped} skipped",
+                adopted, skipped);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Re-attach supervision to an instance whose cgroup is already populated (it outlived a daemon
     /// restart). <see cref="SupervisedInstance.Current"/> stays null — the previous daemon held the PID
     /// and FIFO, and neither is recoverable — so the reconcile loop supervises it by cgroup liveness

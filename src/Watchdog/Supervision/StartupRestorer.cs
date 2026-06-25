@@ -4,9 +4,10 @@ using Microsoft.Extensions.Logging;
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
 /// <summary>
-/// Runs once at daemon startup to restore supervision of every instance the operator enabled for boot
-/// auto-start — the in-house replacement for systemd's <c>WantedBy=</c>. The timing is
-/// load-bearing on both sides:
+/// Runs once at daemon startup to restore supervision: first every instance the operator enabled for boot
+/// auto-start (the in-house replacement for systemd's <c>WantedBy=</c>), then any instance still live in
+/// its cgroup that the persisted set did not cover — a started-not-enabled survivor of a daemon bounce.
+/// The timing is load-bearing on both sides:
 /// <list type="bullet">
 /// <item><b>After</b> <c>CgroupBootstrap</c> (Program invokes it synchronously before <c>app.Run</c>),
 /// so the supervisor is ready and <c>HOME</c> is the dropped user's when the store resolves its path.</item>
@@ -23,6 +24,9 @@ internal sealed class StartupRestorer(InstanceSupervisor supervisor, ILogger<Sta
         try
         {
             await supervisor.RestoreAsync(cancellationToken).ConfigureAwait(false);
+            // Then re-adopt any instance still running in its cgroup that the persisted set did NOT cover
+            // (started-not-enabled survivors of a daemon bounce). No-op after a host reboot (no live cgroups).
+            await supervisor.AdoptLiveOrphansAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

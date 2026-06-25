@@ -90,6 +90,48 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void LivePopulatedInstances_lists_populated_children_excluding_supervisor()
+    {
+        // Real filesystem under a temp base (no mocks): cgroup.events files with the kernel's
+        // `populated 0|1` line are what IsPopulated reads, so this exercises the true code path.
+        string root = Path.Combine(Path.GetTempPath(), $"wd-cg-{Guid.NewGuid():N}");
+        string baseDir = Path.Combine(root, "kgsm.slice");
+        try
+        {
+            WritePopulated(baseDir, "factorio-test", populated: true);
+            WritePopulated(baseDir, "minecraft-1", populated: true);
+            WritePopulated(baseDir, "stopped-1", populated: false); // empty cgroup — not live
+            WritePopulated(baseDir, "supervisor", populated: true);  // the daemon's own leaf — must be excluded
+
+            var mgr = Make(new WatchdogOptions { CgroupMountPoint = root, CgroupBaseName = "kgsm.slice" });
+
+            Assert.Equal(["factorio-test", "minecraft-1"], mgr.LivePopulatedInstances().OrderBy(n => n));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void LivePopulatedInstances_empty_when_base_absent()
+    {
+        var mgr = Make(new WatchdogOptions
+        {
+            CgroupMountPoint = Path.GetTempPath(),
+            CgroupBaseName = $"kgsm-nonexistent-{Guid.NewGuid():N}.slice",
+        });
+        Assert.Empty(mgr.LivePopulatedInstances());
+    }
+
+    private static void WritePopulated(string baseDir, string instance, bool populated)
+    {
+        string dir = Path.Combine(baseDir, instance);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "cgroup.events"), $"populated {(populated ? 1 : 0)}\nfrozen 0\n");
+    }
+
+    [Fact]
     public void Lifecycle_roundtrip_create_attach_kill_remove()
     {
         var mgr = Make(Defaults());

@@ -425,10 +425,30 @@ internal sealed class InstanceSupervisor(
             DesiredRunning = true,
             Phase = SupervisionPhase.Running,
             SpawnedAt = now, // treat as freshly (re)spawned so the grace window applies
-            LastReason = "re-adopted live cgroup after daemon restart (no graceful-stop channel until next respawn)",
+            LastReason = "re-adopted live cgroup after daemon restart",
         };
+
+        // Recover the command channel. The game's stdin FIFO now survives a daemon bounce (the daemon
+        // releases its fd without deleting the node — RunningInstance.ReleaseKeepingFifo), so re-open it to
+        // restore console + graceful stop immediately, no respawn needed. The PID comes from the cgroup —
+        // we are not the parent. If the FIFO is gone (an instance spawned by a pre-fix daemon that deleted
+        // it on exit), fall back to cgroup-only supervision until the next respawn rebuilds the channel.
+        int? pid = cgroups.FirstPid(name);
+        int fd = spawnEngine.ReopenFifo(spec.SocketFile);
+        if (fd >= 0)
+        {
+            si.Current = RunningInstance.Adopt(
+                name, fd, spec.SocketFile, spec.StopCommand, spec.StopCommandTimeoutSeconds, pid, logger);
+            si.LastReason = "re-adopted live cgroup after daemon restart (FIFO re-opened — console + graceful stop restored)";
+            logger.LogInformation("restore: adopted live {Instance} (pid {Pid}; FIFO re-opened — full control)", name, pid);
+        }
+        else
+        {
+            si.LastReason = "re-adopted live cgroup after daemon restart (FIFO gone; graceful stop returns on next respawn)";
+            logger.LogInformation("restore: adopted live {Instance} (pid {Pid}; cgroup liveness only — FIFO unavailable)", name, pid);
+        }
+
         _instances[name] = si;
-        logger.LogInformation("restore: adopted live {Instance} (cgroup populated; Current=null until next respawn)", name);
     }
 
     /// <summary>
@@ -757,8 +777,9 @@ internal sealed class InstanceSupervisor(
         {
             if (cgroups.IsPopulated(name))
                 return true;
-            // If the launcher died before populating, stop waiting — the spawn failed.
-            try { if (ri.Process.HasExited) return cgroups.IsPopulated(name); }
+            // If the launcher died before populating, stop waiting — the spawn failed. (ri is a freshly
+            // spawned handle here, so Process is non-null; the ?. keeps the nullable contract honest.)
+            try { if (ri.Process?.HasExited == true) return cgroups.IsPopulated(name); }
             catch { /* process object racing teardown */ }
             await Task.Delay(100, ct).ConfigureAwait(false);
         }
@@ -779,8 +800,11 @@ internal sealed class InstanceSupervisor(
 
     public void Dispose()
     {
+        // Daemon shutdown — the games keep running. RELEASE each handle (close our fd) but KEEP the FIFO
+        // node, so the next daemon can re-open it on adoption and restore console + graceful stop. Calling
+        // Dispose() here (the old behaviour) deleted live games' stdin FIFOs, orphaning the channel.
         foreach (var si in _instances.Values)
-            si.Current?.Dispose();
+            si.Current?.ReleaseKeepingFifo();
         _gate.Dispose();
     }
 }

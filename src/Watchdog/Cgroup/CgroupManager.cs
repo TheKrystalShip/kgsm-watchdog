@@ -201,6 +201,28 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
         return live;
     }
 
+    /// <summary>
+    /// The first PID listed in the instance cgroup's <c>cgroup.procs</c>, or null if empty/absent. Used to
+    /// recover a display PID for an ADOPTED instance: the daemon is no longer its parent, so the PID comes
+    /// from the cgroup, not a child <c>Process</c>. The kernel lists procs in numeric order, so the first
+    /// entry is the lowest PID — in practice the launched leader. Best-effort (a teardown race reads null).
+    /// </summary>
+    public int? FirstPid(string instanceName)
+    {
+        string procs = Path.Combine(PathFor(instanceName), "cgroup.procs");
+        try
+        {
+            foreach (var line in File.ReadLines(procs))
+                if (int.TryParse(line.Trim(), out int pid))
+                    return pid;
+        }
+        catch
+        {
+            // absent / teardown race -> unknown
+        }
+        return null;
+    }
+
     /// <summary>Atomically SIGKILL every process in the instance cgroup (whole subtree) via <c>cgroup.kill</c>.</summary>
     public bool Kill(string instanceName)
     {

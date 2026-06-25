@@ -124,6 +124,32 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
         Assert.Empty(mgr.LivePopulatedInstances());
     }
 
+    [Fact]
+    public void FirstPid_reads_the_first_entry_of_cgroup_procs()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"wd-cg-{Guid.NewGuid():N}");
+        string dir = Path.Combine(root, "kgsm.slice", "factorio-test");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "cgroup.procs"), "3757057\n3757099\n");
+
+            var mgr = Make(new WatchdogOptions { CgroupMountPoint = root, CgroupBaseName = "kgsm.slice" });
+            Assert.Equal(3757057, mgr.FirstPid("factorio-test")); // recovered PID for an adopted instance
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FirstPid_null_when_cgroup_procs_absent()
+    {
+        var mgr = Make(new WatchdogOptions { CgroupBaseName = $"kgsm-nonexistent-{Guid.NewGuid():N}.slice" });
+        Assert.Null(mgr.FirstPid("ghost-instance"));
+    }
+
     private static void WritePopulated(string baseDir, string instance, bool populated)
     {
         string dir = Path.Combine(baseDir, instance);

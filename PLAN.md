@@ -371,6 +371,54 @@ restart or host reboot came up empty and auto-started nothing.
   (adopt-live / spawn-dead), proven live against a real server — the in-house stand-in for systemd boot
   auto-start, which unblocks the systemd hard-break (next).
 
+### Increment 6 — daemon-restart resilience: keep console + graceful stop across a bounce  ◀ Option 1 DONE (2026-06-25); Option 3 = chosen long-term
+
+**The problem.** Adoption (Inc 5) + live-orphan re-adoption (2026-06-25, commit `0affcf2`: the daemon now
+also re-adopts a *started-not-enabled* live cgroup, not just the persisted set) re-attach **supervision**
+across a daemon bounce — crash-detection, hard stop, status, and metrics all run off the cgroup, so they
+never depended on process parentage. But the daemon lost the game's **command channel**: the old `AdoptLive`
+left `Current=null`, so until the next respawn a stop was a hard `cgroup.kill` (no in-game save) and
+**console input was unavailable**. Worse, the old `Dispose()`-on-shutdown *deleted* each live game's stdin
+FIFO, so the game kept an unlinked inode no successor daemon could re-open, and the game re-parented to
+PID 1 (expected — Linux re-parents an orphan to init; you **cannot** re-parent a live process onto a new
+daemon, confirmed). In production, supervising N games, a routine watchdog update meant losing console +
+graceful stop for all N until each next restart. Unacceptable for a control plane.
+
+Three ways to close it (smallest → most seamless):
+
+- **Option 1 — re-open the FIFO on adopt (+ cgroup-recovered PID). ◀ DONE 2026-06-25.**
+  The stdin FIFO is a named pipe on disk; only the daemon's *write-fd* dies with the daemon, not the
+  channel. So: (a) on daemon shutdown, **release the handle without deleting the FIFO**
+  (`RunningInstance.ReleaseKeepingFifo`; `InstanceSupervisor.Dispose` no longer `Dispose()`s — that delete
+  was the orphaning bug); (b) on adopt, **re-open the surviving FIFO** O_RDWR (`SpawnEngine.ReopenFifo` —
+  never re-`mkfifo`, which would be a new inode the game can't see) into a Process-less adopted
+  `RunningInstance` (`RunningInstance.Adopt`), and recover the display PID from `cgroup.procs`
+  (`CgroupManager.FirstPid`). Graceful stop already drains via the **cgroup** (`WaitForDrainAsync`), not
+  `waitpid`, so it needs only a working `SendLine` — which the re-opened fd provides. Net: **console +
+  graceful stop survive any restart cause** (update *or* crash/OOM), no respawn needed. The only residual
+  loss for an adopted instance is the exit *code* (`ExitCode=null` — a non-child has no `waitpid`; the
+  cgroup gives liveness, not status). *Limit:* a tiny window between daemon death and the next boot's adopt
+  where no writer holds the FIFO; and a game spawned by a *pre-fix* daemon (FIFO already deleted) stays
+  cgroup-only until its next respawn. Tests: `RunningInstanceTests` (adopted PID/no-exit-code; release-keeps
+  / dispose-deletes the FIFO), `CgroupManagerTests.FirstPid`. AOT clean.
+- **Option 2 — systemd fd store (`FDSTORE=1`).** Idiomatic zero-loss across a *restart*: stash the FIFO fds
+  via `sd_notify(FDSTORE=1, FDNAME=<instance>)`; systemd hands them back through `sd_listen_fds()` on the
+  next start, so the fds never close → no gap at all. Needs `FileDescriptorStoreMax=N` in the unit, and
+  note the store survives `systemctl restart` but **not** a separate stop+start unless
+  `FileDescriptorStorePreserve=yes` — our `deploy/deploy.sh` currently does stop+start. From .NET/AOT it's a
+  Unix-socket `sendmsg` + `SCM_RIGHTS` (no managed dep). Not built.
+- **Option 3 — self-re-exec hot-swap (`execve("/proc/self/exe")`, nginx/HAProxy-style). ◀ CHOSEN long-term direction (future work).**
+  On a signal (e.g. SIGUSR2) the daemon re-execs the updated binary **in place**: same PID, so the games
+  stay its children (**no reparenting to PID 1 at all**) and open fds survive the exec. Work: the FIFO fds
+  must not be `O_CLOEXEC` (we set it today at `SpawnEngine` — clear it before exec), serialize the
+  fd→instance map across the exec (env/`/run` state), and change the deploy to install-then-signal-re-exec
+  instead of bouncing the unit. Most code, but truly seamless — instances never notice an update. This is
+  the bulletproof end state the user wants; Option 1 (above) is the pragmatic interim that already covers
+  the *crash/OOM* restart case Option 3 alone can't. Not built.
+
+Refs: [systemd File Descriptor Store](https://systemd.io/FILE_DESCRIPTOR_STORE/), [pidfd_open(2)](https://man7.org/linux/man-pages/man2/pidfd_open.2.html),
+[NGINX binary upgrade](https://0x0f.me/blog/nginx-zero-downtime-upgrade-code-analysis/), [HAProxy seamless reloads](https://www.haproxy.com/blog/truly-seamless-reloads-with-haproxy-no-more-hacks).
+
 ---
 
 ## 8. Open questions / risks

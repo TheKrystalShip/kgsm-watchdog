@@ -125,6 +125,23 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
             name, proc, fd, fifo, instance.StopCommand, instance.StopCommandTimeoutSeconds, logger);
     }
 
+    /// <summary>
+    /// Re-open an EXISTING instance FIFO for writing (O_RDWR, O_CLOEXEC) — the command channel for an
+    /// ADOPTED instance after a daemon bounce. Returns the fd, or -1 if the node is gone/unopenable.
+    /// Deliberately does NOT create it: the game still holds the read end of the surviving node, so a
+    /// fresh <c>mkfifo</c> would be a different inode the game never reads. O_RDWR matches <see cref="Spawn"/>
+    /// so the reader never EOFs.
+    /// </summary>
+    public int ReopenFifo(string fifoPath)
+    {
+        if (string.IsNullOrEmpty(fifoPath) || !File.Exists(fifoPath))
+            return -1;
+        int fd = NativeMethods.open(fifoPath, NativeMethods.O_RDWR | NativeMethods.O_CLOEXEC, 0);
+        if (fd < 0)
+            logger.LogWarning("re-open FIFO {Fifo} failed (errno {Err})", fifoPath, Errno());
+        return fd;
+    }
+
     private static string FirstNonEmpty(params string[] candidates)
         => candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? string.Empty;
 

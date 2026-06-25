@@ -6,7 +6,11 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <summary>
 /// Runs once at daemon startup to restore supervision: first every instance the operator enabled for boot
 /// auto-start (the in-house replacement for systemd's <c>WantedBy=</c>), then any instance still live in
-/// its cgroup that the persisted set did not cover — a started-not-enabled survivor of a daemon bounce.
+/// its cgroup that the persisted set did not cover — a started-not-enabled survivor of a daemon bounce —
+/// and finally re-applies the persisted restart counters onto the rebuilt table
+/// (<see cref="InstanceSupervisor.RehydrateCounters"/>), so a crash streak / give-up latch survives ANY
+/// daemon death (an OOM/SIGKILL, not only a clean restart). The counter rehydrate runs LAST, after the
+/// table is fully built, because it matches persisted entries against the live instances restore produced.
 /// The timing is load-bearing on both sides:
 /// <list type="bullet">
 /// <item><b>After</b> <c>CgroupBootstrap</c> (Program invokes it synchronously before <c>app.Run</c>),
@@ -27,6 +31,10 @@ internal sealed class StartupRestorer(InstanceSupervisor supervisor, ILogger<Sta
             // Then re-adopt any instance still running in its cgroup that the persisted set did NOT cover
             // (started-not-enabled survivors of a daemon bounce). No-op after a host reboot (no live cgroups).
             await supervisor.AdoptLiveOrphansAsync(cancellationToken).ConfigureAwait(false);
+            // Finally, re-apply persisted restart counters onto the now-complete table — the honesty fix
+            // that makes a crash streak / give-up latch survive ANY daemon death, not only a clean restart.
+            // MUST run last: it matches the persisted file against the live instances the steps above built.
+            supervisor.RehydrateCounters(cancellationToken);
         }
         catch (Exception ex)
         {

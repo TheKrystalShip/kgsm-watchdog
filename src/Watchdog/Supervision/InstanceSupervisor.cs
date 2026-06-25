@@ -37,6 +37,7 @@ internal sealed class InstanceSupervisor(
     BackoffPolicy policy,
     SupervisorState state,
     DesiredStateStore store,
+    SupervisionStateStore supervisionStore,
     IEventManagementService events,
     UpnpService upnp,
     ILogger<InstanceSupervisor> logger) : IDisposable
@@ -187,6 +188,7 @@ internal sealed class InstanceSupervisor(
                     reason = si.Phase == SupervisionPhase.RestartPending ? "stopped (cancelled pending restart)" : "not running";
                 }
                 _instances.TryRemove(name, out _);
+                PersistSupervisionState(); // deliberate stop — drop this instance's persisted counters
                 return new ActionResult(name, true, reason);
             }
 
@@ -211,6 +213,7 @@ internal sealed class InstanceSupervisor(
             DisposeCurrent(si);
             cgroups.Remove(name);
             _instances.TryRemove(name, out _);
+            PersistSupervisionState(); // deliberate stop — drop this instance's persisted counters
 
             logger.LogInformation("stopped {Instance}", name);
             return new ActionResult(name, true, drained ? "stopped gracefully" : "killed (timeout)");
@@ -487,6 +490,84 @@ internal sealed class InstanceSupervisor(
         return false;
     }
 
+    /// <summary>
+    /// At daemon startup — run by <see cref="StartupRestorer"/> AFTER <see cref="RestoreAsync"/> and
+    /// <see cref="AdoptLiveOrphansAsync"/> — re-apply the restart counters persisted by
+    /// <see cref="SupervisionStateStore"/> onto the just-restored live table. This is the honesty fix:
+    /// without it, ANY daemon death (an OOM/SIGKILL just as much as a planned swap) resets a
+    /// crash-looping instance's failure streak to zero, fabricating health it never earned. Re-attaching
+    /// across a bounce (adopt/respawn) builds a fresh <see cref="RestartTracker"/> (counter 0); this puts
+    /// the truth back.
+    /// <para>
+    /// <b>Policy (deliberate, conservative):</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>Counters always restored.</b> For every name present in BOTH the live table and the
+    /// persisted file we <em>always</em> call <see cref="RestartTracker.Restore"/> — the streak + give-up
+    /// latch are pure bookkeeping with no live-process dependency, so they carry across unconditionally.
+    /// This is the core fix.</item>
+    /// <item><b>Phase + timing restored ONLY when not live-populated.</b> A re-adopted/respawned instance
+    /// that is genuinely <em>live now</em> (a live <see cref="RunningInstance"/> handle exists OR its
+    /// cgroup is populated) must keep the <c>Running</c> phase the restore just established — overwriting
+    /// it with a stale persisted <c>Failed</c> would be a lie about a running game. But an instance that
+    /// is NOT live now (restore found nothing to adopt/spawn, or it landed Failed/Stopped) gets its
+    /// persisted phase/<c>SpawnedAt</c>/<c>NextRestartAt</c>/<c>LastReason</c> back, so a pre-crash
+    /// give-up/Failed latch is honored across the bounce rather than silently cleared.</item>
+    /// <item><b>Prune.</b> Persisted entries with no matching live instance are dropped (the instance was
+    /// stopped/removed while the daemon was down); the rewrite reflects only what is actually supervised.</item>
+    /// </list>
+    /// Runs under the gate, like every other table mutation; <paramref name="ct"/> is accepted for
+    /// symmetry with the other restore steps (the work itself is synchronous and brief).
+    /// </summary>
+    public void RehydrateCounters(CancellationToken ct = default)
+    {
+        var persisted = supervisionStore.Load();
+        if (persisted.Instances.Count == 0 && _instances.IsEmpty)
+            return;
+
+        _gate.Wait(ct);
+        try
+        {
+            int restored = 0, latched = 0;
+            foreach (var (name, snap) in persisted.Instances)
+            {
+                if (!_instances.TryGetValue(name, out var si))
+                    continue; // pruned below — nothing live to rehydrate onto
+
+                // (1) Counters carry unconditionally — the core honesty fix.
+                si.Restart.Restore(snap.ConsecutiveFailures, snap.GaveUp);
+                restored++;
+
+                // (2) Phase/timing only when the instance is NOT live-populated now, so a live-adopted or
+                //     freshly-respawned game keeps its Running phase but a pre-crash give-up/Failed latch
+                //     is honored across the bounce.
+                bool liveNow = si.Current is not null || cgroups.IsPopulated(name);
+                if (!liveNow)
+                {
+                    if (Enum.TryParse<SupervisionPhase>(snap.Phase, ignoreCase: false, out var phase))
+                        si.Phase = phase;
+                    si.SpawnedAt = snap.SpawnedAt;
+                    si.NextRestartAt = snap.NextRestartAt;
+                    if (!string.IsNullOrEmpty(snap.LastReason))
+                        si.LastReason = snap.LastReason;
+                    latched++;
+                }
+            }
+
+            // (3) The just-rebuilt table is now authoritative — persist it (drops entries for instances
+            //     that vanished while the daemon was down, and writes the rehydrated counters back).
+            PersistSupervisionState();
+
+            logger.LogInformation(
+                "rehydrated supervision counters: {Restored} restored ({Latched} also re-latched phase/timing), {Persisted} on disk, {Live} live",
+                restored, latched, persisted.Instances.Count, _instances.Count);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public InstanceState? Status(string name)
     {
         // The enabled set is independent of the live table — an instance can be enabled-but-not-tracked
@@ -578,6 +659,7 @@ internal sealed class InstanceSupervisor(
             {
                 si.Restart.NoteStable();
                 logger.LogInformation("{Instance} stable; restart counter reset", name);
+                PersistSupervisionState(); // the streak just reset — persist so a daemon death keeps the truth
             }
             return;
         }
@@ -603,6 +685,7 @@ internal sealed class InstanceSupervisor(
             si.Phase = SupervisionPhase.Stopped;
             si.LastReason = "exited cleanly (code 0); not restarted (on-failure policy)";
             logger.LogInformation("{Instance} exited cleanly; not restarting (on-failure policy)", name);
+            PersistSupervisionState(); // clean exit → Stopped (terminal); persist so it isn't resurrected as Running
             return;
         }
 
@@ -614,6 +697,7 @@ internal sealed class InstanceSupervisor(
             si.LastReason = $"restart limit reached ({si.Restart.ConsecutiveFailures} consecutive failures, last {exitText}); gave up after {policy.MaxRetries} retries";
             logger.LogWarning("{Instance} hit the restart limit ({Count} failures, last {Exit}); giving up after {Max} retries — reporting failed",
                 name, si.Restart.ConsecutiveFailures, exitText, policy.MaxRetries);
+            PersistSupervisionState(); // gave up (→Failed) — persist the latch so an OOM doesn't fake recovery
             EmitSupervisionEvent(EventFailed, name, exit, si.Restart.ConsecutiveFailures);
             return;
         }
@@ -623,6 +707,7 @@ internal sealed class InstanceSupervisor(
         si.LastReason = $"{verb} ({exitText}); restart #{si.Restart.ConsecutiveFailures} in {(int)delay.Value.TotalSeconds}s";
         logger.LogWarning("{Instance} {Verb} ({Exit}); restart #{N} in {Delay}",
             name, verb, exitText, si.Restart.ConsecutiveFailures, delay.Value);
+        PersistSupervisionState(); // crash registered (→RestartPending) — persist the streak across any daemon death
         EmitSupervisionEvent(EventCrashed, name, exit, si.Restart.ConsecutiveFailures);
     }
 
@@ -650,6 +735,7 @@ internal sealed class InstanceSupervisor(
             si.Phase = SupervisionPhase.Failed;
             si.LastReason = $"restart failed ({reason}); crash-looped ({si.Restart.ConsecutiveFailures} failures); gave up after {policy.MaxRetries} retries";
             logger.LogWarning("{Instance} restart failed and gave up after {Max} retries: {Reason}", si.Name, policy.MaxRetries, reason);
+            PersistSupervisionState(); // gave up (→Failed) after a failed respawn — persist the latch
             // The respawn never produced a process, so there is no exit code to report (honest unknown).
             EmitSupervisionEvent(EventFailed, si.Name, null, si.Restart.ConsecutiveFailures);
             return;
@@ -658,6 +744,7 @@ internal sealed class InstanceSupervisor(
         si.LastReason = $"restart failed ({reason}); retry #{si.Restart.ConsecutiveFailures} in {(int)delay.Value.TotalSeconds}s";
         logger.LogWarning("{Instance} restart failed ({Reason}); retry #{N} in {Delay}",
             si.Name, reason, si.Restart.ConsecutiveFailures, delay.Value);
+        PersistSupervisionState(); // another failed-respawn streak increment — persist it
     }
 
     // ---- helpers ----------------------------------------------------------------------------
@@ -730,6 +817,32 @@ internal sealed class InstanceSupervisor(
                     "Failed to emit {Event} for {Instance} (event dropped)", dashEventName, instanceName);
             }
         });
+    }
+
+    /// <summary>
+    /// Snapshot every supervised instance's restart bookkeeping (streak, give-up latch, phase, timing,
+    /// last reason) to disk via <see cref="SupervisionStateStore"/>, so it survives ANY daemon death.
+    /// Called after each meaningful transition (crash → restart-pending, give-up → failed, stability
+    /// reset, clean stop, deliberate stop/disable). The file is tiny and counters only move on a crash,
+    /// so a full per-transition snapshot is cheap; the store's write is atomic + best-effort, so a failed
+    /// write never breaks supervision. Always invoked under the gate (every caller holds it).
+    /// </summary>
+    private void PersistSupervisionState()
+    {
+        var state = new PersistedSupervisionState();
+        foreach (var si in _instances.Values)
+        {
+            state.Instances[si.Name] = new InstanceRestartState
+            {
+                ConsecutiveFailures = si.Restart.ConsecutiveFailures,
+                GaveUp = si.Restart.GaveUp,
+                Phase = si.Phase.ToString(),
+                SpawnedAt = si.SpawnedAt,
+                NextRestartAt = si.NextRestartAt,
+                LastReason = si.LastReason,
+            };
+        }
+        supervisionStore.Save(state);
     }
 
     /// <summary>Fork the game from the instance's cached spec into a fresh cgroup; on success the record is Running.</summary>

@@ -134,6 +134,19 @@ internal sealed class RestartTracker
     /// <summary>The instance has been up past the stability threshold — it's healthy; clear the streak.</summary>
     public void NoteStable() => ConsecutiveFailures = 0;
 
+    /// <summary>
+    /// Re-seat the counters from a persisted snapshot on boot, so a crash-streak / give-up latch survives
+    /// <b>any</b> daemon death (a hot-swap, but also an unclean SIGKILL/OOM) instead of silently resetting
+    /// to zero. Distinct from <see cref="Reset"/> (which clears the latch for a manual start): this
+    /// <em>preserves</em> honesty across a restart the operator did not ask for. Mutated only under the
+    /// supervisor's gate at rehydrate time, like the rest of the tracker.
+    /// </summary>
+    internal void Restore(int consecutiveFailures, bool gaveUp)
+    {
+        ConsecutiveFailures = consecutiveFailures;
+        GaveUp = gaveUp;
+    }
+
     /// <summary>A manual start clears both the streak and the give-up latch (the operator overrides).</summary>
     public void Reset()
     {

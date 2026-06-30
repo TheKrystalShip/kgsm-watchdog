@@ -23,6 +23,7 @@
 
     <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
     <AssemblyName>kgsm-watchdog</AssemblyName>
+    <Version>1.0.0</Version>
 
     <!-- The source-generated [LibraryImport] p/invokes (mkfifo/open/write/setres*uid)
          emit unsafe marshalling stubs; no hand-written unsafe code in the project. -->
@@ -72,5 +73,17 @@
          this net10 AOT app is a verified pattern (same as kgsm-monitor). -->
     <PackageReference Include="TheKrystalShip.KGSM.Lib" Version="1.28.0" />
   </ItemGroup>
+
+  <Target Name="SetSourceRevisionId" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo;CoreCompile"
+          Condition="'$(SourceRevisionId)' == ''">
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; rev-parse --short=12 HEAD"
+          ConsoleToMSBuild="true" ContinueOnError="true" StandardErrorImportance="low" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitShortSha" />
+      <Output TaskParameter="ExitCode" PropertyName="_GitExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(_GitExitCode)' == '0' and '$(_GitShortSha)' != ''">
+      <SourceRevisionId>$(_GitShortSha)</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
 
 </Project>

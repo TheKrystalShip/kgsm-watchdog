@@ -11,11 +11,21 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// the SAME <see cref="PlayerPresenceParser.ParseResult"/> shape and the same dash-form event names, so
 /// downstream emit is identical to the container path.
 /// <para>
+/// <b>Named groups (player-presence contract §4).</b> <c>id</c>/<c>name</c>/<c>addr</c>/<c>key</c>/
+/// <c>reason</c> are all optional; a group that didn't participate, or captured only whitespace, is
+/// treated as absent (null) — never a fabricated empty value.
+/// </para>
+/// <para>
 /// <b>Honesty rules (mirroring the shim).</b> An empty/unset pattern disables that detection (no event
 /// invented). An invalid regex disables that detection and records a warning (the ingester logs it) —
-/// never crashes. A line that matches but captures neither <c>id</c> nor <c>name</c> is dropped (the
-/// at-least-one-non-null rule). A line that matches no pattern is silently ignored (the normal case —
-/// most log lines aren't presence lines — so it is NOT a loggable drop).
+/// never crashes. On a <b>join</b>, a line that matches but captures none of <c>id</c>/<c>name</c>/
+/// <c>addr</c> is dropped (the at-least-one-of-id/name/addr rule — a session with no human-meaningful
+/// field is not a roster entry; <c>key</c> alone doesn't count, it's an opaque correlation token, not an
+/// identity). A <b>leave</b> has no such guard here — leaves are frequently bare tokens (romestead's
+/// addr-only, Valheim/Core Keeper's key-only); the per-instance session map (<see cref="PlayerSessionMap"/>)
+/// is what resolves a leave's identity from the matching join, or honestly skips it. A line that matches
+/// no pattern is silently ignored (the normal case — most log lines aren't presence lines — so it is NOT
+/// a loggable drop).
 /// </para>
 /// <para>
 /// <b>AOT + safety.</b> Patterns are blueprint-supplied (not compile-time constants), so a runtime
@@ -72,15 +82,15 @@ internal sealed class NativeLogMatcher
         if (string.IsNullOrEmpty(line))
             return Ignore;
 
-        return TryMatch(_joined, PlayerPresenceParser.EventPlayerJoined, line)
-            ?? TryMatch(_left, PlayerPresenceParser.EventPlayerLeft, line)
+        return TryMatch(_joined, PlayerPresenceParser.EventPlayerJoined, line, isJoin: true)
+            ?? TryMatch(_left, PlayerPresenceParser.EventPlayerLeft, line, isJoin: false)
             ?? Ignore;
     }
 
     // A non-emit the ingester does NOT log: the overwhelmingly common "this line is not a presence line".
-    private static PlayerPresenceParser.ParseResult Ignore => new(false, null, null, null, null);
+    private static PlayerPresenceParser.ParseResult Ignore => new(false, null, null, null, null, null, null, null);
 
-    private static PlayerPresenceParser.ParseResult? TryMatch(Regex? rx, string eventName, string line)
+    private static PlayerPresenceParser.ParseResult? TryMatch(Regex? rx, string eventName, string line, bool isJoin)
     {
         if (rx is null)
             return null;
@@ -100,11 +110,17 @@ internal sealed class NativeLogMatcher
 
         string? id = Group(m, "id");
         string? name = Group(m, "name");
-        if (id is null && name is null)
-            return PlayerPresenceParser.ParseResult.Drop(
-                "matched but captured neither id nor name (at-least-one-non-null violated)");
+        string? addr = Group(m, "addr");
+        string? key = Group(m, "key");
+        string? reason = Group(m, "reason");
 
-        return PlayerPresenceParser.ParseResult.Event(eventName, id, name);
+        // The identity guard is join-only: a leave resolves its identity from the session map (or
+        // honestly skips), so a bare-token leave (addr-only / key-only) is expected, not an anomaly.
+        if (isJoin && id is null && name is null && addr is null)
+            return PlayerPresenceParser.ParseResult.Drop(
+                "matched but captured no identity (id/name/addr all absent — at-least-one-non-null violated)");
+
+        return PlayerPresenceParser.ParseResult.Event(eventName, id, name, addr, key, reason);
     }
 
     // A named group that didn't participate, or captured only whitespace, is treated as absent (null) —

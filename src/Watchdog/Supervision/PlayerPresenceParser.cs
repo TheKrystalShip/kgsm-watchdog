@@ -31,17 +31,26 @@ internal static class PlayerPresenceParser
     /// dash-form <see cref="EventName"/> and the positional emit params, or a drop with a human
     /// <see cref="DropReason"/>. <see cref="PlayerId"/>/<see cref="PlayerName"/> are the raw captures
     /// (null ⇒ unavailable, surfaced to the emit layer as an empty positional arg — never fabricated).
+    /// <see cref="PlayerAddr"/>/<see cref="Key"/>/<see cref="Reason"/> are native-matcher-only additions
+    /// (player-presence contract §4): the container NDJSON schema (this parser's input) doesn't carry
+    /// them yet, so they stay null on every result this type produces — <see cref="NativeLogMatcher"/>
+    /// is the one that populates them, reusing this same result shape per its doc comment.
     /// </summary>
     internal readonly record struct ParseResult(
         bool Emit,
         string? EventName,
         string? PlayerId,
         string? PlayerName,
+        string? PlayerAddr,
+        string? Key,
+        string? Reason,
         string? DropReason)
     {
-        public static ParseResult Drop(string reason) => new(false, null, null, null, reason);
-        public static ParseResult Event(string eventName, string? id, string? name)
-            => new(true, eventName, id, name, null);
+        public static ParseResult Drop(string reason) => new(false, null, null, null, null, null, null, reason);
+
+        public static ParseResult Event(
+            string eventName, string? id, string? name, string? addr = null, string? key = null, string? reason = null)
+            => new(true, eventName, id, name, addr, key, reason, null);
     }
 
     /// <summary>

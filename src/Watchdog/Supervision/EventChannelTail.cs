@@ -37,6 +37,12 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// is not an error: <see cref="ReadNewLines"/> returns nothing and the tracker resets, so it is picked
 /// up from offset 0 the moment it appears. The same holds if a file vanishes and later returns.
 /// </para>
+/// <para>
+/// <b>Reset signal.</b> <see cref="LastReadResetSession"/> surfaces "this call detected a genuine new
+/// session" up to a session-scoped consumer — <see cref="NativePlayerPresenceIngester"/>'s
+/// <see cref="PlayerSessionMap"/> clears itself on it, since every prior session is gone with the old
+/// file.
+/// </para>
 /// <para>Not thread-safe by design — one tail per file, driven by a single poll loop.</para>
 /// </summary>
 internal sealed class EventChannelTail(string path, bool primeAtEnd = false)
@@ -66,12 +72,26 @@ internal sealed class EventChannelTail(string path, bool primeAtEnd = false)
     public long CurrentOffset => _offset;
 
     /// <summary>
+    /// True when the <see cref="ReadNewLines"/> call just completed detected a <b>genuine new session</b>
+    /// — an inode change after an already-established attach, or a same-inode shrink (the reuse safety
+    /// net) — as opposed to this tail's very first-ever attach (there is nothing to reset: a fresh
+    /// session-scoped consumer, e.g. <see cref="PlayerSessionMap"/>, starts empty anyway, so flagging the
+    /// first attach as "reset" would be a no-op at best and a confusing signal at worst). A consumer that
+    /// holds session-scoped state keys its reset off THIS flag rather than off inode-equality directly.
+    /// Recomputed at the top of every <see cref="ReadNewLines"/> call.
+    /// </summary>
+    public bool LastReadResetSession { get; private set; }
+
+    /// <summary>
     /// Read every complete line appended since the last call, advancing the offset. Returns an empty
     /// list when the file is absent, unreadable, or has no new complete line. Resets to offset 0 on an
-    /// inode change (fresh container session) or a shrink (same-inode reuse safety net).
+    /// inode change (fresh container session) or a shrink (same-inode reuse safety net); either resets
+    /// past the first attach are reported via <see cref="LastReadResetSession"/>.
     /// </summary>
     public IReadOnlyList<string> ReadNewLines()
     {
+        LastReadResetSession = false;
+
         ulong? inode = TryReadInode(Path);
         if (inode is null)
         {
@@ -86,10 +106,13 @@ internal sealed class EventChannelTail(string path, bool primeAtEnd = false)
         // 0" (the primary rotation signal per the contract).
         if (_inode != inode)
         {
+            bool alreadyAttachedOnce = _primed; // false only on this tail's very first attach
             if (_primeAtEnd && !_primed)
                 PrimeAtEnd(inode);
             else
                 ResetTo(inode);
+            if (alreadyAttachedOnce)
+                LastReadResetSession = true; // a real rotation, not the initial attach
         }
         _primed = true;
 
@@ -105,11 +128,12 @@ internal sealed class EventChannelTail(string path, bool primeAtEnd = false)
 
         // Shrink with an UNCHANGED inode ⇒ same path was truncated/recreated onto a reused inode.
         // Additive safety net (see class remarks) — re-read from 0 rather than seek past EOF and miss
-        // every new line.
+        // every new line. Also a genuinely new session, so it flags the same way as an inode change.
         if (length < _offset)
         {
             _offset = 0;
             _pending.Clear();
+            LastReadResetSession = true;
         }
 
         if (length <= _offset)

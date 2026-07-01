@@ -31,6 +31,13 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// session when it appends), so this is decoupled from supervision/run-state, exactly like the container
 /// ingester is decoupled from kgsm-lib enumeration.
 /// </para>
+/// <para>
+/// <b>Correlation (player-presence contract §4).</b> Each watch owns a <see cref="PlayerSessionMap"/>:
+/// join inserts-if-absent (dedups a doubled join line), leave resolves-and-evicts (dedups a repeated
+/// leave burst and recovers the identity a bare-token leave line doesn't itself carry). The map is
+/// cleared whenever <see cref="EventChannelTail.LastReadResetSession"/> reports the log rolled to a
+/// fresh session — every prior session is gone with it.
+/// </para>
 /// </summary>
 internal sealed class NativePlayerPresenceIngester(
     WatchdogOptions options,
@@ -38,7 +45,7 @@ internal sealed class NativePlayerPresenceIngester(
     IEventManagementService events,
     ILogger<NativePlayerPresenceIngester> logger) : BackgroundService
 {
-    private sealed record NativeWatch(EventChannelTail Tail, NativeLogMatcher Matcher);
+    private sealed record NativeWatch(EventChannelTail Tail, NativeLogMatcher Matcher, PlayerSessionMap Sessions);
 
     // name -> live watch (native + at least one valid pattern). Survives across ticks so the tail cursor
     // resumes.
@@ -101,8 +108,17 @@ internal sealed class NativePlayerPresenceIngester(
                 _watches[name] = watch;
             }
 
-            foreach (string line in watch.Tail.ReadNewLines())
-                HandleLine(name, line, watch.Matcher);
+            IReadOnlyList<string> lines = watch.Tail.ReadNewLines();
+            if (watch.Tail.LastReadResetSession)
+            {
+                // The log rolled to a fresh session (inode change past the first attach, or a same-inode
+                // reuse) — every session this instance's map was tracking is gone with the old file.
+                watch.Sessions.Reset();
+                logger.LogDebug("native player-presence session map reset for {Instance} (new log session)", name);
+            }
+
+            foreach (string line in lines)
+                HandleLine(name, line, watch.Matcher, watch.Sessions);
         }
     }
 
@@ -155,16 +171,16 @@ internal sealed class NativePlayerPresenceIngester(
         var tail = new EventChannelTail(instance.LogFile, primeAtEnd: true);
         logger.LogInformation(
             "native player-presence watching {Instance} (log {Log})", name, instance.LogFile);
-        return new NativeWatch(tail, matcher);
+        return new NativeWatch(tail, matcher, new PlayerSessionMap());
     }
 
-    private void HandleLine(string instanceName, string line, NativeLogMatcher matcher)
+    private void HandleLine(string instanceName, string line, NativeLogMatcher matcher, PlayerSessionMap sessions)
     {
         PlayerPresenceParser.ParseResult result = matcher.Match(line);
         if (!result.Emit)
         {
             // DropReason null = a normal non-matching line (the common case) — never logged. A non-null
-            // reason is a real anomaly (matched-but-both-null, or a regex timeout) worth a warning.
+            // reason is a real anomaly (matched-but-no-identity, or a regex timeout) worth a warning.
             if (result.DropReason is not null)
                 logger.LogWarning(
                     "dropping native presence line for {Instance} ({Reason}): {Line}",
@@ -172,34 +188,74 @@ internal sealed class NativePlayerPresenceIngester(
             return;
         }
 
-        Emit(result.EventName!, instanceName, result.PlayerId, result.PlayerName);
+        // Contract §4: sessionKey = first-non-blank(key, addr, id, name). A join that passed the
+        // matcher's identity guard always yields one; a bare leave line with none of the four captured
+        // (should not happen for the four validated games, but never assumed) has nothing to key the map
+        // on and is skipped rather than risk keying on an empty string.
+        string? sessionKey = PlayerSessionMap.ComputeSessionKey(result.Key, result.PlayerAddr, result.PlayerId, result.PlayerName);
+        if (sessionKey is null)
+            return;
+
+        if (result.EventName == PlayerPresenceParser.EventPlayerJoined)
+        {
+            if (!sessions.Join(sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr))
+                return; // already tracked — a doubled join line (Valheim logs every line twice)
+
+            EmitJoined(instanceName, result.PlayerId, result.PlayerName, result.PlayerAddr, sessionKey);
+        }
+        else
+        {
+            PlayerSessionMap.Session? resolved = sessions.Leave(sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr);
+            if (resolved is not { } r)
+                return; // nothing to attribute (map miss + no id/name on the line) — honest skip, never fabricate
+
+            EmitLeft(instanceName, r.Id, r.Name, r.Addr, sessionKey, result.Reason);
+        }
     }
+
+    /// <summary>
+    /// Emit <c>instance-player-joined</c> per contract §1: <c>instanceName, playerId, playerName,
+    /// playerAddr, sessionKey</c> — five positional params, no trailing reason slot (joins don't have
+    /// one).
+    /// </summary>
+    private void EmitJoined(string instanceName, string? playerId, string? playerName, string? playerAddr, string sessionKey)
+        => Emit(
+            PlayerPresenceParser.EventPlayerJoined, instanceName, sessionKey,
+            $"id={Display(playerId)} name={Display(playerName)} addr={Display(playerAddr)}",
+            [instanceName, playerId ?? string.Empty, playerName ?? string.Empty, playerAddr ?? string.Empty, sessionKey]);
+
+    /// <summary>
+    /// Emit <c>instance-player-left</c> per contract §1: <c>instanceName, playerId, playerName,
+    /// playerAddr, sessionKey, reason</c> — six positional params, the trailing slot the join event
+    /// doesn't have.
+    /// </summary>
+    private void EmitLeft(string instanceName, string? playerId, string? playerName, string? playerAddr, string sessionKey, string? reason)
+        => Emit(
+            PlayerPresenceParser.EventPlayerLeft, instanceName, sessionKey,
+            $"id={Display(playerId)} name={Display(playerName)} addr={Display(playerAddr)} reason={Display(reason)}",
+            [instanceName, playerId ?? string.Empty, playerName ?? string.Empty, playerAddr ?? string.Empty, sessionKey, reason ?? string.Empty]);
+
+    private static string Display(string? value) => string.IsNullOrEmpty(value) ? "<none>" : value;
 
     /// <summary>
     /// Emit one presence event through kgsm-lib, stamped <c>actor="system" / origin="system"</c> — an
     /// autonomous observation no human drove, identical to the container ingester and the supervisor's
     /// system/system emits. <b>Why not <c>actor:null</c>:</b> a null actor makes kgsm-lib omit
     /// <c>KGSM_EVENT_ACTOR</c> and kgsm's payload builder then falls back to the daemon's OS user — a
-    /// fabricated human identity on an autonomous event. Null id/name pass as empty string (a string-based
-    /// emit can't carry a literal JSON null mid-args; kgsm maps empty→null, and the matcher's
-    /// at-least-one-non-null guard ensures at most one is empty). Best-effort: a failed emit is logged and
-    /// swallowed, never crashes the ingester.
+    /// fabricated human identity on an autonomous event. Null fields pass as empty string (a string-based
+    /// emit can't carry a literal JSON null mid-args; kgsm maps empty→null); <paramref name="parameters"/>
+    /// is pre-built by <see cref="EmitJoined"/>/<see cref="EmitLeft"/> so each event carries exactly its
+    /// contract arity. Best-effort: a failed emit is logged and swallowed, never crashes the ingester.
     /// </summary>
-    private void Emit(string eventName, string instanceName, string? playerId, string? playerName)
+    private void Emit(string eventName, string instanceName, string sessionKey, string detail, string[] parameters)
     {
         try
         {
-            events.EmitWithProvenance(
-                eventName,
-                actor: "system",
-                origin: "system",
-                instanceName, playerId ?? string.Empty, playerName ?? string.Empty);
+            events.EmitWithProvenance(eventName, actor: "system", origin: "system", parameters);
 
             logger.LogInformation(
-                "emitted {Event} for {Instance} (id={Id} name={Name})",
-                eventName, instanceName,
-                string.IsNullOrEmpty(playerId) ? "<none>" : playerId,
-                string.IsNullOrEmpty(playerName) ? "<none>" : playerName);
+                "emitted {Event} for {Instance} (session={SessionKey} {Detail})",
+                eventName, instanceName, sessionKey, detail);
         }
         catch (Exception ex)
         {

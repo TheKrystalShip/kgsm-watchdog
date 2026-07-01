@@ -15,6 +15,13 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// kgsm-lib seams): first-attach-at-EOF skips a pre-existing append-only log's history, appended join/left
 /// lines emit with the right name/provenance/param order, a non-native instance and a native instance
 /// with no patterns are skipped, and the tail cursor resumes across passes (no redelivery).
+/// <para>
+/// Also covers the player-presence contract §4 correlation + dedup, fed the REAL log lines from all
+/// four validated games (matcher + <see cref="PlayerSessionMap"/> + <see cref="EventChannelTail"/>
+/// together): stationeers (self-identifying), romestead (addr-correlated, incl. co-NAT distinct ports),
+/// Valheim (doubled join lines + a 6x repeated leave burst, key-correlated), Core Keeper (opaque key +
+/// leave reason), and a log-rotation (inode change) resetting an instance's session map.
+/// </para>
 /// </summary>
 public sealed class NativePlayerPresenceIngesterTests : IDisposable
 {
@@ -71,7 +78,11 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.Equal("instance-player-joined", join.EventType);
         Assert.Equal("system", join.Actor);
         Assert.Equal("system", join.Origin);
-        Assert.Equal(new[] { "factorio-test", "76561198000000000", "Alice" }, join.Parameters);
+        // instance, id, name, addr, sessionKey (5 positional params, contract §1) — no addr in this
+        // pattern, so sessionKey falls back to id (key ?? addr ?? id ?? name).
+        Assert.Equal(
+            new[] { "factorio-test", "76561198000000000", "Alice", "", "76561198000000000" },
+            join.Parameters);
 
         // ...then a leave; the tail cursor resumes, so only the new line emits.
         File.AppendAllText(log, "2026-06-20 12:05:00 [LEAVE] Alice (76561198000000000) left the game\n");
@@ -79,7 +90,11 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         Assert.Equal(2, rec.Calls.Count);
         Assert.Equal("instance-player-left", rec.Calls[1].EventType);
-        Assert.Equal(new[] { "factorio-test", "76561198000000000", "Alice" }, rec.Calls[1].Parameters);
+        // instance, id, name, addr, sessionKey, reason (6 positional params) — resolved via the session
+        // map (the join's captures), reason empty (this pattern has no reason group).
+        Assert.Equal(
+            new[] { "factorio-test", "76561198000000000", "Alice", "", "76561198000000000", "" },
+            rec.Calls[1].Parameters);
     }
 
     [Fact]
@@ -139,6 +154,183 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Empty(rec.Calls);
+    }
+
+    // ---- contract §4: real-log-line correlation across the four validated games ---------------
+
+    [Fact]
+    public void Stationeers_self_identifying_join_and_leave_resolve_the_same_session()
+    {
+        string log = MakeInstanceWithLog("stationeers", "stationeers-test", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("stationeers-test", log,
+            joined: @"Client (?<name>.+?) \((?<id>\d+)\) is ready",
+            left: @"Client disconnected: \d+ \| (?<name>.+?)\s+connectTime:.*ClientId: (?<id>\d+)"));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root); // primes at EOF
+
+        File.AppendAllText(log, "16:23:51: Client Heisen (76561198144397568) is ready\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
+        Assert.Equal(
+            new[] { "stationeers-test", "76561198144397568", "Heisen", "", "76561198144397568" },
+            rec.Calls[0].Parameters);
+
+        File.AppendAllText(log,
+            "16:24:23: Client disconnected: 684548920970441496 | Heisen      connectTime: 58.9s, ClientId: 76561198144397568\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(2, rec.Calls.Count);
+        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
+        // Resolved via the map (self-identifying here, so it matches what the leave line itself carries).
+        Assert.Equal(
+            new[] { "stationeers-test", "76561198144397568", "Heisen", "", "76561198144397568", "" },
+            rec.Calls[1].Parameters);
+    }
+
+    [Fact]
+    public void Romestead_addr_correlated_leave_resolves_name_and_conat_sessions_stay_distinct()
+    {
+        string log = MakeInstanceWithLog("romestead", "romestead-test", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("romestead-test", log,
+            joined: @"Character '(?<name>[^']+)' \(Peer \d+ - (?<addr>[\d.]+:\d+)\) logged in",
+            left: @"Peer (?<addr>[\d.]+:\d+) disconnected"));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root);
+
+        // Two players behind the same NAT gateway (co-NAT) — same IP, distinct ports.
+        File.AppendAllText(log,
+            "Character 'Aelia' (Peer 0 - 86.191.216.57:58845) logged in with external id '', assigned to player id 1\n" +
+            "Character 'Brutus' (Peer 1 - 86.191.216.57:53376) logged in with external id '', assigned to player id 2\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(2, rec.Calls.Count);
+        Assert.Equal(
+            new[] { "romestead-test", "", "Aelia", "86.191.216.57:58845", "86.191.216.57:58845" },
+            rec.Calls[0].Parameters);
+        Assert.Equal(
+            new[] { "romestead-test", "", "Brutus", "86.191.216.57:53376", "86.191.216.57:53376" },
+            rec.Calls[1].Parameters);
+
+        // Aelia's bare-addr leave must resolve her name — and must not disturb Brutus's session.
+        File.AppendAllText(log, "Peer 86.191.216.57:58845 disconnected - RemoteConnectionClose\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(3, rec.Calls.Count);
+        Assert.Equal("instance-player-left", rec.Calls[2].EventType);
+        Assert.Equal(
+            new[] { "romestead-test", "", "Aelia", "86.191.216.57:58845", "86.191.216.57:58845", "" },
+            rec.Calls[2].Parameters);
+
+        // Brutus's own leave still resolves independently — the co-NAT sessions never collided.
+        File.AppendAllText(log, "Peer 86.191.216.57:53376 disconnected - RemoteConnectionClose\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(4, rec.Calls.Count);
+        Assert.Equal(
+            new[] { "romestead-test", "", "Brutus", "86.191.216.57:53376", "86.191.216.57:53376", "" },
+            rec.Calls[3].Parameters);
+    }
+
+    [Fact]
+    public void Valheim_doubled_join_lines_dedup_and_a_6x_repeated_leave_burst_dedups_key_correlated()
+    {
+        string log = MakeInstanceWithLog("valheim", "valheim-test", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("valheim-test", log,
+            joined: @"Got character ZDOID from (?<name>.+?) : (?<key>\d+):\d+",
+            left: @"Destroying abandoned non persistent zdo \d+:\d+ owner (?<key>\d+)"));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root);
+
+        // Every real Valheim line appears twice: a Console-wrapped form and a bare form.
+        File.AppendAllText(log,
+            "07/01/2026 16:56:10: Console: [Info   :   Unity Log] Got character ZDOID from Test : 651023867:1\n" +
+            "07/01/2026 16:56:10: Got character ZDOID from Test : 651023867:1\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls); // the doubled line dedups to exactly one join
+        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
+        Assert.Equal(new[] { "valheim-test", "", "Test", "", "651023867" }, rec.Calls[0].Parameters);
+
+        // The cleanup burst re-logs the same disconnect up to 6x.
+        for (int i = 0; i < 6; i++)
+            File.AppendAllText(log, "07/01/2026 16:56:21: Destroying abandoned non persistent zdo 651023867:1 owner 651023867\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(2, rec.Calls.Count); // exactly one left; the other 5 deduped via evict
+        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
+        Assert.Equal(new[] { "valheim-test", "", "Test", "", "651023867", "" }, rec.Calls[1].Parameters);
+    }
+
+    [Fact]
+    public void Corekeeper_opaque_key_join_and_leave_with_reason_resolve_and_evict()
+    {
+        string log = MakeInstanceWithLog("corekeeper", "corekeeper-test", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("corekeeper-test", log,
+            joined: @"\[userid:(?<key>\d+)\] player (?<name>.+?) connected",
+            left: @"Disconnected from userid:(?<key>\d+) with reason (?<reason>\S+)"));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root);
+
+        File.AppendAllText(log, "[userid:3801603394] player Woltah connected islocalplayer=False\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls);
+        Assert.Equal(new[] { "corekeeper-test", "", "Woltah", "", "3801603394" }, rec.Calls[0].Parameters);
+
+        File.AppendAllText(log, "Disconnected from userid:3801603394 with reason App_Min\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(2, rec.Calls.Count);
+        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
+        Assert.Equal(new[] { "corekeeper-test", "", "Woltah", "", "3801603394", "App_Min" }, rec.Calls[1].Parameters);
+    }
+
+    [Fact]
+    public void Inode_change_resets_the_session_map_a_post_reset_bare_leave_is_honestly_skipped()
+    {
+        // A fresh server session (log rotated / restarted) must wipe every session the map was tracking
+        // — a leave that arrives afterwards for a pre-reset key, carrying no identity of its own, has
+        // nothing to attribute and must be skipped rather than resolved against stale state.
+        string log = MakeInstanceWithLog("corekeeper", "corekeeper-reset-test", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("corekeeper-reset-test", log,
+            joined: @"\[userid:(?<key>\d+)\] player (?<name>.+?) connected",
+            left: @"Disconnected from userid:(?<key>\d+) with reason (?<reason>\S+)"));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root); // primes at EOF of the (empty) file
+
+        File.AppendAllText(log, "[userid:3801603394] player Woltah connected islocalplayer=False\n");
+        ingester.IngestOnce(_root);
+        Assert.Single(rec.Calls); // the join landed; the session is now tracked
+
+        // Simulate a new server session: the old log is gone, a brand-new (shorter) file takes its
+        // place — either a fresh inode or a same-inode reuse, both of which the tail treats as a reset.
+        File.Delete(log);
+        File.WriteAllText(log, "");
+        ingester.IngestOnce(_root); // detects the reset and clears this instance's session map
+
+        // The SAME key reappears in a bare leave line (no name/id of its own) — the map has nothing for
+        // it any more.
+        File.AppendAllText(log, "Disconnected from userid:3801603394 with reason App_Min\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls); // still just the one join — the post-reset leave was honestly skipped
     }
 
     // ---- helpers ------------------------------------------------------------------------------

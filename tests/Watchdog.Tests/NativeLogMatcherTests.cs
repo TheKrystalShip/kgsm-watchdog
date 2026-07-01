@@ -6,7 +6,9 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// Covers the pure native log matcher — the .NET analog of the container in-image shim's matching step.
 /// Pins: named-group capture (id/name, either optional), the at-least-one-non-null drop, an empty pattern
 /// disabling that detection, an invalid pattern disabling + warning (never throwing), joined-before-left
-/// precedence, and that a non-matching line is a SILENT ignore (not a loggable drop).
+/// precedence, and that a non-matching line is a SILENT ignore (not a loggable drop). Also covers the
+/// player-presence contract §4 additions: the <c>addr</c>/<c>key</c>/<c>reason</c> groups, the relaxed
+/// join guard (id||name||addr — <c>key</c> alone doesn't count), and that a leave has no such guard.
 /// </summary>
 public sealed class NativeLogMatcherTests
 {
@@ -105,5 +107,72 @@ public sealed class NativeLogMatcherTests
 
         Assert.False(m.Match("[JOIN] Alice (1) joined").Emit);  // joined disabled
         Assert.True(m.Match("[LEAVE] Bob (2) left").Emit);      // left still matches
+    }
+
+    // ---- contract §4 additions: addr/key/reason groups + the relaxed join guard --------------------
+
+    [Fact]
+    public void Addr_only_join_satisfies_the_relaxed_identity_guard()
+    {
+        // romestead-shaped: no id, no key, just a real ip:port — addr alone must satisfy the guard.
+        var m = new NativeLogMatcher(@"\(Peer \d+ - (?<addr>[\d.]+:\d+)\) logged in", "");
+        var r = m.Match("Character 'Aelia' (Peer 0 - 86.191.216.57:58845) logged in with external id ''");
+
+        Assert.True(r.Emit);
+        Assert.Equal("86.191.216.57:58845", r.PlayerAddr);
+        Assert.Null(r.PlayerId);
+        Assert.Null(r.PlayerName);
+    }
+
+    [Fact]
+    public void Key_only_join_still_fails_the_guard_key_is_not_an_identity()
+    {
+        // An opaque correlation token with no id/name/addr alongside it is not a roster-worthy identity —
+        // the guard only recognizes id/name/addr, `key` is deliberately excluded.
+        var m = new NativeLogMatcher(@"session (?<key>\d+) opened", "");
+        var r = m.Match("session 12345 opened");
+
+        Assert.False(r.Emit);
+        Assert.NotNull(r.DropReason);
+        Assert.Contains("at-least-one-non-null", r.DropReason);
+    }
+
+    [Fact]
+    public void Join_captures_key_alongside_name_valheim_shaped()
+    {
+        var m = new NativeLogMatcher(@"Got character ZDOID from (?<name>.+?) : (?<key>\d+):\d+", "");
+        var r = m.Match("Got character ZDOID from Test : 651023867:1");
+
+        Assert.True(r.Emit);
+        Assert.Equal("Test", r.PlayerName);
+        Assert.Equal("651023867", r.Key);
+        Assert.Null(r.PlayerId);
+        Assert.Null(r.PlayerAddr);
+    }
+
+    [Fact]
+    public void Leave_with_only_addr_is_not_guarded_the_map_resolves_it()
+    {
+        // romestead's leave line carries nothing but the endpoint — the matcher must NOT drop this (no
+        // identity guard on leave); PlayerSessionMap is what recovers the name.
+        var m = new NativeLogMatcher("", @"Peer (?<addr>[\d.]+:\d+) disconnected");
+        var r = m.Match("Peer 86.191.216.57:58845 disconnected - RemoteConnectionClose");
+
+        Assert.True(r.Emit);
+        Assert.Equal(PlayerPresenceParser.EventPlayerLeft, r.EventName);
+        Assert.Equal("86.191.216.57:58845", r.PlayerAddr);
+        Assert.Null(r.PlayerId);
+        Assert.Null(r.PlayerName);
+    }
+
+    [Fact]
+    public void Leave_captures_reason_corekeeper_shaped()
+    {
+        var m = new NativeLogMatcher("", @"Disconnected from userid:(?<key>\d+) with reason (?<reason>\S+)");
+        var r = m.Match("Disconnected from userid:3801603394 with reason App_Min");
+
+        Assert.True(r.Emit);
+        Assert.Equal("3801603394", r.Key);
+        Assert.Equal("App_Min", r.Reason);
     }
 }

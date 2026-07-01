@@ -89,4 +89,21 @@ internal sealed class PlayerSessionStore
         }
         return result;
     }
+
+    /// <summary>
+    /// Get a snapshot of all currently tracked sessions with their session keys, across all
+    /// instances. Used by the control surface to build the <c>GET /players</c> response.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<KeyValuePair<string, PlayerSessionMap.Session>>> GetAllSessionsWithKeys()
+    {
+        var result = new Dictionary<string, IReadOnlyList<KeyValuePair<string, PlayerSessionMap.Session>>>(StringComparer.Ordinal);
+        foreach (var kvp in _maps)
+        {
+            lock (kvp.Value)
+            {
+                result[kvp.Key] = kvp.Value.SnapshotEntries();
+            }
+        }
+        return result;
+    }
 }

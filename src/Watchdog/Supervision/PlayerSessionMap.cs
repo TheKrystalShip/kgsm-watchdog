@@ -107,4 +107,10 @@ internal sealed class PlayerSessionMap
     /// to serve the control surface without holding the lock during serialization.
     /// </summary>
     public IReadOnlyList<Session> Snapshot() => [.. _sessions.Values];
+
+    /// <summary>
+    /// Return a point-in-time copy of all tracked sessions with their keys. Used by the control
+    /// surface to build the <c>GET /players</c> response.
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, Session>> SnapshotEntries() => [.. _sessions];
 }

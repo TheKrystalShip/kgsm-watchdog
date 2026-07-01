@@ -90,7 +90,17 @@ internal static class ControlEndpoints
         // populates. Consumer (kgsm-api) uses this on startup to reconcile roster status without
         // waiting for events. Returns an empty object (not 404) when no instances have tracked sessions.
         app.MapGet("/players", (PlayerSessionStore store) =>
-            Results.Json(store.GetAllSessions(), WatchdogJsonContext.Default.DictionaryStringPlayerSessionArray));
+        {
+            var all = store.GetAllSessionsWithKeys();
+            var result = new Dictionary<string, PlayerSession[]>(StringComparer.Ordinal);
+            foreach (var kvp in all)
+            {
+                result[kvp.Key] = kvp.Value
+                    .Select(e => new PlayerSession(e.Key, e.Value.Id, e.Value.Name, e.Value.Addr))
+                    .ToArray();
+            }
+            return Results.Json(result, WatchdogJsonContext.Default.DictionaryStringPlayerSessionArray);
+        });
     }
 }
 

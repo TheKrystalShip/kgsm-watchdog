@@ -7,17 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-01
+
 ### Added
-- Player-presence contract §4: `NativeLogMatcher` now recognizes `addr`/`key`/`reason` named groups
-  (alongside the existing `id`/`name`), with the join identity guard relaxed to
-  `id || name || addr` (an opaque `key` alone is not a roster-worthy identity). New per-instance
-  `PlayerSessionMap` correlates and dedups native join/leave lines (`sessionKey = key ?? addr ?? id ??
-  name`; insert-if-absent on join, resolve-and-evict on leave, with an honest fallback/skip when the
-  map misses) — validated against real log lines from all four survey games (stationeers, romestead,
-  Valheim, Core Keeper). `EventChannelTail` gained `LastReadResetSession`, so `NativePlayerPresenceIngester`
-  clears an instance's session map on a genuine log rotation (not on its first-ever attach).
-  `instance-player-joined`/`instance-player-left` now emit `playerAddr` + `sessionKey` (and `reason` on
-  `left`) alongside the existing `playerId`/`playerName`.
+- `GET /players` endpoint: returns all instances' live player sessions as a JSON object keyed by
+  instance name. Each session carries `sessionKey`, `id`, `name`, `addr`. Used by kgsm-api on
+  startup to reconcile roster status without waiting for events.
+- `PlayerSessionStore` — thread-safe DI singleton wrapping per-instance `PlayerSessionMap`s.
+  Extracted from `NativePlayerPresenceIngester` so the control surface can read the session map
+  while the ingester writes. The ingester now delegates `Join`/`Leave`/`Reset` to the store.
+
+### Changed
+- `NativePlayerPresenceIngester` no longer owns per-instance `PlayerSessionMap`s directly — they
+  live in the shared `PlayerSessionStore`. The `NativeWatch` record no longer carries a `Sessions`
+  field. No behavioral change to event emission.
 
 ## [1.0.0] - 2026-06-30
 

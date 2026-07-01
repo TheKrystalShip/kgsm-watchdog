@@ -27,6 +27,16 @@ public sealed record InstanceState(
 public sealed record ReadyState(bool Ready, string Detail);
 
 /// <summary>
+/// A single player session tracked by the watchdog's <c>PlayerSessionStore</c>. Served by
+/// <c>GET /players</c> so consumers (kgsm-api) can reconcile their roster on startup.
+/// </summary>
+public sealed record PlayerSession(
+    string? SessionKey,
+    string? Id,
+    string? Name,
+    string? Addr);
+
+/// <summary>
 /// The running daemon's build identity (Inc 7 Phase 0): the assembly informational version split
 /// into its semantic <c>version</c> and the source-control <c>commit</c> hash (the <c>+&lt;hash&gt;</c>
 /// suffix SourceLink stamps on the informational version). Served by <c>GET /version</c> so the

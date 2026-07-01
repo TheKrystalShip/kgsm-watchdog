@@ -101,4 +101,10 @@ internal sealed class PlayerSessionMap
 
         return null; // nothing to attribute — skip, never fabricate
     }
+
+    /// <summary>
+    /// Return a point-in-time copy of all tracked sessions. Used by <see cref="PlayerSessionStore"/>
+    /// to serve the control surface without holding the lock during serialization.
+    /// </summary>
+    public IReadOnlyList<Session> Snapshot() => [.. _sessions.Values];
 }

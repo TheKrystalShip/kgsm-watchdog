@@ -134,6 +134,7 @@ builder.Services.AddHostedService<PlayerPresenceIngester>();
 // (instance.LogFile, which SpawnEngine already targets) and emits the SAME player join/left wire events
 // (origin=system), matching the blueprint's player_*_regex (read off the Instance via kgsm-lib) with the
 // pure NativeLogMatcher. Additive + decoupled from supervision; no spawn-path change.
+builder.Services.AddSingleton<PlayerSessionStore>();
 builder.Services.AddHostedService<NativePlayerPresenceIngester>();
 
 // Control plane: a unix domain socket (no TCP port; the socket's filesystem perms are the

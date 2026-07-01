@@ -43,9 +43,10 @@ internal sealed class NativePlayerPresenceIngester(
     WatchdogOptions options,
     IInstanceService instances,
     IEventManagementService events,
+    PlayerSessionStore sessionStore,
     ILogger<NativePlayerPresenceIngester> logger) : BackgroundService
 {
-    private sealed record NativeWatch(EventChannelTail Tail, NativeLogMatcher Matcher, PlayerSessionMap Sessions);
+    private sealed record NativeWatch(EventChannelTail Tail, NativeLogMatcher Matcher);
 
     // name -> live watch (native + at least one valid pattern). Survives across ticks so the tail cursor
     // resumes.
@@ -113,12 +114,12 @@ internal sealed class NativePlayerPresenceIngester(
             {
                 // The log rolled to a fresh session (inode change past the first attach, or a same-inode
                 // reuse) — every session this instance's map was tracking is gone with the old file.
-                watch.Sessions.Reset();
+                sessionStore.Reset(name);
                 logger.LogDebug("native player-presence session map reset for {Instance} (new log session)", name);
             }
 
             foreach (string line in lines)
-                HandleLine(name, line, watch.Matcher, watch.Sessions);
+                HandleLine(name, line, watch.Matcher);
         }
     }
 
@@ -171,10 +172,10 @@ internal sealed class NativePlayerPresenceIngester(
         var tail = new EventChannelTail(instance.LogFile, primeAtEnd: true);
         logger.LogInformation(
             "native player-presence watching {Instance} (log {Log})", name, instance.LogFile);
-        return new NativeWatch(tail, matcher, new PlayerSessionMap());
+        return new NativeWatch(tail, matcher);
     }
 
-    private void HandleLine(string instanceName, string line, NativeLogMatcher matcher, PlayerSessionMap sessions)
+    private void HandleLine(string instanceName, string line, NativeLogMatcher matcher)
     {
         PlayerPresenceParser.ParseResult result = matcher.Match(line);
         if (!result.Emit)
@@ -198,14 +199,14 @@ internal sealed class NativePlayerPresenceIngester(
 
         if (result.EventName == PlayerPresenceParser.EventPlayerJoined)
         {
-            if (!sessions.Join(sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr))
+            if (!sessionStore.Join(instanceName, sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr))
                 return; // already tracked — a doubled join line (Valheim logs every line twice)
 
             EmitJoined(instanceName, result.PlayerId, result.PlayerName, result.PlayerAddr, sessionKey);
         }
         else
         {
-            PlayerSessionMap.Session? resolved = sessions.Leave(sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr);
+            PlayerSessionMap.Session? resolved = sessionStore.Leave(instanceName, sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr);
             if (resolved is not { } r)
                 return; // nothing to attribute (map miss + no id/name on the line) — honest skip, never fabricate
 

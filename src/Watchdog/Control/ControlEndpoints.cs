@@ -85,6 +85,12 @@ internal static class ControlEndpoints
             Results.Json(
                 WatchdogVersionInfo.FromInformational(VersionInfo.Informational),
                 WatchdogJsonContext.Default.WatchdogVersionInfo));
+
+        // Live player sessions across all instances — the in-memory session map the native ingester
+        // populates. Consumer (kgsm-api) uses this on startup to reconcile roster status without
+        // waiting for events. Returns an empty object (not 404) when no instances have tracked sessions.
+        app.MapGet("/players", (PlayerSessionStore store) =>
+            Results.Json(store.GetAllSessions(), WatchdogJsonContext.Default.DictionaryStringPlayerSessionArray));
     }
 }
 

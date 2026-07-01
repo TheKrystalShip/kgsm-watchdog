@@ -336,7 +336,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     // ---- helpers ------------------------------------------------------------------------------
 
     private NativePlayerPresenceIngester NewIngester(IEventManagementService events, IInstanceService instances)
-        => new(new WatchdogOptions { InstancesDir = _root }, instances, events, NullLogger<NativePlayerPresenceIngester>.Instance);
+        => new(new WatchdogOptions { InstancesDir = _root }, instances, events, new PlayerSessionStore(), NullLogger<NativePlayerPresenceIngester>.Instance);
 
     private static Instance Native(string name, string log, string joined, string left) => new()
     {

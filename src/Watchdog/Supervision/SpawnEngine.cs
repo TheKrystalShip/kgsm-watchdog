@@ -74,6 +74,13 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
             throw new InvalidOperationException($"{name}: failed to create cgroup {cgroups.PathFor(name)}");
         string cgProcs = Path.Combine(cgroups.PathFor(name), "cgroup.procs");
 
+        // 1b. Apply resource caps from instance config (Phase 2). Written before the game is born so a
+        //     memory.max cap bounds it from its first allocation; cpu.weight would re-apply live anyway.
+        if (instance.CpuPriority is { } priority && priority != "normal")
+            cgroups.SetCpuWeight(name, CgroupManager.CpuWeightFor(priority));
+        if (instance.MemoryCapMb is { } capMb and > 0)
+            cgroups.SetMemoryMax(name, capMb);
+
         // 2. Fresh FIFO for stdin.
         try { if (File.Exists(fifo)) File.Delete(fifo); } catch { /* recreated below */ }
         if (NativeMethods.mkfifo(fifo, Convert.ToUInt32("600", 8)) != 0)

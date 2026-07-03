@@ -177,6 +177,48 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
         return TryWrite(Path.Combine(cgDir, "cgroup.procs"), pid.ToString());
     }
 
+    /// <summary>Translates a priority name to a cgroup cpu.weight value (Linux default 100 = "normal").</summary>
+    public static int CpuWeightFor(string priority) => priority switch
+    {
+        "low"  => 50,
+        "high" => 400,
+        _      => 100,   // "normal" or unknown → Linux default
+    };
+
+    /// <summary>
+    /// Write the instance cgroup's <c>cpu.weight</c> (Phase 2, CPU priority). Live-applied — the kernel
+    /// re-weights the running cgroup immediately. Returns false (and logs) if the cgroup is absent
+    /// (instance not running), so the caller can report "will apply at next start".
+    /// </summary>
+    public bool SetCpuWeight(string instanceName, int weight)
+    {
+        string cg = PathFor(instanceName);
+        if (!Directory.Exists(cg))
+        {
+            _log.LogDebug("SetCpuWeight: cgroup {Cg} does not exist — instance not running", cg);
+            return false;
+        }
+        return TryWrite(Path.Combine(cg, "cpu.weight"), weight.ToString());
+    }
+
+    /// <summary>
+    /// Write the instance cgroup's <c>memory.max</c> (Phase 2, memory cap). A cap of 0 or null writes
+    /// <c>max</c> (uncapped). The kernel enforces the limit immediately, but a process already over it
+    /// is not retro-shrunk — so this is only guaranteed clean when set at spawn (before the game grows).
+    /// Returns false if the cgroup is absent.
+    /// </summary>
+    public bool SetMemoryMax(string instanceName, long? capMb)
+    {
+        string cg = PathFor(instanceName);
+        if (!Directory.Exists(cg))
+        {
+            _log.LogDebug("SetMemoryMax: cgroup {Cg} does not exist — instance not running", cg);
+            return false;
+        }
+        string value = capMb is null or <= 0 ? "max" : (capMb.Value * 1024 * 1024).ToString();
+        return TryWrite(Path.Combine(cg, "memory.max"), value);
+    }
+
     /// <summary>
     /// Liveness: true if the instance cgroup still has live processes, false if empty/absent.
     /// Reads <c>cgroup.events</c> <c>populated</c> — child-inclusive and race-free, unlike a PID check.

@@ -235,6 +235,48 @@ internal sealed class InstanceSupervisor(
         }
     }
 
+    /// <summary>
+    /// Atomically restart an instance: stop it, wait for its cgroup to drain, then start it again.
+    /// Routes through <see cref="StopAsync"/> + <see cref="StartAsync"/>, so it deliberately does NOT
+    /// count as a crash — <see cref="StartAsync"/> calls <c>si.Restart.Reset()</c>, leaving the
+    /// crash-recovery streak untouched. Emits <c>instance-restarted</c> with the caller's
+    /// <paramref name="origin"/> (default <c>scheduler</c>) so the audit trail attributes the restart to
+    /// whoever asked for it rather than to <c>system</c> (the crash-recovery emitter). This is the
+    /// intentional-restart path (kgsm-scheduler), distinct from the autonomous respawn in
+    /// <see cref="ReconcileRestartPending"/>.
+    /// </summary>
+    public async Task<ActionResult> RestartAsync(string name, string origin = "scheduler", CancellationToken ct = default)
+    {
+        var stopResult = await StopAsync(name, ct).ConfigureAwait(false);
+        if (!stopResult.Ok)
+            return new ActionResult(name, false, $"restart aborted — stop failed: {stopResult.Message}");
+
+        // Wait for the cgroup to drain — a process can linger briefly after SIGKILL before its cgroup empties.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline && cgroups.IsPopulated(name))
+            await Task.Delay(200, ct).ConfigureAwait(false);
+
+        var startResult = await StartAsync(name, ct).ConfigureAwait(false);
+        if (!startResult.Ok)
+            return new ActionResult(name, false, $"restart: stop ok; start failed: {startResult.Message}");
+
+        // Emit instance-restarted stamped with the caller's origin (NOT system/system like a crash
+        // recovery) so kgsm-api audits this as e.g. "scheduler". Fire-and-forget, same posture as
+        // EmitSystemEvent: a slow kgsm.sh spawn must not stall the caller, and a dropped event is the
+        // honest no-backfill boundary the consumer already accepts.
+        _ = Task.Run(() =>
+        {
+            try { events.EmitWithProvenance(EventRestarted, origin, origin, [name]); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to emit {Event} for {Instance} (event dropped)", EventRestarted, name);
+            }
+        });
+
+        logger.LogInformation("restarted {Instance} (origin={Origin})", name, origin);
+        return new ActionResult(name, true, $"restarted (origin={origin})");
+    }
+
     // ---- boot-autostart (enable/disable) ----------------------------------------------------
     // The systemctl-style boot axis, orthogonal to start/stop. These mutate ONLY the persisted set
     // (which RestoreAsync reads at boot); they never spawn or kill. `enable` does not start the

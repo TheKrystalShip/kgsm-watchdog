@@ -47,6 +47,18 @@ internal static class ControlEndpoints
                 statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });
 
+        // Atomic restart (stop → drain → start) with caller provenance. `origin` (optional query, default
+        // "scheduler") flows to the emitted instance-restarted so the audit attributes it to the caller
+        // (e.g. kgsm-scheduler's scheduled-restart), not system/system. Does NOT touch the crash streak —
+        // it routes through StartAsync which resets it. 200/409 like start/stop (409 = restart couldn't
+        // complete: stop or the ensuing start failed).
+        app.MapPost("/restart/{name}", async (string name, string? origin, InstanceSupervisor sup, CancellationToken ct) =>
+        {
+            var result = await sup.RestartAsync(name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, ct);
+            return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
+                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+        });
+
         app.MapGet("/status/{name}", (string name, InstanceSupervisor sup) =>
         {
             var st = sup.Status(name);
@@ -77,6 +89,21 @@ internal static class ControlEndpoints
         // The persisted boot-autostart name set — the authoritative source for "is it enabled?".
         app.MapGet("/enabled", (InstanceSupervisor sup) =>
             Results.Json(sup.EnabledNames(), WatchdogJsonContext.Default.StringArray));
+
+        // Live-apply a CPU-priority change to a RUNNING instance's cgroup (Phase 2) — writes cpu.weight
+        // in place, no respawn. 200 always: Ok=false + a plain message when the cgroup is absent (not
+        // running), since the config is still persisted by kgsm and takes effect at the next start.
+        // Memory cap has no live-apply twin: shrinking memory.max under a running game can't reclaim
+        // pages it already touched, so the cap is applied only at spawn (see SpawnEngine).
+        app.MapPost("/set-cpu-priority/{name}/{priority}", (string name, string priority, CgroupManager cgroups) =>
+        {
+            int weight = CgroupManager.CpuWeightFor(priority);
+            bool applied = cgroups.SetCpuWeight(name, weight);
+            var result = new ActionResult(name, applied, applied
+                ? $"cpu.weight set to {weight} ({priority})"
+                : "instance cgroup not found — not running; will apply at next start");
+            return Results.Json(result, WatchdogJsonContext.Default.ActionResult);
+        });
 
         // The running daemon's build identity (Inc 7 Phase 0). The hot-swap deploy curls this after a
         // reload to confirm the new binary is live; the same version is what `--version` prints. Read

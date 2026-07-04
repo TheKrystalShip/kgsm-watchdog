@@ -51,10 +51,12 @@ internal sealed class EventChannelTail(string path, bool primeAtEnd = false)
     public string Path { get; } = path;
 
     // When true, the FIRST attach to an existing file seeks to its current end instead of offset 0, so a
-    // pre-existing append-only log (the native game log, which the watchdog opens with >> and never
-    // rotates) is NOT replayed from the start — only lines appended after we attach are emitted. A later
-    // rotation (inode change) still re-reads the fresh file from 0. Off for the container NDJSON channel
-    // (the shim writes a fresh per-session file, so reading from 0 is exactly right).
+    // pre-existing append-only log (the native game log, opened with >> and appended to for the lifetime
+    // of one run — SpawnEngine rotates it to a fresh inode on every FRESH SPAWN, but adopt/hot-swap
+    // intentionally leave it alone since the game is still writing) is NOT replayed from the start — only
+    // lines appended after we attach are emitted. A later rotation (inode change) still re-reads the fresh
+    // file from 0. Off for the container NDJSON channel (the shim writes a fresh per-session file, so
+    // reading from 0 is exactly right).
     private readonly bool _primeAtEnd = primeAtEnd;
     private bool _primed;
 

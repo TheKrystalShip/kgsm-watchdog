@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-07-04
+
+### Fixed
+- **`instance-ready` false-positive on an instance's 2nd+ start.** `SpawnEngine` appended a native
+  instance's stdout to the same `Instance.LogFile` forever, never rotating it (a divergence from
+  kgsm's bash reference, `_rotate_log_file` in `manage.native.d/10-logging.sh`, noted but left open in
+  1.6.0). Because `NativeReadinessMatcher.MatchesExistingContent`'s one-shot whole-file late-attach
+  scan re-reads the ENTIRE current log on every fresh-spawn start edge, on the second and every later
+  start of an instance it re-matched the PREVIOUS run's already-logged ready line and fired
+  `instance-ready` immediately — collapsing the honest "Starting" window and reporting a not-yet-booted
+  server as ready.
+  - Fix: `SpawnEngine.Spawn` now rotates a non-empty pre-existing log to a timestamped sibling
+    (`SpawnEngine.RotateLogFile`, mirroring `_rotate_log_file`'s `mv`, not an in-place truncate) before
+    every FRESH SPAWN, so the launcher's `>>` always lands on a brand-new inode. `Spawn` is called only
+    from `InstanceSupervisor.TrySpawn` (manual start / boot respawn-of-dead / crash-restart) — never
+    from either adopt path (`AdoptFromHandoff` hot-swap re-attach, `AdoptLiveOrphansAsync` cold-restart
+    re-attach), which never call `Spawn` and so never rotate a still-writing live game's log out from
+    under it. A fresh inode (rather than an in-place truncate) also lets `EventChannelTail`'s
+    inode-keyed rotation detection (`LastReadResetSession`) re-arm cleanly for the readiness and
+    player-presence tails alike.
+  - Tests: `SpawnEngineTests` (+4, `RotateLogFile` unit coverage), `NativePlayerPresenceIngesterTests`
+    (+2, end-to-end: a rotated-away stale ready line and a rotated-away stale join line are never
+    resurrected on the next run), `AdoptDoesNotRotateLogTests` (new, +2: hot-swap adopt and cold-restart
+    orphan re-adopt leave a live instance's log byte-for-byte unchanged at the same inode). 231/231.
+
 ## [1.6.0] - 2026-07-04
 
 ### Added

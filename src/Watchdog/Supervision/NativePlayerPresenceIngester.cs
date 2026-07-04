@@ -50,15 +50,20 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <see cref="CgroupManager.IsPopulated"/>, the SAME child-inclusive liveness signal <c>CrashWatcher</c>
 /// polls) — this is universal across every spawn path (manual start, boot autostart, crash-restart,
 /// daemon-restart re-adopt) without depending on log-rotation semantics. It also re-arms on
-/// <see cref="EventChannelTail.LastReadResetSession"/> as a defensive second trigger (the bash reference
-/// truncates <c>instance_log_file</c> to a fresh inode on every start — <c>SpawnEngine</c> currently
-/// appends instead, a known, separately-tracked divergence — so this covers either behavior). On a fresh
-/// edge: an EMPTY <c>startup_success_regex</c> emits <c>instance-ready</c> immediately (honest fallback —
-/// no distinct readiness signal, so "ready" == "observed started", never a fabricated delay); a non-empty
-/// valid pattern first does a one-shot whole-file scan (<see cref="NativeReadinessMatcher.MatchesExistingContent"/>)
-/// to catch a late attach where the ready line already went by (daemon hot-swap mid-boot, or attaching to
-/// an already-running instance), then the normal tail matches every new line going forward. Exactly one
-/// <c>instance-ready</c> fires per run (<c>ReadyFired</c> latch), re-armed only by the next start edge.
+/// <see cref="EventChannelTail.LastReadResetSession"/> as a defensive second trigger — <c>SpawnEngine</c>
+/// now rotates <c>instance_log_file</c> to a fresh inode on every FRESH SPAWN (mirroring the bash
+/// reference's <c>_rotate_log_file</c>; adopt/hot-swap deliberately do NOT rotate, since the game is
+/// still writing), so this fires on every genuine fresh run in addition to the cgroup edge — belt and
+/// suspenders, not the primary signal. On a fresh edge: an EMPTY <c>startup_success_regex</c> emits
+/// <c>instance-ready</c> immediately (honest fallback — no distinct readiness signal, so "ready" ==
+/// "observed started", never a fabricated delay); a non-empty valid pattern first does a one-shot
+/// whole-file scan (<see cref="NativeReadinessMatcher.MatchesExistingContent"/>) to catch a late attach
+/// where the ready line already went by (daemon hot-swap mid-boot, or attaching to an already-running
+/// instance) — safe now that a fresh spawn's log only ever contains the CURRENT run's content (the log
+/// rotation fix; see <see cref="SpawnEngine.RotateLogFile"/>), so this scan can no longer resurrect a
+/// STALE prior-run ready line on the instance's 2nd+ start — then the normal tail matches every new line
+/// going forward. Exactly one <c>instance-ready</c> fires per run (<c>ReadyFired</c> latch), re-armed
+/// only by the next start edge.
 /// </para>
 /// </summary>
 internal sealed class NativePlayerPresenceIngester(

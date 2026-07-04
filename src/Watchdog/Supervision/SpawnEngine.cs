@@ -26,6 +26,18 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// outside the instance cgroup) — so there is no keepalive process to place, and that same fd is
 /// the channel for stop/console commands.
 /// </para>
+/// <para>
+/// <b>Log rotation on every fresh spawn (<see cref="RotateLogFile"/>).</b> Before forking, a
+/// non-empty pre-existing <c>Instance.LogFile</c> is <c>mv</c>'d to a timestamped sibling — mirroring
+/// kgsm's bash reference (<c>_rotate_log_file</c>) — so the launcher's <c>&gt;&gt; log</c> lands on a
+/// fresh inode every run. <see cref="Spawn"/> is called ONLY from a genuine fresh spawn
+/// (<c>InstanceSupervisor.TrySpawn</c> — manual start, boot respawn-of-dead, crash-restart); adopt
+/// paths (<c>AdoptLive</c>/<c>AdoptFromHandoff</c>) never call it, so a still-writing live game's log
+/// is never rotated out from under it. This closes a real honesty bug: without rotation, the log
+/// accumulated across runs, so <c>NativeReadinessMatcher</c>'s late-attach whole-file scan (and, in
+/// principle, player-presence matching) could see a stale prior-run line and fire immediately on the
+/// very next start.
+/// </para>
 /// </summary>
 internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> logger)
 {
@@ -68,6 +80,15 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
         string? logDir = Path.GetDirectoryName(log);
         if (!string.IsNullOrEmpty(logDir))
             Directory.CreateDirectory(logDir);
+
+        // 0. Rotate a PRIOR run's log out of the way so this fresh spawn starts a brand-new inode at
+        //    `log` — see RotateLogFile for the full rationale (fixes the Increment-9 divergence noted
+        //    in PLAN.md: a stale ready/player-presence line surviving into the 2nd+ run). Safe here
+        //    because Spawn() is the sole fresh-spawn entry point (InstanceSupervisor.TrySpawn is its
+        //    only caller, for manual start / boot respawn-of-dead / crash-restart) — adopt
+        //    (AdoptLive/AdoptFromHandoff) never calls Spawn, so a still-writing live game's log is
+        //    never touched.
+        RotateLogFile(log);
 
         // 1. Instance cgroup (mkdir under the delegated base).
         if (!cgroups.Create(name))
@@ -183,6 +204,60 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
     private static void TryDeleteFifo(string fifo)
     {
         try { if (File.Exists(fifo)) File.Delete(fifo); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Rotate a prior run's log out of the way before a fresh spawn, so the game's stdout append
+    /// (<c>&gt;&gt; log</c> in <see cref="LauncherBody"/>) creates a BRAND-NEW inode at <paramref name="logPath"/>
+    /// instead of resuming an old one. Mirrors kgsm's bash reference (<c>_rotate_log_file</c> in
+    /// <c>manage.native.d/10-logging.sh</c>): <c>mv</c> the existing file to a timestamped sibling — a
+    /// rename, never an in-place truncate — because a genuinely fresh inode is what
+    /// <see cref="EventChannelTail"/>'s inode-keyed rotation check needs to fire
+    /// <c>LastReadResetSession</c> cleanly on the very next read (an in-place truncate only helps via
+    /// its weaker same-inode "shrink" safety net).
+    /// <para>
+    /// <b>Why this matters (Increment 9 divergence, tracked in PLAN.md):</b> before this fix,
+    /// <see cref="Spawn"/> appended to the same log path forever. <c>NativeReadinessMatcher.MatchesExistingContent</c>
+    /// does a one-shot WHOLE-FILE scan on every fresh-spawn start edge to catch a late attach — on the
+    /// 2nd+ start of an instance that scan re-read the PREVIOUS run's already-logged ready line and
+    /// fired <c>instance-ready</c> immediately, collapsing the honest "Starting" window. Rotating the
+    /// log on every fresh spawn means the whole-file scan (and the player-presence tail) can only ever
+    /// see the CURRENT run's content.
+    /// </para>
+    /// <para>
+    /// Best-effort and non-fatal: absent/empty file (first-ever spawn, or an already-rotated-clean
+    /// state) is a silent no-op; a failed rotate (permissions, races) is logged and swallowed — an
+    /// un-rotated log is a smaller regression than refusing to start the game over housekeeping. A
+    /// same-second collision with a previous rotated filename falls back to a tick-suffixed name so it
+    /// never silently drops the prior run's content.
+    /// </para>
+    /// </summary>
+    internal void RotateLogFile(string logPath)
+    {
+        try
+        {
+            var info = new FileInfo(logPath);
+            if (!info.Exists || info.Length == 0)
+                return; // nothing worth rotating — first-ever spawn, or already a fresh/empty file
+
+            string dir = info.DirectoryName ?? string.Empty;
+            string stem = Path.GetFileNameWithoutExtension(logPath);
+            string ext = Path.GetExtension(logPath); // includes the leading '.', or "" if none
+            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
+            string rotated = Path.Combine(dir, $"{stem}.{timestamp}{ext}");
+
+            if (File.Exists(rotated))
+                rotated = Path.Combine(dir, $"{stem}.{timestamp}.{DateTime.UtcNow.Ticks}{ext}");
+
+            File.Move(logPath, rotated);
+            logger.LogInformation("rotated prior-run log {Log} -> {Rotated} (fresh spawn)", logPath, rotated);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "failed to rotate log {Log} before spawn — continuing without rotation (a stale prior-run " +
+                "line may linger in the log)", logPath);
+        }
     }
 
     private static int Errno() => System.Runtime.InteropServices.Marshal.GetLastPInvokeError();

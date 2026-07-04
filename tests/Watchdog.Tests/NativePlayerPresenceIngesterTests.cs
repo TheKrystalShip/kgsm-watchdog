@@ -531,6 +531,83 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.Equal("instance-player-joined", rec.Calls[0].EventType); // ...but never instance-ready
     }
 
+    [Fact]
+    public void Second_fresh_spawn_does_not_resurrect_run_1s_stale_ready_line_after_SpawnEngine_rotates_the_log()
+    {
+        // THE BUG this test guards: SpawnEngine used to append to the same log path forever, so on the
+        // 2nd+ start of an instance, NativeReadinessMatcher.MatchesExistingContent's whole-file
+        // late-attach scan re-read run 1's already-logged ready line and fired instance-ready
+        // IMMEDIATELY on run 2's start edge — collapsing the honest "Starting" window. The fix rotates
+        // the log to a fresh inode on every fresh spawn (SpawnEngine.RotateLogFile); this test drives
+        // that helper directly at the point SpawnEngine.Spawn calls it (the fork itself needs a real
+        // cgroup and is exercised live, not here — see SpawnEngineTests for RotateLogFile's own unit
+        // coverage).
+        string log = MakeInstanceWithLog("factorio", "factorio-rotate", "1000.500 Hosting game at IP ADDR:34197\n");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("factorio-rotate", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
+
+        var cgroups = NewCgroups();
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        // Run 1: this instance is observed already populated with its ready line already logged (the
+        // late-attach case another test already covers) — legitimately fires once.
+        SetPopulated("factorio-rotate", populated: true);
+        ingester.IngestOnce(_root);
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+
+        // Run 1 ends: the cgroup drains.
+        SetPopulated("factorio-rotate", populated: false);
+        ingester.IngestOnce(_root);
+
+        // A real crash-restart / manual start now calls SpawnEngine.Spawn, which rotates the log BEFORE
+        // the fresh process starts writing — simulate that exact step. Run 1's stale ready line moves
+        // out from under `log`.
+        new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance).RotateLogFile(log);
+        Assert.False(File.Exists(log), "the rotated-away log must not still be sitting at the old path");
+
+        // Run 2's start edge fires (cgroup repopulates) before the new process has written anything —
+        // matching the real race (cgroup.procs is written before exec). The whole-file late-attach scan
+        // must NOT resurrect run 1's content, because it no longer lives at `log`.
+        SetPopulated("factorio-rotate", populated: true);
+        ingester.IngestOnce(_root);
+        Assert.Single(rec.Calls); // still just the one — run 2 must NOT have fabricated readiness yet
+
+        // The real game then logs ITS OWN fresh ready line for run 2 — the normal tail catches it.
+        File.AppendAllText(log, "0001.000 Hosting game at IP ADDR:34197\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(2, rec.Calls.Count);
+        Assert.Equal("instance-ready", rec.Calls[1].EventType);
+    }
+
+    [Fact]
+    public void Player_presence_also_never_replays_a_rotated_away_prior_run_after_a_fresh_spawn()
+    {
+        // Same fix, the OTHER consumer of the log: a stale join line from run 1 must not resurface as a
+        // "new" join on run 2 just because SpawnEngine rotated the log out and a fresh file appeared.
+        string log = MakeInstanceWithLog("factorio", "factorio-rotate-presence",
+            "[JOIN] StaleFromRun1 (1) joined the game\n");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("factorio-rotate-presence", log, Joined, Left));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root); // primes at EOF — run 1's stale join is skipped, as today
+
+        new SpawnEngine(NewCgroups(), NullLogger<SpawnEngine>.Instance).RotateLogFile(log);
+        Assert.False(File.Exists(log));
+
+        // Run 2 starts and a genuinely new join appears in the fresh file.
+        File.AppendAllText(log, "[JOIN] FreshFromRun2 (2) joined the game\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
+        Assert.Equal("FreshFromRun2", rec.Calls[0].Parameters[2]);
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
     private NativePlayerPresenceIngester NewIngester(IEventManagementService events, IInstanceService instances, CgroupManager? cgroups = null)

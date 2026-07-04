@@ -1,15 +1,39 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
-/// Covers the one pure, security-relevant helper in the spawn path: the envsubst-equivalent the
-/// daemon runs over <c>executable_arguments</c> before the launcher word-splits them. (The fork
-/// itself needs a real instance + cgroup and is exercised live, not in the unit suite.)
+/// Covers the pure, security-relevant helpers in the spawn path: the envsubst-equivalent the daemon
+/// runs over <c>executable_arguments</c> before the launcher word-splits them, and
+/// <see cref="SpawnEngine.RotateLogFile"/> — the fresh-spawn log rotation fix (PLAN.md Increment 9
+/// follow-up) that keeps <c>NativeReadinessMatcher.MatchesExistingContent</c>'s whole-file late-attach
+/// scan from resurrecting a prior run's stale ready line on an instance's 2nd+ start. (The fork itself
+/// needs a real instance + cgroup and is exercised live, not in the unit suite — see
+/// <see cref="NativePlayerPresenceIngesterTests"/> for the end-to-end readiness-across-rotation
+/// coverage, which drives <c>RotateLogFile</c> directly the way <see cref="SpawnEngine.Spawn"/> does.)
 /// </summary>
 [Collection(EnvironmentCollection.Name)] // ExpandEnvironment tests mutate process env vars — serialize with the other env-touching classes
-public sealed class SpawnEngineTests
+public sealed class SpawnEngineTests : IDisposable
 {
+    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "kgsm-wd-spawn-" + Guid.NewGuid().ToString("N"));
+
+    public SpawnEngineTests() => Directory.CreateDirectory(_tempDir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tempDir, recursive: true); } catch { /* best effort */ }
+    }
+
+    private SpawnEngine NewEngine()
+    {
+        var cgroups = new CgroupManager(
+            new WatchdogOptions { CgroupMountPoint = Path.Combine(_tempDir, "cg"), CgroupBaseName = "kgsm.slice" },
+            NullLogger<CgroupManager>.Instance);
+        return new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance);
+    }
+
     [Fact]
     public void ExpandEnvironment_passes_through_when_no_dollar()
     {
@@ -96,5 +120,64 @@ public sealed class SpawnEngineTests
         };
 
         Assert.Null(SpawnEngine.ValidateSpawnable(inst));
+    }
+
+    // ---- RotateLogFile (fresh-spawn log rotation — Increment 9 follow-up) ---------------------
+
+    [Fact]
+    public void RotateLogFile_moves_a_nonempty_prior_run_log_to_a_fresh_inode_at_the_same_path()
+    {
+        string log = Path.Combine(_tempDir, "factorio-test.log");
+        File.WriteAllText(log, "1000.500 Hosting game at IP ADDR:34197\nPlayer joined\n");
+        ulong? inodeBefore = EventChannelTail.TryReadInode(log);
+
+        NewEngine().RotateLogFile(log);
+
+        // The original path either no longer exists, or (if something raced a fresh write in) now
+        // points at a NEW inode — either way, the prior run's content is no longer reachable there.
+        if (File.Exists(log))
+            Assert.NotEqual(inodeBefore, EventChannelTail.TryReadInode(log));
+        else
+            Assert.False(File.Exists(log));
+
+        // The content itself is preserved, just moved — never silently dropped.
+        string[] siblings = Directory.GetFiles(_tempDir, "factorio-test.*.log");
+        Assert.Single(siblings);
+        Assert.Equal("1000.500 Hosting game at IP ADDR:34197\nPlayer joined\n", File.ReadAllText(siblings[0]));
+    }
+
+    [Fact]
+    public void RotateLogFile_is_a_noop_when_the_log_does_not_exist_yet()
+    {
+        string log = Path.Combine(_tempDir, "never-started.log");
+
+        NewEngine().RotateLogFile(log); // must not throw — first-ever spawn, nothing to rotate
+
+        Assert.False(File.Exists(log));
+        Assert.Empty(Directory.GetFiles(_tempDir));
+    }
+
+    [Fact]
+    public void RotateLogFile_is_a_noop_on_an_already_empty_log()
+    {
+        string log = Path.Combine(_tempDir, "empty.log");
+        File.WriteAllText(log, "");
+
+        NewEngine().RotateLogFile(log);
+
+        // Left in place at the SAME inode — nothing worth rotating away.
+        Assert.True(File.Exists(log));
+        Assert.Single(Directory.GetFiles(_tempDir));
+    }
+
+    [Fact]
+    public void RotateLogFile_never_throws_and_leaves_the_log_in_place_when_the_directory_is_gone()
+    {
+        string missingDir = Path.Combine(_tempDir, "vanished");
+        string log = Path.Combine(missingDir, "x.log");
+        // Deliberately do NOT create `missingDir` — File.Exists(log) is false, so this is the
+        // same "nothing to rotate" no-op path; asserts the best-effort contract never throws.
+        var ex = Record.Exception(() => NewEngine().RotateLogFile(log));
+        Assert.Null(ex);
     }
 }

@@ -779,11 +779,13 @@ log-pattern + the honest empty-pattern fallback are built).
       `ReconcileRestartPending`, daemon-restart re-adopt) with **zero changes to
       `InstanceSupervisor`** — fully decoupled from supervision, exactly like presence detection
       already is. Also re-arms defensively on `EventChannelTail.LastReadResetSession`.
-      **Known divergence found along the way (not fixed here, out of scope):** the bash reference
-      truncates `instance_log_file` to a fresh inode on every start (`_rotate_log_file` +
-      `&>` in `manage.native.d/03-lifecycle.sh`); `SpawnEngine` instead appends (`>>`) forever,
+      **Known divergence found along the way — FIXED in 1.6.1, see Increment 9a below:** the bash
+      reference truncates `instance_log_file` to a fresh inode on every start (`_rotate_log_file` +
+      `&>` in `manage.native.d/03-lifecycle.sh`); `SpawnEngine` instead appended (`>>`) forever,
       never rotating — which is exactly why the cgroup-populated edge, not
-      `LastReadResetSession`, had to be the primary signal.
+      `LastReadResetSession`, had to be the primary signal. This divergence turned out to be more
+      than cosmetic: it let the whole-file late-attach scan below resurrect a stale prior-run ready
+      line on an instance's 2nd+ start (Increment 9a).
 - [x] **Empty pattern → honest immediate fallback** (ready = observed started, no fabricated delay);
       **invalid (non-empty) pattern → disabled + warned, never silently substituted** with the
       immediate rule (a real blueprint bug shouldn't be papered over).
@@ -807,8 +809,56 @@ log-pattern + the honest empty-pattern fallback are built).
 - **Out of scope (deferred):** port-based readiness; a `starting` phase in the watchdog's own state
   model (the Control Panel API owns that state — the watchdog's only job is the correct
   `instance-ready` emit); fixing `SpawnEngine`'s log-append-not-rotate divergence from the bash
-  reference (noted above, unrelated to this increment's correctness since the cgroup edge doesn't
-  depend on it).
+  reference (see Increment 9a — this turned out NOT to be cosmetic, and was fixed same-day).
+
+---
+
+### Increment 9a — fix: `SpawnEngine` rotates the log on every fresh spawn  ◀ BUILT (2026-07-04, v1.6.1)
+
+**The bug.** Increment 9's whole-file late-attach scan (`NativeReadinessMatcher.MatchesExistingContent`)
+reads the ENTIRE current log on every fresh-spawn start edge, to catch a ready line that was already
+logged before the edge was observed. Combined with the append-not-rotate divergence noted above, this
+meant the scan saw not just the current run's content but every PRIOR run's too: on an instance's 2nd
+and every later start, it re-matched the previous run's already-logged ready line and fired
+`instance-ready` immediately — collapsing the honest "Starting" window and reporting a not-yet-booted
+server as ready. Live-validated on a real Factorio instance: 1st boot correctly held "starting" for
+10-20s through a full cold boot; the 2nd start (after a stop/start cycle) fired ready instantly, before
+the game had even re-loaded its save.
+
+- [x] **Fix: `SpawnEngine.RotateLogFile`** (`src/Watchdog/Supervision/SpawnEngine.cs`) — called from
+      `Spawn` right after the log directory is ensured, before any cgroup/FIFO side effect. Mirrors the
+      bash reference's `_rotate_log_file`: a non-empty pre-existing log is `mv`'d to a timestamped
+      sibling (`<name>.<timestamp>.log`, collision-suffixed with ticks in the rare same-second case) —
+      a rename, not an in-place truncate, so the launcher's `>> log` always lands on a genuinely fresh
+      inode. Best-effort/non-fatal: an absent or already-empty log is a silent no-op; a failed rotate
+      (permissions) is logged and swallowed rather than aborting the spawn.
+- [x] **Spawn-only, never adopt/hot-swap — a structural guarantee, not a runtime check.**
+      `InstanceSupervisor.TrySpawn` is the ONLY caller of `SpawnEngine.Spawn` (from `StartAsync` —
+      manual start, `RespawnFresh` — boot bring-up of a dead instance, and
+      `ReconcileRestartPending` — crash-restart); neither adopt path (`AdoptLive` /
+      `AdoptFromHandoff`/`AdoptHandoffEntry` — hot-swap re-attach and cold-restart re-attach to a
+      still-live game) calls `Spawn` or `TrySpawn` at all — they only call `SpawnEngine.ReopenFifo`.
+      So a still-writing live game's log is never touched by construction, not by a conditional guard
+      that could be gotten wrong.
+- [x] **`EventChannelTail` reset behavior confirmed for the fresh-inode choice over in-place
+      truncate:** a fresh inode is the PRIMARY, clean trigger (`ReadNewLines`'s `_inode != inode`
+      branch fires `LastReadResetSession = true` on any attach past the first) — this is what re-arms
+      both the readiness latch and the player-presence session map cleanly on the very next read.
+      An in-place truncate only benefits from the tail's secondary "shrink" safety net (`length <
+      _offset`), a weaker path documented as a partial-coverage residual — confirming the fresh-inode
+      rename was the right choice, not just a style preference.
+- [x] Tests (+8, full suite 231/231; AOT publish 0 IL2026/IL3050/ILC warnings):
+  - `SpawnEngineTests` — `RotateLogFile` moves a non-empty log to a fresh-inode sibling and preserves
+    its content; no-ops on an absent or already-empty log; never throws (missing directory).
+  - `NativePlayerPresenceIngesterTests` — a 2nd fresh spawn (simulated by calling `RotateLogFile`
+    directly, the way `Spawn` does, since the fork itself needs a real cgroup and is exercised live not
+    in the unit suite) does NOT resurrect run 1's stale ready line, and still fires ready honestly once
+    run 2's OWN ready line appears; the same for a stale player-join line.
+  - `AdoptDoesNotRotateLogTests` (new file) — hot-swap `AdoptFromHandoff` and cold-restart
+    `AdoptLiveOrphansAsync` both leave a real log file byte-for-byte unchanged at the SAME inode,
+    proving the spawn/adopt distinction holds in practice, not just by code inspection.
+- **Owed:** live re-validation on hotrod's Factorio instance across a real stop/start cycle (the
+  daemon has not yet been redeployed with this fix).
 
 ---
 

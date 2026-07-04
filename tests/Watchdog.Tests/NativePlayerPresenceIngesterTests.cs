@@ -6,6 +6,7 @@ using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog;
+using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
@@ -29,17 +30,35 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     private const string Left = @"\[LEAVE\] (?<name>\S+) \((?<id>\d+)\)";
 
     private readonly string _root;
+    // A separate real-filesystem tree standing in for cgroupfs (mirrors CgroupManagerTests: no mocks,
+    // real `cgroup.events` files with the kernel's `populated 0|1` line — the true IsPopulated code path).
+    private readonly string _cgroupRoot;
 
     public NativePlayerPresenceIngesterTests()
     {
         _root = Path.Combine(Path.GetTempPath(), "kgsm-wd-native-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
+        _cgroupRoot = Path.Combine(Path.GetTempPath(), "kgsm-wd-native-cg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_cgroupRoot);
     }
 
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(_cgroupRoot, recursive: true); } catch { /* best effort */ }
     }
+
+    /// <summary>Write (or overwrite) a fake instance cgroup's `cgroup.events` so
+    /// <see cref="CgroupManager.IsPopulated"/> reads it exactly as it would a real cgroupfs.</summary>
+    private void SetPopulated(string instance, bool populated)
+    {
+        string dir = Path.Combine(_cgroupRoot, "kgsm.slice", instance);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "cgroup.events"), $"populated {(populated ? 1 : 0)}\nfrozen 0\n");
+    }
+
+    private CgroupManager NewCgroups()
+        => new(new WatchdogOptions { CgroupMountPoint = _cgroupRoot, CgroupBaseName = "kgsm.slice" }, NullLogger<CgroupManager>.Instance);
 
     [Fact]
     public void Discovers_instance_names_from_the_two_level_tree()
@@ -122,11 +141,16 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     }
 
     [Fact]
-    public void Native_instance_without_patterns_is_skipped()
+    public void Native_instance_with_no_patterns_at_all_is_watched_but_stays_silent_without_a_start_edge()
     {
+        // Empty player AND readiness patterns: per the widened enable gate this is no longer a hard
+        // "skip" (the immediate-readiness fallback always applies to an empty startup_success_regex —
+        // see the next test), but with no cgroup fixture registered the instance never reports
+        // populated, so no start edge is ever observed and nothing fires — presence detection stays
+        // honestly disabled either way.
         string log = MakeInstanceWithLog("terraria", "tw-1", "");
         var fake = new FakeInstanceService();
-        fake.Add(Native("tw-1", log, joined: "", left: "")); // detection disabled (honest unknown)
+        fake.Add(Native("tw-1", log, joined: "", left: "")); // presence disabled (honest unknown)
 
         var rec = new RecordingEvents();
         var ingester = NewIngester(rec, fake);
@@ -136,6 +160,27 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Empty(rec.Calls);
+    }
+
+    [Fact]
+    public void Native_instance_with_no_player_patterns_and_an_invalid_readiness_pattern_is_truly_skipped()
+    {
+        // The one case that's genuinely a "nothing to detect" skip: no player patterns AND a NON-EMPTY
+        // but invalid readiness regex (a real blueprint bug — never silently substituted with the
+        // immediate fallback, which is reserved for a truly EMPTY pattern).
+        string log = MakeInstanceWithLog("terraria", "tw-2", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("tw-2", log, joined: "", left: "", ready: "(?<unterminated"));
+
+        var cgroups = NewCgroups();
+        SetPopulated("tw-2", populated: true); // even if it WERE running, a skipped instance is never built
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        ingester.IngestOnce(_root);
+        ingester.IngestOnce(_root);
+
+        Assert.Empty(rec.Calls); // no instance-ready, no presence — genuinely nothing configured
     }
 
     [Fact]
@@ -333,18 +378,172 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.Single(rec.Calls); // still just the one join — the post-reset leave was honestly skipped
     }
 
+    // ---- readiness (instance-ready) ------------------------------------------------------------
+
+    [Fact]
+    public void Empty_readiness_regex_emits_ready_immediately_on_the_start_edge()
+    {
+        // No player patterns either — this is the exact "factorio/minecraft/terraria-shaped: a
+        // startup_success_regex but no player_*_regex" case the widened enable gate exists for.
+        string log = MakeInstanceWithLog("factorio", "factorio-immediate", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("factorio-immediate", log, joined: "", left: "", ready: ""));
+
+        var cgroups = NewCgroups();
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        // Not populated yet — no start edge, no ready.
+        ingester.IngestOnce(_root);
+        Assert.Empty(rec.Calls);
+
+        // The instance starts (cgroup populates) — immediate honest fallback fires right away, with
+        // NO dependency on any log line ever being written.
+        SetPopulated("factorio-immediate", populated: true);
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+        Assert.Equal("system", rec.Calls[0].Actor);
+        Assert.Equal("system", rec.Calls[0].Origin);
+        Assert.Equal(new[] { "factorio-immediate" }, rec.Calls[0].Parameters);
+
+        // Steady-state ticks while still populated must NOT re-fire.
+        ingester.IngestOnce(_root);
+        ingester.IngestOnce(_root);
+        Assert.Single(rec.Calls);
+    }
+
+    [Fact]
+    public void NonEmpty_readiness_regex_fires_once_on_first_match_and_rearms_on_restart()
+    {
+        string log = MakeInstanceWithLog("factorio", "factorio-ready", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("factorio-ready", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
+
+        var cgroups = NewCgroups();
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        // Start edge: populated, but the ready line hasn't been logged yet — no emit.
+        SetPopulated("factorio-ready", populated: true);
+        ingester.IngestOnce(_root);
+        Assert.Empty(rec.Calls);
+
+        // The ready line appears — the normal tail catches it on the next pass.
+        File.AppendAllText(log, "1234.567 Hosting game at IP ADDR:34197\n");
+        ingester.IngestOnce(_root);
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+        Assert.Equal(new[] { "factorio-ready" }, rec.Calls[0].Parameters);
+
+        // Further lines (even matching ones, e.g. a save-then-relog message) must not re-fire within
+        // the same run.
+        File.AppendAllText(log, "1234.999 Hosting game at IP ADDR:34197\n");
+        ingester.IngestOnce(_root);
+        Assert.Single(rec.Calls);
+
+        // A crash-restart: the cgroup drains (stop) then repopulates (respawn) — a genuine new run.
+        SetPopulated("factorio-ready", populated: false);
+        ingester.IngestOnce(_root);
+        SetPopulated("factorio-ready", populated: true);
+        File.AppendAllText(log, "0001.000 Hosting game at IP ADDR:34197\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(2, rec.Calls.Count); // re-armed — a second instance-ready for the new run
+        Assert.Equal("instance-ready", rec.Calls[1].EventType);
+    }
+
+    [Fact]
+    public void Readiness_pattern_with_no_player_patterns_is_not_skipped()
+    {
+        // Requirement (c): factorio/minecraft/terraria-shaped instances have a startup_success_regex
+        // but no player_*_regex — they must still be watched and detected, not skipped by the old
+        // "no player patterns -> skip" gate.
+        string log = MakeInstanceWithLog("minecraft", "mc-ready", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("mc-ready", log, joined: "", left: "", ready: @"Done \([\d.]+s\)! For help"));
+
+        var cgroups = NewCgroups();
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        SetPopulated("mc-ready", populated: true);
+        ingester.IngestOnce(_root);
+        File.AppendAllText(log, "[12:00:00] [Server thread/INFO]: Done (12.345s)! For help, type \"help\"\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+        Assert.Equal(new[] { "mc-ready" }, rec.Calls[0].Parameters);
+    }
+
+    [Fact]
+    public void Late_attach_to_an_already_ready_instance_emits_ready_once_via_the_whole_file_scan()
+    {
+        // Requirement (d) / gotcha 6: the ingester's FIRST-ever observation of this instance finds it
+        // already populated AND its ready line already logged (a daemon hot-swap/restart mid-boot, or
+        // attaching to an instance that was already running) — primeAtEnd would otherwise make the
+        // tail skip straight past the line, so the one-shot whole-file scan must catch it.
+        string log = MakeInstanceWithLog("factorio", "factorio-late", "1000.000 Loading map\n1000.500 Hosting game at IP ADDR:34197\n1001.000 Player list updated\n");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("factorio-late", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
+
+        var cgroups = NewCgroups();
+        SetPopulated("factorio-late", populated: true); // already running before the ingester ever looked
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        ingester.IngestOnce(_root); // first-ever tick: start edge (null -> true) + whole-file scan
+
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+        Assert.Equal(new[] { "factorio-late" }, rec.Calls[0].Parameters);
+
+        // Steady state — no re-fire, and the tail itself still primes at EOF (no replayed presence lines
+        // to worry about here since there are no player patterns in this test).
+        ingester.IngestOnce(_root);
+        Assert.Single(rec.Calls);
+    }
+
+    [Fact]
+    public void Invalid_readiness_pattern_with_a_player_pattern_present_never_fires_readiness_but_presence_still_works()
+    {
+        // A broken readiness regex must disable ONLY readiness (honest — never fabricated), while
+        // leaving an unrelated, valid player pattern on the same instance fully functional (mirrors
+        // NativeLogMatcherTests.Invalid_pattern_is_disabled_and_warned_never_throws's "the other
+        // detection still works" pattern, one layer up).
+        string log = MakeInstanceWithLog("factorio", "factorio-badregex", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("factorio-badregex", log,
+            joined: @"\[JOIN\] (?<name>\S+)", left: "", ready: "(?<unterminated"));
+
+        var cgroups = NewCgroups();
+        SetPopulated("factorio-badregex", populated: true);
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        ingester.IngestOnce(_root);
+        File.AppendAllText(log, "[JOIN] Alice\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls); // presence still fires...
+        Assert.Equal("instance-player-joined", rec.Calls[0].EventType); // ...but never instance-ready
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
-    private NativePlayerPresenceIngester NewIngester(IEventManagementService events, IInstanceService instances)
-        => new(new WatchdogOptions { InstancesDir = _root }, instances, events, new PlayerSessionStore(), NullLogger<NativePlayerPresenceIngester>.Instance);
+    private NativePlayerPresenceIngester NewIngester(IEventManagementService events, IInstanceService instances, CgroupManager? cgroups = null)
+        => new(new WatchdogOptions { InstancesDir = _root }, instances, events, new PlayerSessionStore(), cgroups ?? NewCgroups(), NullLogger<NativePlayerPresenceIngester>.Instance);
 
-    private static Instance Native(string name, string log, string joined, string left) => new()
+    private static Instance Native(string name, string log, string joined, string left, string ready = "") => new()
     {
         Name = name,
         Runtime = InstanceRuntime.Native,
         LogFile = log,
         PlayerJoinedRegex = joined,
         PlayerLeftRegex = left,
+        StartupSuccessRegex = ready,
     };
 
     // Create <root>/<blueprint>/<instance>/ (for discovery) + the log file inside it, seeded with `seed`.

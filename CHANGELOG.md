@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-04
+
+### Added
+- `instance-ready` event: the "finished booting / joinable" signal the Control Panel uses to flip a
+  server from "Starting" to "Running", distinct from `instance-started` (process exec) which fires
+  before the game is actually joinable.
+  - Owned by `NativePlayerPresenceIngester` (now doubling as the readiness ingester — pure file/cgroup
+    reader, additive, no spawn-path change), keyed on the instance's cgroup transitioning
+    not-populated → populated (`CgroupManager.IsPopulated`, the same signal `CrashWatcher` polls) —
+    universal across every spawn path (manual start, boot autostart, crash-restart, daemon-restart
+    re-adopt) without depending on log-rotation semantics. Also re-arms defensively on
+    `EventChannelTail.LastReadResetSession` (a genuine log rotation/truncation).
+  - Non-empty `Instance.StartupSuccessRegex` (kgsm-lib): compiled once per instance
+    (`NativeReadinessMatcher`, mirrors `NativeLogMatcher`'s 100ms ReDoS-guard timeout + honesty rules),
+    matched against every new log line; a one-shot whole-file scan on the start edge
+    (`MatchesExistingContent`, the .NET analog of the bash reference's `watchers.logs.sh`
+    `__logic_test_log_pattern` whole-file `grep -q`) catches a late attach where the ready line was
+    already logged before the edge was observed (daemon hot-swap mid-boot, or attaching to an
+    already-running instance) — independent of any `EventChannelTail`'s own offset/inode bookkeeping.
+  - Empty `StartupSuccessRegex`: honest immediate fallback — `instance-ready` fires as soon as the
+    start edge is observed, no fabricated delay. An invalid (non-empty, does not compile) pattern is
+    treated as a real blueprint bug — logged once and never silently substituted with the immediate
+    rule.
+  - Widened the ingester's enable/skip gate: an instance with a readiness pattern but no
+    `player_joined_regex`/`player_left_regex` (factorio/minecraft/terraria-shaped) is no longer skipped.
+  - `instance-ready` fires exactly once per run (a `ReadyFired` latch cleared only on the next start
+    edge).
+
 ## [1.5.0] - 2026-07-04
 
 ### Added

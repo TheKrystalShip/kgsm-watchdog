@@ -760,6 +760,58 @@ unaffected.
 
 ---
 
+### Increment 9 — `instance-ready`: readiness detection distinct from `instance-started`  ◀ BUILT (2026-07-04)
+
+**Why.** `instance-started` fires at spawn time (process exec) — it says nothing about whether the
+game has actually *finished booting* and is joinable. The Control Panel needs a separate, honest
+"ready" signal to flip a server from "Starting" to "Running". Deferred: port-based readiness (only
+log-pattern + the honest empty-pattern fallback are built).
+
+- [x] **Home: `NativePlayerPresenceIngester` doubles as the readiness ingester** (not a new
+      hosted service) — it already polls every native instance's config + tails its log once per
+      tick, so adding a second detector to the same pass avoids a second file-read path and a second
+      per-instance config cache. New pure sibling `NativeReadinessMatcher` (mirrors
+      `NativeLogMatcher`'s 100 ms ReDoS-guard + honesty rules) compiles `Instance.StartupSuccessRegex`.
+- [x] **Start-edge = the authoritative re-arm signal**, not log rotation: the instance's cgroup
+      transitioning not-populated → populated (`CgroupManager.IsPopulated`, injected into the
+      ingester — the same child-inclusive liveness signal `CrashWatcher` already polls). This is
+      universal across every existing spawn path (`StartAsync`, `RespawnFresh`,
+      `ReconcileRestartPending`, daemon-restart re-adopt) with **zero changes to
+      `InstanceSupervisor`** — fully decoupled from supervision, exactly like presence detection
+      already is. Also re-arms defensively on `EventChannelTail.LastReadResetSession`.
+      **Known divergence found along the way (not fixed here, out of scope):** the bash reference
+      truncates `instance_log_file` to a fresh inode on every start (`_rotate_log_file` +
+      `&>` in `manage.native.d/03-lifecycle.sh`); `SpawnEngine` instead appends (`>>`) forever,
+      never rotating — which is exactly why the cgroup-populated edge, not
+      `LastReadResetSession`, had to be the primary signal.
+- [x] **Empty pattern → honest immediate fallback** (ready = observed started, no fabricated delay);
+      **invalid (non-empty) pattern → disabled + warned, never silently substituted** with the
+      immediate rule (a real blueprint bug shouldn't be papered over).
+- [x] **Late-attach gotcha**: `primeAtEnd` means a normal tail attach after the ready line already
+      went by would miss it. Fixed with a one-shot whole-file scan on the start edge
+      (`NativeReadinessMatcher.MatchesExistingContent`, the .NET analog of the bash reference's
+      `watchers.logs.sh` `__logic_test_log_pattern` whole-file `grep -q`), read independently of the
+      shared `EventChannelTail` so it never perturbs its offset/inode bookkeeping.
+- [x] **Widened the enable/skip gate**: an instance with a readiness pattern but no
+      `player_joined_regex`/`player_left_regex` (factorio/minecraft/terraria-shaped) is no longer
+      skipped — the gate is now "has player patterns OR a valid readiness pattern OR the immediate
+      fallback applies".
+- [x] Wire: `events.EmitWithProvenance("instance-ready", "system", "system", [name])` — already
+      registered downstream (kgsm `events.sh`, kgsm-lib `InstanceReadyData`), so this only adds the
+      emitter.
+- [x] Tests: +11 (`NativePlayerPresenceIngesterTests` readiness section + new
+      `NativeReadinessMatcherTests`) — immediate fallback, pattern-based fire-once-and-rearm across a
+      simulated crash-restart, not-skipped-without-player-patterns, late-attach whole-file scan, and
+      invalid-pattern honesty (disabled but doesn't take out an unrelated valid player pattern on the
+      same instance). Full suite 223/223 green; AOT publish 0 IL2026/IL3050/ILC warnings.
+- **Out of scope (deferred):** port-based readiness; a `starting` phase in the watchdog's own state
+  model (the Control Panel API owns that state — the watchdog's only job is the correct
+  `instance-ready` emit); fixing `SpawnEngine`'s log-append-not-rotate divergence from the bash
+  reference (noted above, unrelated to this increment's correctness since the cgroup edge doesn't
+  depend on it).
+
+---
+
 ## 8. Open questions / risks
 
 - **kgsm-lib distribution.** Monitor uses `PackageReference ...KGSM.Lib 1.1.0`;

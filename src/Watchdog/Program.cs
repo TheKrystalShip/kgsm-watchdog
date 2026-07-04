@@ -130,10 +130,13 @@ builder.Services.AddHostedService<MemoryTrimmer>();
 // native supervision above. Self-resolves the kgsm instances dir post-bootstrap.
 builder.Services.AddHostedService<PlayerPresenceIngester>();
 
-// Player-presence ingester: the watchdog's NATIVE role. Tails each native instance's own game log
-// (instance.LogFile, which SpawnEngine already targets) and emits the SAME player join/left wire events
-// (origin=system), matching the blueprint's player_*_regex (read off the Instance via kgsm-lib) with the
-// pure NativeLogMatcher. Additive + decoupled from supervision; no spawn-path change.
+// Player-presence + readiness ingester: the watchdog's NATIVE role. Tails each native instance's own
+// game log (instance.LogFile, which SpawnEngine already targets) and emits (a) the SAME player
+// join/left wire events (origin=system), matching the blueprint's player_*_regex with the pure
+// NativeLogMatcher, and (b) instance-ready (Inc 9) — the "finished booting" signal, matching
+// startup_success_regex with the pure NativeReadinessMatcher, keyed on the instance's cgroup
+// populated-edge (reads CgroupManager — read-only, never acts). Additive + decoupled from
+// InstanceSupervisor; no spawn-path change.
 builder.Services.AddSingleton<PlayerSessionStore>();
 builder.Services.AddHostedService<NativePlayerPresenceIngester>();
 

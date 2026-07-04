@@ -1077,7 +1077,22 @@ internal sealed class InstanceSupervisor(
         // a deliberate /stop (which carries the operator's intent far more reliably than an exit code,
         // since game servers routinely exit 0 even on a fatal error). Opt-in on-failure instead leaves
         // a clean (code 0) exit stopped — see RestartPolicyMode for that footgun.
-        if (!policy.ShouldRestartAfter(exit))
+        bool autoRestart = si.Spec.CrashRestart ?? true;
+        var effectivePolicy = EffectivePolicyFor(si);
+
+        // crashRestart=false: operator explicitly disabled auto-recovery. Emit EventCrashed for alert
+        // visibility, then treat as Stopped (no retry slot consumed — the streak stays where it was).
+        if (!autoRestart)
+        {
+            si.Phase = SupervisionPhase.Stopped;
+            si.LastReason = $"exited ({exitText}); not restarted (crash_restart=false)";
+            logger.LogInformation("{Instance} exited ({Exit}); not restarting (crash_restart=false policy)", name, exitText);
+            PersistSupervisionState();
+            EmitSupervisionEvent(EventCrashed, name, exit, 0);
+            return;
+        }
+
+        if (!effectivePolicy.ShouldRestartAfter(exit))
         {
             si.Phase = SupervisionPhase.Stopped;
             si.LastReason = "exited cleanly (code 0); not restarted (on-failure policy)";
@@ -1087,13 +1102,13 @@ internal sealed class InstanceSupervisor(
         }
 
         string verb = exit == 0 ? "exited cleanly" : "crashed";
-        TimeSpan? delay = si.Restart.RegisterCrash(policy);
+        TimeSpan? delay = si.Restart.RegisterCrash(effectivePolicy);
         if (delay is null)
         {
             si.Phase = SupervisionPhase.Failed;
-            si.LastReason = $"restart limit reached ({si.Restart.ConsecutiveFailures} consecutive failures, last {exitText}); gave up after {policy.MaxRetries} retries";
+            si.LastReason = $"restart limit reached ({si.Restart.ConsecutiveFailures} consecutive failures, last {exitText}); gave up after {effectivePolicy.MaxRetries} retries";
             logger.LogWarning("{Instance} hit the restart limit ({Count} failures, last {Exit}); giving up after {Max} retries — reporting failed",
-                name, si.Restart.ConsecutiveFailures, exitText, policy.MaxRetries);
+                name, si.Restart.ConsecutiveFailures, exitText, effectivePolicy.MaxRetries);
             PersistSupervisionState(); // gave up (→Failed) — persist the latch so an OOM doesn't fake recovery
             EmitSupervisionEvent(EventFailed, name, exit, si.Restart.ConsecutiveFailures);
             return;
@@ -1241,6 +1256,24 @@ internal sealed class InstanceSupervisor(
         }
         supervisionStore.Save(state);
     }
+
+    /// <summary>
+    /// The effective <see cref="BackoffPolicy"/> for one instance: the global policy with
+    /// <see cref="BackoffPolicy.MaxRetries"/> overridden by the instance's <c>crash_max_restarts</c>
+    /// config key when present (null → keep the global default). Pure — no side effects.
+    /// </summary>
+    private BackoffPolicy EffectivePolicyFor(SupervisedInstance si) =>
+        si.Spec.CrashMaxRestarts is int maxR
+            ? new BackoffPolicy
+            {
+                BaseDelay = policy.BaseDelay,
+                MaxDelay = policy.MaxDelay,
+                MaxRetries = maxR,
+                StabilityThreshold = policy.StabilityThreshold,
+                GraceWindow = policy.GraceWindow,
+                Mode = policy.Mode,
+            }
+            : policy;
 
     /// <summary>Fork the game from the instance's cached spec into a fresh cgroup; on success the record is Running.</summary>
     private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason)

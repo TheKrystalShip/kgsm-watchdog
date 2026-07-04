@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-04
+
+### Added
+- Per-instance crash policy, overlaid on the global `BackoffPolicy` at crash-detection time
+  (`InstanceSupervisor.ReconcileRunning`), sourced from kgsm instance config
+  (`Instance.CrashRestart` / `Instance.CrashMaxRestarts`, kgsm-lib 1.35.0).
+  - `crash_restart=false` disables auto-recovery for that instance: an unintentional exit emits
+    `instance-crashed` (alert visibility) but is treated as `Stopped` — no retry slot consumed.
+    Null → auto-restart on (unchanged default).
+  - `crash_max_restarts` overrides the global give-up ceiling (`MaxRetries`) for that instance via a
+    new pure `EffectivePolicyFor` helper. Null → keep the global default. Lowering it makes a
+    crash-looping instance reach `Failed` (and emit `instance-failed`) sooner than the global would.
+
+### Changed
+- Bumped `TheKrystalShip.KGSM.Lib` 1.32.0 → 1.35.0.
+
 ## [1.4.0] - 2026-07-03
 
 ### Added

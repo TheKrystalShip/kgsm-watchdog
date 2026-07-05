@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ContainerLifecycleIngester` — the watchdog's second container role: container UPnP via
+  self-reported lifecycle.** Peer of `PlayerPresenceIngester`, tailing a different channel in the same
+  bind-mounted `/run/kgsm` dir: `<instances>/<blueprint>/<instance>/events/lifecycle.ndjson` (the
+  kgsm-containers Phase 1 in-image `_emit_lifecycle` NDJSON channel — `instance_started`/
+  `instance_stopping`). On `instance_started` it resolves the instance (`IInstanceService.GetInstanceInfo`)
+  and calls the existing `UpnpService.OpenAsync`; on `instance_stopping`, `CloseAsync`. Only acts on
+  **container**-runtime instances (native UPnP stays `InstanceSupervisor`-driven — never double-driven);
+  never shells `docker`; UPnP-only — does **not** emit kgsm wire events (the container's own manage.sh
+  already does). New `ContainerLifecycleLine` model + pure `ContainerLifecycleParser`, both registered
+  reflection-free in `WatchdogJsonContext`. New knob `KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS`
+  (default `1000`, same as the presence poll). 27 new tests (parser + ingester, discovery/resolve/
+  end-to-end against a real never-shelling `UpnpService`). 0 IL2026/IL3050/ILC warnings on AOT publish.
+  **Known limitation (see kgsm-containers CHANGELOG):** the in-container trap that emits
+  `instance_stopping` is unreachable once the game's `exec` replaces the bash process — so in practice
+  `instance_started` (and its UPnP open) fires reliably, but `instance_stopping` (and its UPnP close)
+  only fires if a signal arrives during the container's pre-exec setup window, not the common
+  steady-state `docker stop`. UPnP ports may stay forwarded after most container stops until this is
+  addressed (tracked, not fixed here — would need a launch-mechanism change out of this increment's scope).
+
 ## [1.6.1] - 2026-07-04
 
 ### Fixed

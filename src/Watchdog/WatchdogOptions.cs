@@ -121,6 +121,17 @@ public sealed class WatchdogOptions
     /// </summary>
     public int PlayerPresencePollMs { get; init; } = 1000;
 
+    // ---- Container lifecycle: UPnP + host-visible run-state ingester --------------------------
+
+    /// <summary>
+    /// How often the container lifecycle ingester scans for
+    /// <c>events/lifecycle.ndjson</c> channels and tails them, driving <see cref="TheKrystalShip.KGSM.Watchdog.PortForwarding.UpnpService"/>
+    /// open/close off a container's self-reported <c>instance_started</c>/<c>instance_stopping</c>.
+    /// <c>KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS</c>. Default <c>1000</c> (same default as
+    /// <see cref="PlayerPresencePollMs"/> — same instances-dir scan cost, no reason to diverge).
+    /// </summary>
+    public int ContainerLifecyclePollMs { get; init; } = 1000;
+
     // ---- Console stream: live follow of a native instance's stdout ----------------------------
 
     /// <summary>
@@ -167,6 +178,7 @@ public sealed class WatchdogOptions
             StateFile = Env("KGSM_WATCHDOG_STATE_FILE") is { Length: > 0 } st ? st : defaults.StateFile,
             InstancesDir = Env("KGSM_WATCHDOG_INSTANCES_DIR") is { Length: > 0 } id ? id : defaults.InstancesDir,
             PlayerPresencePollMs = ParseInt(Env("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS"), defaults.PlayerPresencePollMs, min: 50),
+            ContainerLifecyclePollMs = ParseInt(Env("KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS"), defaults.ContainerLifecyclePollMs, min: 50),
             ConsolePollMs = ParseInt(Env("KGSM_WATCHDOG_CONSOLE_POLL_MS"), defaults.ConsolePollMs, min: 50),
         };
     }
@@ -211,6 +223,7 @@ public sealed class WatchdogOptions
         "KGSM_WATCHDOG_STATE_FILE",
         "KGSM_WATCHDOG_INSTANCES_DIR",
         "KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS",
+        "KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS",
         "KGSM_WATCHDOG_CONSOLE_POLL_MS",
     ];
 
@@ -293,6 +306,9 @@ public sealed class WatchdogOptions
         Section("Player presence (container event-channel ingester)");
         Row("KGSM_WATCHDOG_INSTANCES_DIR", "[~/.local/share/kgsm/instances]", "kgsm instances dir watched for container events/events.ndjson channels");
         Row("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS", $"[{d.PlayerPresencePollMs}]", "how often presence channels are scanned and tailed");
+
+        Section("Container lifecycle (UPnP + host-visible run-state ingester)");
+        Row("KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS", $"[{d.ContainerLifecyclePollMs}]", "how often events/lifecycle.ndjson channels are scanned and tailed");
 
         Section("Console stream (live follow of a native instance's stdout)");
         Row("KGSM_WATCHDOG_CONSOLE_POLL_MS", $"[{d.ConsolePollMs}]", "how often /console/{instance}/follow polls the log for new lines");

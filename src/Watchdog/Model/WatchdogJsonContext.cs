@@ -17,6 +17,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 [JsonSerializable(typeof(HotSwapHandoff))] // base64'd env-var handoff carried across a self-re-exec hot-swap (Inc 7 / Option 3)
 [JsonSerializable(typeof(string[]))] // GET /enabled — the boot-autostart name set
 [JsonSerializable(typeof(PlayerPresenceLine))] // one NDJSON line of a container's player-presence channel
+[JsonSerializable(typeof(ContainerLifecycleLine))] // one NDJSON line of a container's lifecycle channel (UPnP + run-state)
 [JsonSerializable(typeof(WatchdogVersionInfo))] // GET /version — build identity for the hot-swap deploy
 [JsonSerializable(typeof(PlayerSession))] // GET /players — one player session in the live session map
 [JsonSerializable(typeof(PlayerSession[]))] // GET /players — array of sessions per instance

@@ -130,6 +130,15 @@ builder.Services.AddHostedService<MemoryTrimmer>();
 // native supervision above. Self-resolves the kgsm instances dir post-bootstrap.
 builder.Services.AddHostedService<PlayerPresenceIngester>();
 
+// Container lifecycle ingester: the watchdog's SECOND container role (a peer of
+// PlayerPresenceIngester, tailing a different channel in the same bind-mounted /run/kgsm dir). Tails
+// each container instance's events/lifecycle.ndjson (kgsm-containers Phase 1) and drives the SAME
+// UpnpService singleton the native supervision path uses — open on instance_started, close on
+// instance_stopping. UPnP-only: it does NOT emit kgsm wire events (the container's own manage.sh
+// already does that). Never shells docker; only acts on container-runtime instances so native UPnP
+// (already driven by InstanceSupervisor) is never double-driven.
+builder.Services.AddHostedService<ContainerLifecycleIngester>();
+
 // Player-presence + readiness ingester: the watchdog's NATIVE role. Tails each native instance's own
 // game log (instance.LogFile, which SpawnEngine already targets) and emits (a) the SAME player
 // join/left wire events (origin=system), matching the blueprint's player_*_regex with the pure

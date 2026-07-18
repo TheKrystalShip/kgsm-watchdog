@@ -175,4 +175,80 @@ public sealed class NativeLogMatcherTests
         Assert.Equal("3801603394", r.Key);
         Assert.Equal("App_Min", r.Reason);
     }
+
+    // ---- Palworld: the blueprint patterns replayed over a real captured session ---------------------
+
+    // The exact patterns shipped in blueprints/palworld.bp.yaml, authored from a real Palworld dedicated
+    // server log. Self-identifying both sides on the SteamID64 (`id`); the join edge is "joined the
+    // server" (player loaded into the world), NOT the earlier "connected" handshake line.
+    private const string PalworldJoined = @"\[LOG\] (?<name>.+?) joined the server\. \(User id: steam_(?<id>\d+)";
+    private const string PalworldLeft = @"\[LOG\] (?<name>.+?) left the server\. \(User id: steam_(?<id>\d+)";
+
+    // A real, verbatim Palworld session (one join + one leave), plus the surrounding noise the matcher
+    // must ignore: Steam init spam, the pre-join "connected" handshake line, and an in-game chat line.
+    private static readonly string[] PalworldSession =
+    [
+        "[S_API] SteamAPI_Init(): Loaded local 'steamclient.so' OK.",
+        "Game version is v1.0.1.100619",
+        "Running Palworld dedicated server on :8211",
+        "[2026-07-17 17:36:56] [LOG] Woutahh 188.91.39.193 connected the server. (User id: steam_76561197989637791)",
+        "[2026-07-17 17:39:18] [LOG] Woutahh joined the server. (User id: steam_76561197989637791, Player id: AF6D9A43000000000000000000000000)",
+        "[2026-07-17 17:39:45] [CHAT] <Woutahh> hallo",
+        "[2026-07-17 17:46:12] [LOG] Woutahh left the server. (User id: steam_76561197989637791)",
+    ];
+
+    [Fact]
+    public void Palworld_real_session_emits_one_join_and_one_correlated_leave()
+    {
+        // Drive the matcher + session map exactly as NativePlayerPresenceIngester.HandleLine does, over
+        // the whole captured session — the faithful "feed it the existing log" validation.
+        var matcher = new NativeLogMatcher(PalworldJoined, PalworldLeft);
+        var map = new PlayerSessionMap();
+        Assert.True(matcher.Enabled);
+        Assert.Empty(matcher.Warnings); // both blueprint patterns are valid .NET regexes
+
+        var emitted = new List<(string Event, string? Id, string? Name)>();
+        foreach (string line in PalworldSession)
+        {
+            PlayerPresenceParser.ParseResult r = matcher.Match(line);
+            if (!r.Emit)
+                continue;
+
+            string? sessionKey = PlayerSessionMap.ComputeSessionKey(r.Key, r.PlayerAddr, r.PlayerId, r.PlayerName);
+            Assert.NotNull(sessionKey);
+
+            if (r.EventName == PlayerPresenceParser.EventPlayerJoined)
+            {
+                if (map.Join(sessionKey!, r.PlayerId, r.PlayerName, r.PlayerAddr))
+                    emitted.Add((r.EventName, r.PlayerId, r.PlayerName));
+            }
+            else
+            {
+                PlayerSessionMap.Session? resolved = map.Leave(sessionKey!, r.PlayerId, r.PlayerName, r.PlayerAddr);
+                if (resolved is { } s)
+                    emitted.Add((r.EventName!, s.Id, s.Name));
+            }
+        }
+
+        // Exactly two events: the join, then a leave that resolved to the SAME identity via the map — the
+        // "connected", chat, and Steam-init lines all fell through as silent non-matches.
+        Assert.Equal(
+            [
+                (PlayerPresenceParser.EventPlayerJoined, "76561197989637791", "Woutahh"),
+                (PlayerPresenceParser.EventPlayerLeft, "76561197989637791", "Woutahh"),
+            ],
+            emitted);
+    }
+
+    [Fact]
+    public void Palworld_connected_handshake_line_is_not_a_join()
+    {
+        // The earlier "connected the server" line carries the same SteamID64 but is the network handshake,
+        // not the world-join edge — it must NOT be mistaken for a join (would double-count presence).
+        var m = new NativeLogMatcher(PalworldJoined, PalworldLeft);
+        var r = m.Match("[2026-07-17 17:36:56] [LOG] Woutahh 188.91.39.193 connected the server. (User id: steam_76561197989637791)");
+
+        Assert.False(r.Emit);
+        Assert.Null(r.DropReason); // a silent non-match, not an anomaly
+    }
 }

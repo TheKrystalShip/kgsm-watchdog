@@ -1,7 +1,51 @@
+using TheKrystalShip.KGSM.Core.Models;
+
 namespace TheKrystalShip.KGSM.Watchdog.Model;
 
 /// <summary>Result of a control action (<c>start</c>/<c>stop</c>): which instance, success, and a reason.</summary>
 public sealed record ActionResult(string Instance, bool Ok, string Message);
+
+/// <summary>
+/// One UPnP port-mapping row read from the local IGD (<c>upnpc -l</c>), owned by an instance — its
+/// mapping <c>description</c> equals the instance name (the tag the watchdog sets with <c>-e &lt;name&gt;</c>
+/// on open). Measured from the router, never fabricated.
+/// </summary>
+public sealed record UpnpMapping(
+    int ExternalPort,
+    string Protocol,        // "tcp" | "udp"
+    int InternalPort,
+    string InternalClient,
+    string Description);
+
+/// <summary>
+/// An instance's current UPnP mappings on the IGD. <see cref="State"/> is load-bearing for honesty:
+/// <c>"queried"</c> means the router was asked and these are the mappings it owns (possibly an empty
+/// list — a real "none"); <c>"unavailable"</c> means the router could not be asked at all (<c>upnpc</c>
+/// missing, no IGD on the network, or a timeout) — that is NEVER presented as "no mappings".
+/// </summary>
+public sealed record UpnpListResult(
+    string Instance,
+    string State,           // "queried" | "unavailable"
+    IReadOnlyList<UpnpMapping> Mappings);
+
+/// <summary>
+/// Outcome of an on-demand UPnP open/close. <see cref="Outcome"/> is <c>"applied"</c> (the IGD confirmed
+/// the change — the only path that emits an audit event), <c>"skipped"</c> (port-forwarding disabled for
+/// the instance, or it has no ports — nothing changed), or <c>"failed"</c> (<c>upnpc</c> could not
+/// deliver: missing binary, non-zero on open, or timeout). A skipped or failed open is never reported as
+/// an open.
+/// </summary>
+public sealed record UpnpActionResult(
+    string Instance,
+    string Outcome,         // "applied" | "skipped" | "failed"
+    string Detail);
+
+/// <summary>
+/// Optional request body for <c>POST /upnp/{name}/open</c>: an explicit port set to forward instead of
+/// the instance's configured ports (parity with the firewall's <c>ensure-open &lt;instance&gt; &lt;ports&gt;</c>).
+/// Absent or empty → the instance's own configured ports.
+/// </summary>
+public sealed record UpnpOpenRequest(List<PortMapping>? Ports);
 
 /// <summary>
 /// Reported state of a supervised instance: the <em>desired</em> run-state and the boot-autostart

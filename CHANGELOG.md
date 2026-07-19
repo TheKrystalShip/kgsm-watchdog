@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **On-demand UPnP control surface — `GET /upnp/{name}`, `POST /upnp/{name}/open`, `POST
+  /upnp/{name}/close`.** UPnP was a purely internal lifecycle side effect (open-on-start /
+  close-on-stop); it is now a first-class, externally-drivable AND queryable surface, capability parity
+  with kgsm-firewall's `ensure-open`/`remove`/`list`. A caller (kgsm-lib `IWatchdogClient` → the
+  assistant / web) can open, close, or read an instance's router port-forwards on demand.
+  - **List** queries the IGD directly (`upnpc -l`) and filters to the rows whose description equals the
+    instance name (the `-e <name>` ownership tag) — the router lease is the source of truth, so the
+    daemon keeps **no** in-memory UPnP registry that could drift. Honest by construction: a missing
+    `upnpc`, no IGD on the network, or a timeout yields `state: "unavailable"` — **never** an empty
+    `"queried"` list (which would fabricate the absence of forwards). Only output carrying upnpc's
+    `Found valid IGD` marker is reported as `"queried"` (exit code alone is unreliable — upnpc prints
+    "No IGD found" and still exits 0).
+  - **Open** takes an optional `{"ports":[{start,end,protocol}]}` body to forward an explicit set
+    instead of the instance's configured ports; **close** removes the instance's mappings. Both honor
+    the instance's `enable_port_forwarding` gate (config is the authority — an external caller never
+    force-forwards a gated-off server) and return an honest `outcome` of `applied` / `skipped` /
+    `failed`, never a fabricated open. A confirmed open/close routes through `InstanceSupervisor`
+    (`OpenUpnpAsync`/`CloseUpnpAsync`) and emits `instance-upnp-opened` / `instance-upnp-closed`
+    stamped with the caller's `origin` (default `control`), not `system` — the upnpc shell-out runs
+    **outside** the supervisor gate so it never stalls a lifecycle verb or reconcile. New `UpnpMapping`
+    / `UpnpListResult` / `UpnpActionResult` / `UpnpOpenRequest` DTOs, registered reflection-free in
+    `WatchdogJsonContext`; the `upnpc -l` parser is pure + unit-tested against captured real miniupnpc
+    output. 0 IL2026/IL3050/ILC warnings on AOT publish.
 - **`ContainerLifecycleIngester` — the watchdog's second container role: container UPnP via
   self-reported lifecycle.** Peer of `PlayerPresenceIngester`, tailing a different channel in the same
   bind-mounted `/run/kgsm` dir: `<instances>/<blueprint>/<instance>/events/lifecycle.ndjson` (the

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
@@ -127,6 +128,53 @@ internal static class ControlEndpoints
                     .ToArray();
             }
             return Results.Json(result, WatchdogJsonContext.Default.DictionaryStringPlayerSessionArray);
+        });
+
+        // On-demand UPnP control — open/close/list an instance's router port-forwards as a first-class
+        // external surface (capability parity with kgsm-firewall). Read is a plain 200 whose body carries
+        // the honest state (queried vs unavailable) — the daemon IS reachable even when the router is not,
+        // so an unreachable IGD is in-body "unavailable", never an HTTP error or a fabricated empty list.
+        app.MapGet("/upnp/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>
+        {
+            var result = await sup.ListUpnpAsync(name, ct);
+            return Results.Json(result, WatchdogJsonContext.Default.UpnpListResult);
+        });
+
+        // Open. Optional `?origin=` (default "control") is stamped on the audit event; an optional JSON
+        // body {"ports":[{start,end,protocol}]} forwards an explicit set instead of the instance's own
+        // ports. 200 with the outcome (applied/skipped/failed) in-body — a skipped/failed open is honest,
+        // not an HTTP failure. 400 only on a malformed body.
+        app.MapPost("/upnp/{name}/open", async (string name, string? origin, HttpRequest request, InstanceSupervisor sup, CancellationToken ct) =>
+        {
+            UpnpOpenRequest? body = null;
+            bool hasBody = request.ContentLength is > 0
+                || string.Equals(request.ContentType, "application/json", StringComparison.OrdinalIgnoreCase);
+            if (hasBody)
+            {
+                try
+                {
+                    body = await JsonSerializer.DeserializeAsync(
+                        request.Body, WatchdogJsonContext.Default.UpnpOpenRequest, ct);
+                }
+                catch (JsonException)
+                {
+                    return Results.Text(
+                        "invalid JSON body (expected {\"ports\":[{\"start\":N,\"end\":N,\"protocol\":\"tcp|udp\"}]})",
+                        "text/plain", statusCode: StatusCodes.Status400BadRequest);
+                }
+            }
+
+            var result = await sup.OpenUpnpAsync(
+                name, string.IsNullOrWhiteSpace(origin) ? "control" : origin, body?.Ports, ct);
+            return Results.Json(result, WatchdogJsonContext.Default.UpnpActionResult);
+        });
+
+        // Close. Optional `?origin=` (default "control") is stamped on the audit event.
+        app.MapPost("/upnp/{name}/close", async (string name, string? origin, InstanceSupervisor sup, CancellationToken ct) =>
+        {
+            var result = await sup.CloseUpnpAsync(
+                name, string.IsNullOrWhiteSpace(origin) ? "control" : origin, ct);
+            return Results.Json(result, WatchdogJsonContext.Default.UpnpActionResult);
         });
     }
 }

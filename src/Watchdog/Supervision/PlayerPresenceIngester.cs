@@ -185,7 +185,7 @@ internal sealed class PlayerPresenceIngester(
         {
             events.EmitWithProvenance(
                 eventName,
-                actor: "system",
+                actor: "system:watchdog",
                 origin: "system",
                 instanceName, playerId ?? string.Empty, playerName ?? string.Empty);
 

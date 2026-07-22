@@ -151,13 +151,13 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
 
         var join = rec.Calls[0];
         Assert.Equal("instance-player-joined", join.EventType);
-        Assert.Equal("system", join.Actor);   // autonomous: actor=system, NOT null (null → OS-user fallback on the wire)
+        Assert.Equal("system:watchdog", join.Actor);   // autonomous: actor=system:watchdog, NOT null (null → OS-user fallback on the wire)
         Assert.Equal("system", join.Origin);
         Assert.Equal(new[] { "factorio-test", "steam-1", "Alice" }, join.Parameters);
 
         var left = rec.Calls[1];
         Assert.Equal("instance-player-left", left.EventType);
-        Assert.Equal("system", left.Actor);
+        Assert.Equal("system:watchdog", left.Actor);
         Assert.Equal("system", left.Origin);
         // null id → empty positional arg, name preserved, instance first.
         Assert.Equal(new[] { "factorio-test", "", "Bob" }, left.Parameters);

@@ -388,7 +388,7 @@ internal sealed class NativePlayerPresenceIngester(
     {
         try
         {
-            events.EmitWithProvenance(EventReady, actor: "system", origin: "system", [instanceName]);
+            events.EmitWithProvenance(EventReady, actor: "system:watchdog", origin: "system", [instanceName]);
             logger.LogInformation("emitted {Event} for {Instance}", EventReady, instanceName);
         }
         catch (Exception ex)
@@ -411,7 +411,7 @@ internal sealed class NativePlayerPresenceIngester(
     {
         try
         {
-            events.EmitWithProvenance(eventName, actor: "system", origin: "system", parameters);
+            events.EmitWithProvenance(eventName, actor: "system:watchdog", origin: "system", parameters);
 
             logger.LogInformation(
                 "emitted {Event} for {Instance} (session={SessionKey} {Detail})",

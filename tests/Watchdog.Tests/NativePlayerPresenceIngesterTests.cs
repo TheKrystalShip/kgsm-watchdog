@@ -95,7 +95,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.Single(rec.Calls);
         var join = rec.Calls[0];
         Assert.Equal("instance-player-joined", join.EventType);
-        Assert.Equal("system", join.Actor);
+        Assert.Equal("system:watchdog", join.Actor);
         Assert.Equal("system", join.Origin);
         // instance, id, name, addr, sessionKey (5 positional params, contract §1) — no addr in this
         // pattern, so sessionKey falls back to id (key ?? addr ?? id ?? name).
@@ -404,7 +404,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         Assert.Single(rec.Calls);
         Assert.Equal("instance-ready", rec.Calls[0].EventType);
-        Assert.Equal("system", rec.Calls[0].Actor);
+        Assert.Equal("system:watchdog", rec.Calls[0].Actor);
         Assert.Equal("system", rec.Calls[0].Origin);
         Assert.Equal(new[] { "factorio-immediate" }, rec.Calls[0].Parameters);
 

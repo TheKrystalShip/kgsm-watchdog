@@ -1286,7 +1286,7 @@ internal sealed class InstanceSupervisor(
     /// instance name (e.g. exit code + restart count for crash/failed; none for restarted).
     /// </summary>
     private void EmitSystemEvent(string dashEventName, string instanceName, params string[] extraData)
-        => EmitProvenanceEvent(dashEventName, "system", "system", instanceName, extraData);
+        => EmitProvenanceEvent(dashEventName, "system:watchdog", "system", instanceName, extraData);
 
     /// <summary>
     /// Fire-and-forget emit of an event through kgsm-lib with explicit provenance, so a caller-driven

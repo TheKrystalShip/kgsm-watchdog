@@ -395,6 +395,70 @@ internal sealed class InstanceSupervisor(
     /// <summary>The persisted boot-autostart name set (powers <c>GET /enabled</c>).</summary>
     public string[] EnabledNames() => store.Load().ToArray();
 
+    // ---- deregistration ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Drop every trace of <paramref name="name"/> from the daemon: the live table entry, the cgroup, the
+    /// boot-autostart intent, and the persisted supervision counters. This is the counterpart to
+    /// <c>kgsm uninstall</c> — an instance that no longer exists must stop being supervised, or the
+    /// supervisor keeps a `desired=running` record forever, restart-loops a game whose files are gone, and
+    /// leaves every consumer of <c>/list</c> (the kgsm-api alert engine among them) mirroring a condition
+    /// for a server nobody can act on.
+    /// <para>
+    /// <b>Idempotent and validation-free.</b> An unknown name succeeds as a no-op: by the time a caller
+    /// deregisters, the instance's kgsm spec is typically already deleted, so validating against kgsm-lib
+    /// (as <see cref="StartAsync"/>/<see cref="EnableAsync"/> do) would reject exactly the case this exists
+    /// to serve. Same reasoning as <see cref="DisableAsync"/> — forgetting intent needs no proof of
+    /// existence.
+    /// </para>
+    /// <para>
+    /// <b>Refuses to orphan a live process.</b> The instance is stopped first (via <see cref="StopAsync"/>,
+    /// which takes the gate itself — so this composes at the verb level, like <see cref="RestartAsync"/>).
+    /// If the cgroup is STILL populated afterwards, the table entry is kept and this fails: forgetting a
+    /// running game would leave a process nothing supervises and nothing can stop.
+    /// </para>
+    /// <para>
+    /// <b>Not cancellable once begun.</b> <paramref name="ct"/> is honored only up to the point the stop
+    /// starts. Callers pass <see cref="CancellationToken.None"/> (the control endpoint does): abandoning a
+    /// deregister mid-stop leaves the instance half torn down AND still supervised, which is the leak this
+    /// closes. Every internal wait is separately bounded, so running to completion cannot hang.
+    /// </para>
+    /// </summary>
+    public async Task<ActionResult> ForgetAsync(string name, CancellationToken ct = default)
+    {
+        // Whether this was ever supervised must be sampled BEFORE the stop: StopAsync removes the table
+        // entry on its own success paths, so reading it afterwards would report "not supervised" for an
+        // instance we just tore down — an honest-sounding lie in the operator's log.
+        bool wasTracked = _instances.ContainsKey(name);
+
+        // Tear down anything still live. Safe + idempotent on an untracked name (it also sweeps a stale
+        // cgroup left by a previous daemon), so this is unconditional rather than gated on tracking.
+        await StopAsync(name, ct).ConfigureAwait(false);
+
+        if (cgroups.IsPopulated(name))
+            return new ActionResult(name, false,
+                "still running after stop — refusing to deregister (would orphan the process)");
+
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            _instances.TryRemove(name, out var si);
+            if (si is not null)
+                DisposeCurrent(si);
+
+            PurgeCgroup(name);   // StopAsync removes it on its live paths; this covers the rest
+            store.Remove(name);  // boot-autostart intent must not resurrect a deleted instance
+            PersistSupervisionState();
+
+            logger.LogInformation("deregistered {Instance} (was supervised: {WasTracked})", name, wasTracked);
+            return new ActionResult(name, true, wasTracked ? "deregistered" : "not supervised (nothing to deregister)");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     // ---- boot restore (Inc 4) ----------------------------------------------------------------
 
     /// <summary>

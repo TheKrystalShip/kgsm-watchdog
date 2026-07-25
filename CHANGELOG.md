@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Deregistration verb — `DELETE /instance/{name}`.** The counterpart to `kgsm uninstall`: drops an
+  instance from supervision entirely — the live table entry, its cgroup, its boot-autostart intent, and
+  its persisted supervision counters. Without it there was **no way to un-supervise an instance**, so
+  every uninstall leaked a `desired=running` record: the supervisor restart-looped a game whose install
+  directory no longer existed (until the give-up latch caught it), and every `/list` consumer — the
+  kgsm-api alert engine among them — kept mirroring a crash condition for a server nobody could act on
+  or resolve. Idempotent: an unknown name is a `200` no-op (the instance's kgsm spec is normally already
+  deleted by the time a caller deregisters, so validating it against kgsm-lib would reject exactly the
+  case this serves). `409` only when the instance is still live after the stop attempt — deregistering
+  then would orphan a process nothing supervises and nothing can stop. Deliberately **not** bound to the
+  request's cancellation token: deregistering stops the instance first, which can take the full graceful
+  -stop timeout, and letting a client's HTTP timeout abort that mid-drain left the instance half torn
+  down AND still in the table — the very leak this closes. Its internal waits are each bounded, so
+  running to completion cannot hang.
+
 - **On-demand UPnP control surface — `GET /upnp/{name}`, `POST /upnp/{name}/open`, `POST
   /upnp/{name}/close`.** UPnP was a purely internal lifecycle side effect (open-on-start /
   close-on-stop); it is now a first-class, externally-drivable AND queryable surface, capability parity

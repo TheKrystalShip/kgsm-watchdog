@@ -87,6 +87,22 @@ internal static class ControlEndpoints
                 statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });
 
+        // Deregistration — the uninstall counterpart. Drops the instance from supervision entirely:
+        // table entry, cgroup, boot-autostart intent, persisted counters. Idempotent (an unknown name is
+        // a 200 no-op), so an uninstall never fails because the daemon had already forgotten it. 409 only
+        // when the instance is still live after the stop attempt — deregistering then would orphan it.
+        // NB: deliberately NOT the request's CancellationToken. Deregistering stops the instance first,
+        // which can take the full graceful-stop timeout — longer than a caller's HTTP timeout. Passing the
+        // request token let a client disconnect abort the stop mid-drain, leaving the instance half torn
+        // down and still in the table: the exact leak this endpoint exists to close. Once a deregister
+        // begins it runs to completion; its internal waits are individually bounded, so it cannot hang.
+        app.MapDelete("/instance/{name}", async (string name, InstanceSupervisor sup) =>
+        {
+            var result = await sup.ForgetAsync(name, CancellationToken.None);
+            return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
+                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+        });
+
         // The persisted boot-autostart name set — the authoritative source for "is it enabled?".
         app.MapGet("/enabled", (InstanceSupervisor sup) =>
             Results.Json(sup.EnabledNames(), WatchdogJsonContext.Default.StringArray));

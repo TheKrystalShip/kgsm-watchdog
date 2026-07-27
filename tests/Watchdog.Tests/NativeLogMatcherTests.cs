@@ -179,10 +179,12 @@ public sealed class NativeLogMatcherTests
     // ---- Palworld: the blueprint patterns replayed over a real captured session ---------------------
 
     // The exact patterns shipped in blueprints/palworld.bp.yaml, authored from a real Palworld dedicated
-    // server log. Self-identifying both sides on the SteamID64 (`id`); the join edge is "joined the
-    // server" (player loaded into the world), NOT the earlier "connected" handshake line.
-    private const string PalworldJoined = @"\[LOG\] (?<name>.+?) joined the server\. \(User id: steam_(?<id>\d+)";
-    private const string PalworldLeft = @"\[LOG\] (?<name>.+?) left the server\. \(User id: steam_(?<id>\d+)";
+    // server log. Self-identifying both sides on `id`; the join edge is "joined the server" (player
+    // loaded into the world), NOT the earlier "connected" handshake line. Palworld is crossplay, so
+    // `User id:` carries a platform prefix (`steam_` + SteamID64, `gdk_` + Xbox XUID) — both match, and
+    // the prefix stays OUT of the `id` capture so the bare account number is the roster identity.
+    private const string PalworldJoined = @"\[LOG\] (?<name>.+?) joined the server\. \(User id: (?:steam|gdk)_(?<id>\d+)";
+    private const string PalworldLeft = @"\[LOG\] (?<name>.+?) left the server\. \(User id: (?:steam|gdk)_(?<id>\d+)";
 
     // A real, verbatim Palworld session (one join + one leave), plus the surrounding noise the matcher
     // must ignore: Steam init spam, the pre-join "connected" handshake line, and an in-game chat line.
@@ -250,5 +252,70 @@ public sealed class NativeLogMatcherTests
 
         Assert.False(r.Emit);
         Assert.Null(r.DropReason); // a silent non-match, not an anomaly
+    }
+
+    // A real captured crossplay session: the same join/leave edges, but the player is on Xbox / Game
+    // Pass, so `User id:` is `gdk_<XUID>` rather than `steam_<SteamID64>`. A pattern anchored on a
+    // literal `steam_` drops both lines as ordinary non-presence noise — silently, with no warning
+    // anywhere — so the player never reaches a roster at all.
+    private static readonly string[] PalworldCrossplaySession =
+    [
+        "[2026-07-27 13:51:53] [LOG] PretoBranco8954 82.4.84.161 connected the server. (User id: gdk_2535444886866236)",
+        "[2026-07-27 13:52:03] [LOG] HitsTheCock joined the server. (User id: gdk_2535444886866236, Player id: 4B7F3E27000000000000000000000000)",
+        "[2026-07-27 14:26:01] [LOG] HitsTheCock left the server. (User id: gdk_2535444886866236)",
+    ];
+
+    [Fact]
+    public void Palworld_crossplay_gdk_session_emits_one_join_and_one_correlated_leave()
+    {
+        var matcher = new NativeLogMatcher(PalworldJoined, PalworldLeft);
+        var map = new PlayerSessionMap();
+
+        var emitted = new List<(string Event, string? Id, string? Name)>();
+        foreach (string line in PalworldCrossplaySession)
+        {
+            PlayerPresenceParser.ParseResult r = matcher.Match(line);
+            if (!r.Emit)
+                continue;
+
+            string? sessionKey = PlayerSessionMap.ComputeSessionKey(r.Key, r.PlayerAddr, r.PlayerId, r.PlayerName);
+            Assert.NotNull(sessionKey);
+
+            if (r.EventName == PlayerPresenceParser.EventPlayerJoined)
+            {
+                if (map.Join(sessionKey!, r.PlayerId, r.PlayerName, r.PlayerAddr))
+                    emitted.Add((r.EventName, r.PlayerId, r.PlayerName));
+            }
+            else
+            {
+                PlayerSessionMap.Session? resolved = map.Leave(sessionKey!, r.PlayerId, r.PlayerName, r.PlayerAddr);
+                if (resolved is { } s)
+                    emitted.Add((r.EventName!, s.Id, s.Name));
+            }
+        }
+
+        // The XUID is captured bare, WITHOUT the `gdk_` prefix — same shape as the Steam path, so the
+        // roster identity is the account number on both platforms.
+        Assert.Equal(
+            [
+                (PlayerPresenceParser.EventPlayerJoined, "2535444886866236", "HitsTheCock"),
+                (PlayerPresenceParser.EventPlayerLeft, "2535444886866236", "HitsTheCock"),
+            ],
+            emitted);
+    }
+
+    [Fact]
+    public void Palworld_steam_and_gdk_players_are_distinct_identities()
+    {
+        // Both platforms flow through one pattern; the two number spaces (17-digit SteamID64, 16-digit
+        // XUID) must not be conflated into one roster row.
+        var m = new NativeLogMatcher(PalworldJoined, PalworldLeft);
+
+        var steam = m.Match("[2026-07-27 14:23:07] [LOG] Void joined the server. (User id: steam_76561199121663631, Player id: 34612C4C000000000000000000000000)");
+        var gdk = m.Match("[2026-07-27 13:52:03] [LOG] HitsTheCock joined the server. (User id: gdk_2535444886866236, Player id: 4B7F3E27000000000000000000000000)");
+
+        Assert.True(steam.Emit);
+        Assert.True(gdk.Emit);
+        Assert.NotEqual(steam.PlayerId, gdk.PlayerId);
     }
 }

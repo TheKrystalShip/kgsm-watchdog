@@ -12,11 +12,16 @@ using TheKrystalShip.KGSM.Watchdog.Supervision;
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
-/// Covers the per-instance crash policy overlay in <see cref="InstanceSupervisor.ReconcileRunning"/>
-/// (kgsm-lib 1.35.0 <c>Instance.CrashRestart</c> / <c>CrashMaxRestarts</c>): the global
-/// <see cref="BackoffPolicy"/> singleton stays, but at crash-detection time <c>crash_restart=false</c>
-/// suppresses auto-recovery and <c>crash_max_restarts</c> overrides the give-up ceiling for that one
-/// instance.
+/// Covers what the reconcile pass decides when a supervised instance's cgroup has emptied — the two
+/// things that can override a plain "crashed → restart":
+/// <list type="bullet">
+/// <item>the per-instance crash policy overlay (kgsm-lib <c>Instance.CrashRestart</c> /
+/// <c>CrashMaxRestarts</c>): the global <see cref="BackoffPolicy"/> singleton stays, but at
+/// crash-detection time <c>crash_restart=false</c> suppresses auto-recovery and <c>crash_max_restarts</c>
+/// overrides the give-up ceiling for that one instance;</item>
+/// <item>the stop-intent gate: <c>DesiredRunning=false</c> means the exit is a stop completing, so it is
+/// never classified as a crash at all.</item>
+/// </list>
 /// <para>
 /// A supervised instance is injected in the <c>Running</c> phase (with a controllable
 /// <c>SpawnedAt</c> and seeded restart streak) via the hot-swap handoff adoption path — the one public
@@ -99,6 +104,44 @@ public sealed class PerInstanceCrashPolicyTests
         Assert.Equal(2, state.Restarts);
     }
 
+    // ---- the stop-intent gate ------------------------------------------------------------------
+    // Intent outranks detection: a record whose DesiredRunning is false describes an instance an
+    // operator asked to stop, so its exit is that stop completing — never a crash. Reaches the same
+    // "it exited" reconcile branch as the tests above (cgroup never populated), and must take the
+    // opposite decision.
+
+    [Fact]
+    public void Stop_intent_completes_the_teardown_instead_of_restarting()
+    {
+        var events = new RecordingEvents();
+        var spec = SpecFor("stopping");
+        var supervisor = NewSupervisor(events, spec);
+
+        AdoptRunning(supervisor, spec.Name, spawnedAt: Old(), consecutiveFailures: 0, desiredRunning: false);
+        supervisor.Reconcile();
+
+        // Dropped from the table exactly as a completed stop would leave it — nothing left to restart.
+        Assert.Empty(supervisor.List());
+        Assert.DoesNotContain(EventCrashed, events.Snapshot());
+        Assert.DoesNotContain("instance-restarted", events.Snapshot());
+    }
+
+    [Fact]
+    public void Stop_intent_does_not_consume_a_retry_slot_or_give_up()
+    {
+        var events = new RecordingEvents();
+        var spec = SpecFor("stopping-mid-streak");
+        var supervisor = NewSupervisor(events, spec);
+
+        // A stop landing on an instance that had already crashed once must not register a second
+        // failure — the exit is the operator's, not the game's.
+        AdoptRunning(supervisor, spec.Name, spawnedAt: Old(), consecutiveFailures: 1, desiredRunning: false);
+        supervisor.Reconcile();
+
+        Assert.Empty(supervisor.List());
+        Assert.DoesNotContain(EventFailed, events.Snapshot());
+    }
+
     // ---- helpers -------------------------------------------------------------------------------
 
     private const string EventCrashed = "instance-crashed";
@@ -118,7 +161,8 @@ public sealed class PerInstanceCrashPolicyTests
     /// exist, so adoption lands on cgroup-only supervision (<c>Current == null</c>) — exactly the shape a
     /// crash-detection pass needs, with no real process.
     /// </summary>
-    private static void AdoptRunning(InstanceSupervisor supervisor, string name, DateTime spawnedAt, int consecutiveFailures)
+    private static void AdoptRunning(
+        InstanceSupervisor supervisor, string name, DateTime spawnedAt, int consecutiveFailures, bool desiredRunning = true)
     {
         var handoff = new HotSwapHandoff
         {
@@ -133,7 +177,7 @@ public sealed class PerInstanceCrashPolicyTests
                     GaveUp = false,
                     Phase = nameof(SupervisionPhase.Running),
                     SpawnedAt = spawnedAt,
-                    DesiredRunning = true,
+                    DesiredRunning = desiredRunning,
                 },
             },
         };

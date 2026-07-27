@@ -41,9 +41,15 @@ internal static class ControlEndpoints
                 statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });
 
-        app.MapPost("/stop/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>
+        // NB: deliberately NOT the request's CancellationToken (same reasoning as DELETE /instance/{name}
+        // below). A stop drains for the instance's full stop_command_timeout_seconds before hard-killing —
+        // routinely longer than a caller's HTTP timeout. Passing the request token let a client disconnect
+        // abort the stop mid-drain, leaving the instance killed but still tabled as Running, which the
+        // crash path then read as a crash and restarted: the operator's stop became a start. Once a stop
+        // begins it runs to completion; its internal waits are individually bounded, so it cannot hang.
+        app.MapPost("/stop/{name}", async (string name, InstanceSupervisor sup) =>
         {
-            var result = await sup.StopAsync(name, ct);
+            var result = await sup.StopAsync(name, CancellationToken.None);
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
                 statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });
@@ -52,10 +58,11 @@ internal static class ControlEndpoints
         // "scheduler") flows to the emitted instance-restarted so the audit attributes it to the caller
         // (e.g. kgsm-scheduler's scheduled-restart), not system/system. Does NOT touch the crash streak —
         // it routes through StartAsync which resets it. 200/409 like start/stop (409 = restart couldn't
-        // complete: stop or the ensuing start failed).
-        app.MapPost("/restart/{name}", async (string name, string? origin, InstanceSupervisor sup, CancellationToken ct) =>
+        // complete: stop or the ensuing start failed). Uncancellable for the same reason as /stop — it
+        // performs a full graceful stop first, and an aborted one leaves the instance down but tabled.
+        app.MapPost("/restart/{name}", async (string name, string? origin, InstanceSupervisor sup) =>
         {
-            var result = await sup.RestartAsync(name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, ct);
+            var result = await sup.RestartAsync(name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, CancellationToken.None);
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
                 statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });

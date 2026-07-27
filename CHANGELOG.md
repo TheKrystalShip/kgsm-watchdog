@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A stop is never mistaken for a crash.** `Reconcile` now checks `DesiredRunning` before it classifies
+  an exit: a record whose intent is "stopped" has its teardown completed (handle disposed, cgroup purged,
+  phase `Stopped`, entry dropped) instead of being restarted — no exit-code read, no retry slot, no
+  `instance-crashed` event. The intent axis existed but nothing in the reconcile path consulted it: the
+  only things keeping a stopped instance down were incidental (the gate excludes reconcile *while*
+  `StopAsync` runs, and `StopAsync` removes the table entry as its last act). Any stop that unwound in
+  between therefore left a `Running`-phase record over a dead cgroup, which the crash path read as a
+  crash — and since a timed-out graceful stop ends in `cgroup.kill`, the "crash" it saw was the
+  watchdog's own SIGKILL (exit 137). Live symptom: a Team Fortress 2 server stopped from the web restarted
+  itself one second after the daemon killed it.
+- **A stop that has begun runs to completion.** `POST /stop/{name}` and `POST /restart/{name}` no longer
+  bind to the request's cancellation token, and every wait inside `StopAsync` past the gate uses
+  `CancellationToken.None` — the same rule `DELETE /instance/{name}` already followed. A stop drains for
+  the instance's full `stop_command_timeout_seconds` before hard-killing, which routinely outlives a
+  caller's HTTP timeout; a client hanging up mid-drain aborted the verb and produced exactly the
+  half-stopped record above. Each wait is separately bounded, so running to completion cannot hang.
+
 ### Added
 - **Deregistration verb — `DELETE /instance/{name}`.** The counterpart to `kgsm uninstall`: drops an
   instance from supervision entirely — the live table entry, its cgroup, its boot-autostart intent, and

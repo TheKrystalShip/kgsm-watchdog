@@ -148,6 +148,19 @@ internal sealed class InstanceSupervisor(
         }
     }
 
+    /// <summary>
+    /// Stop an instance: graceful stop command into the FIFO, drain up to the instance's timeout, then a
+    /// whole-tree <c>cgroup.kill</c> if it didn't drain.
+    /// <para>
+    /// <b><paramref name="ct"/> is honored only up to the point the stop begins.</b> Past the gate every
+    /// wait uses <see cref="CancellationToken.None"/>: the drain can run for the instance's full
+    /// <c>stop_command_timeout_seconds</c> (plus a 5s post-kill settle), which routinely outlives a
+    /// caller's HTTP timeout. Letting a client disconnect abort it mid-flight leaves the instance killed
+    /// but still tabled as <c>Running</c> — a state the crash path used to read as a crash and restart,
+    /// turning the operator's stop into a start. Same reasoning as <c>DELETE /instance/{name}</c>. Every
+    /// wait here is separately bounded, so running to completion cannot hang.
+    /// </para>
+    /// </summary>
     public async Task<ActionResult> StopAsync(string name, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
@@ -163,7 +176,7 @@ internal sealed class InstanceSupervisor(
                 if (cgroups.IsPopulated(name))
                 {
                     cgroups.Kill(name);
-                    await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                    await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
                     cgroups.Remove(name);
                     return new ActionResult(name, true, "stopped (untracked live cgroup torn down)");
                 }
@@ -189,7 +202,7 @@ internal sealed class InstanceSupervisor(
                 if (cgroups.IsPopulated(name))
                 {
                     cgroups.Kill(name);
-                    await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                    await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
                     cgroups.Remove(name);
                     reason = "stopped (adopted instance hard-killed; no graceful-stop channel until a respawn)";
                 }
@@ -211,14 +224,14 @@ internal sealed class InstanceSupervisor(
             }
 
             var timeout = TimeSpan.FromSeconds(Math.Max(1, si.Current.StopTimeoutSeconds));
-            bool drained = await WaitForDrainAsync(name, timeout, ct).ConfigureAwait(false);
+            bool drained = await WaitForDrainAsync(name, timeout, CancellationToken.None).ConfigureAwait(false);
 
             if (!drained)
             {
                 // Hard teardown: atomic whole-tree SIGKILL — no pgrep -P, nothing escapes.
                 logger.LogWarning("{Instance} did not stop gracefully in {Seconds}s; cgroup.kill", name, timeout.TotalSeconds);
                 cgroups.Kill(name);
-                await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
             }
 
             DisposeCurrent(si);
@@ -1167,6 +1180,17 @@ internal sealed class InstanceSupervisor(
 
     private void ReconcileOne(SupervisedInstance si, DateTime now)
     {
+        // INTENT GATES DETECTION. A record with DesiredRunning=false is one an operator asked to stop,
+        // so its exit is the stop we asked for — never a crash, whatever the exit code says (a hard
+        // teardown exits 137/SIGKILL by construction). Checked BEFORE the phase dispatch so it covers
+        // both a Running record whose process just went away and a RestartPending one whose restart was
+        // queued before the stop landed.
+        if (!si.DesiredRunning)
+        {
+            ReconcileStopIntent(si);
+            return;
+        }
+
         switch (si.Phase)
         {
             case SupervisionPhase.Running:
@@ -1177,6 +1201,38 @@ internal sealed class InstanceSupervisor(
                 break;
             // Stopped / Failed are terminal until a manual start.
         }
+    }
+
+    /// <summary>
+    /// Finish a stop the control verb began but did not complete. <see cref="StopAsync"/> flips
+    /// <see cref="SupervisedInstance.DesiredRunning"/> to false as its first act and removes the table
+    /// entry as its last, so a record still here with intent=stopped means the verb unwound in between —
+    /// an exception, or (before the stop path was made non-cancellable) a caller that hung up mid-drain.
+    /// Left alone such a record keeps <c>Phase=Running</c> over a dead cgroup, which the crash path then
+    /// reads as a crash and restarts: the operator's stop silently becomes a start.
+    /// <para>
+    /// The exit is deliberately unclassified — no exit-code read, no policy, no retry slot, no
+    /// <c>instance-crashed</c> event. The instance is torn down, marked <c>Stopped</c>, and dropped from
+    /// the table exactly as a completed stop would leave it. A still-populated cgroup is left strictly
+    /// alone: the drain may still be in flight, and reconcile has no business hard-killing on a deadline
+    /// it did not set — the record simply stays visible (desired=stopped, running=true) until the process
+    /// exits or an operator re-issues the stop.
+    /// </para>
+    /// </summary>
+    private void ReconcileStopIntent(SupervisedInstance si)
+    {
+        if (cgroups.IsPopulated(si.Name))
+            return; // still draining — nothing to conclude yet
+
+        DisposeCurrent(si);
+        PurgeCgroup(si.Name);
+        si.Phase = SupervisionPhase.Stopped;
+        si.LastReason = "stopped (stop request completed after the caller abandoned it)";
+        _instances.TryRemove(si.Name, out _);
+        PersistSupervisionState();
+
+        logger.LogInformation(
+            "{Instance} exited under a pending stop — completing the teardown, not restarting (intent: stopped)", si.Name);
     }
 
     private void ReconcileRunning(SupervisedInstance si, DateTime now)

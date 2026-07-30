@@ -563,8 +563,10 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         // A real crash-restart / manual start now calls SpawnEngine.Spawn, which rotates the log BEFORE
         // the fresh process starts writing — simulate that exact step. Run 1's stale ready line moves
-        // out from under `log`.
-        new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance).RotateLogFile(log);
+        // out from under `log` into the logs directory.
+        string logsDir = Path.Combine(Path.GetDirectoryName(log) ?? "", "..", "logs");
+        Directory.CreateDirectory(logsDir);
+        new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance).RotateLogFile(log, logsDir);
         Assert.False(File.Exists(log), "the rotated-away log must not still be sitting at the old path");
 
         // Run 2's start edge fires (cgroup repopulates) before the new process has written anything —
@@ -596,7 +598,9 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         var ingester = NewIngester(rec, fake);
         ingester.IngestOnce(_root); // primes at EOF — run 1's stale join is skipped, as today
 
-        new SpawnEngine(NewCgroups(), NullLogger<SpawnEngine>.Instance).RotateLogFile(log);
+        string logsDir = Path.Combine(Path.GetDirectoryName(log) ?? "", "..", "logs");
+        Directory.CreateDirectory(logsDir);
+        new SpawnEngine(NewCgroups(), NullLogger<SpawnEngine>.Instance).RotateLogFile(log, logsDir);
         Assert.False(File.Exists(log));
 
         // Run 2 starts and a genuinely new join appears in the fresh file.
@@ -648,7 +652,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         public Dictionary<string, Instance>? GetAllOrNull() => throw new NotImplementedException();
         public InstanceRuntimeStatus? GetInstanceStatus(string instanceName) => throw new NotImplementedException();
         public Dictionary<string, Reading<InstanceRuntimeStatus>> GetAllStatuses(bool fast = false) => throw new NotImplementedException();
-        public KgsmResult Install(string blueprintName, string? installDir = null, string? version = null, string? name = null, string? actor = null, string? origin = null, int? port = null) => throw new NotImplementedException();
+        public KgsmResult Install(string blueprintName, string? installDir = null, string? version = null, string? name = null, string? actor = null, string? origin = null, int? port = null, bool? start = null) => throw new NotImplementedException();
         public KgsmResult Uninstall(string instanceName, string? actor = null, string? origin = null) => throw new NotImplementedException();
         public ICollection<string> GetLogs(string instanceName, int maxLines = 10) => throw new NotImplementedException();
         public Task<ICollection<string>> GetLogsAsync(string instanceName, int maxLines = 10, CancellationToken cancellationToken = default) => throw new NotImplementedException();

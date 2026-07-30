@@ -81,6 +81,10 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
         if (!string.IsNullOrEmpty(logDir))
             Directory.CreateDirectory(logDir);
 
+        // Ensure the logs directory exists for rotation
+        if (!string.IsNullOrEmpty(instance.LogsDir))
+            Directory.CreateDirectory(instance.LogsDir);
+
         // 0. Rotate a PRIOR run's log out of the way so this fresh spawn starts a brand-new inode at
         //    `log` — see RotateLogFile for the full rationale (fixes the Increment-9 divergence noted
         //    in PLAN.md: a stale ready/player-presence line surviving into the 2nd+ run). Safe here
@@ -88,7 +92,7 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
         //    only caller, for manual start / boot respawn-of-dead / crash-restart) — adopt
         //    (AdoptLive/AdoptFromHandoff) never calls Spawn, so a still-writing live game's log is
         //    never touched.
-        RotateLogFile(log);
+        RotateLogFile(log, instance.LogsDir);
 
         // 1. Instance cgroup (mkdir under the delegated base).
         if (!cgroups.Create(name))
@@ -231,8 +235,13 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
     /// same-second collision with a previous rotated filename falls back to a tick-suffixed name so it
     /// never silently drops the prior run's content.
     /// </para>
+    /// <para>
+    /// <paramref name="logsDir"/> is the instance's logs directory (e.g. <c>/inst/logs</c>) where
+    /// rotated logs are stored, keeping the working directory clean. Mirrors the bash reference
+    /// (<c>_rotate_log_file</c>) which moves to <c>${instance_logs_dir}</c>.
+    /// </para>
     /// </summary>
-    internal void RotateLogFile(string logPath)
+    internal void RotateLogFile(string logPath, string logsDir)
     {
         try
         {
@@ -240,7 +249,8 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
             if (!info.Exists || info.Length == 0)
                 return; // nothing worth rotating — first-ever spawn, or already a fresh/empty file
 
-            string dir = info.DirectoryName ?? string.Empty;
+            // Use the instance's logs directory, not the log file's parent directory
+            string dir = !string.IsNullOrEmpty(logsDir) ? logsDir : (info.DirectoryName ?? string.Empty);
             string stem = Path.GetFileNameWithoutExtension(logPath);
             string ext = Path.GetExtension(logPath); // includes the leading '.', or "" if none
             string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");

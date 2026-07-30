@@ -125,13 +125,18 @@ public sealed class SpawnEngineTests : IDisposable
     // ---- RotateLogFile (fresh-spawn log rotation — Increment 9 follow-up) ---------------------
 
     [Fact]
-    public void RotateLogFile_moves_a_nonempty_prior_run_log_to_a_fresh_inode_at_the_same_path()
+    public void RotateLogFile_moves_a_nonempty_prior_run_log_to_logs_dir()
     {
-        string log = Path.Combine(_tempDir, "factorio-test.log");
+        string logDir = Path.Combine(_tempDir, "work");
+        string logsDir = Path.Combine(_tempDir, "logs");
+        Directory.CreateDirectory(logDir);
+        Directory.CreateDirectory(logsDir);
+
+        string log = Path.Combine(logDir, "factorio-test.log");
         File.WriteAllText(log, "1000.500 Hosting game at IP ADDR:34197\nPlayer joined\n");
         ulong? inodeBefore = EventChannelTail.TryReadInode(log);
 
-        NewEngine().RotateLogFile(log);
+        NewEngine().RotateLogFile(log, logsDir);
 
         // The original path either no longer exists, or (if something raced a fresh write in) now
         // points at a NEW inode — either way, the prior run's content is no longer reachable there.
@@ -140,34 +145,57 @@ public sealed class SpawnEngineTests : IDisposable
         else
             Assert.False(File.Exists(log));
 
-        // The content itself is preserved, just moved — never silently dropped.
-        string[] siblings = Directory.GetFiles(_tempDir, "factorio-test.*.log");
+        // The content itself is preserved in the logs directory — never silently dropped.
+        string[] siblings = Directory.GetFiles(logsDir, "factorio-test.*.log");
         Assert.Single(siblings);
         Assert.Equal("1000.500 Hosting game at IP ADDR:34197\nPlayer joined\n", File.ReadAllText(siblings[0]));
+
+        // The working directory should NOT have the rotated log
+        Assert.Empty(Directory.GetFiles(logDir, "factorio-test.*.log"));
+    }
+
+    [Fact]
+    public void RotateLogFile_falls_back_to_log_file_directory_when_logs_dir_is_empty()
+    {
+        // When logsDir is empty, the method should fall back to the log file's parent directory
+        // (backward compatibility for callers that don't have a logs directory)
+        string log = Path.Combine(_tempDir, "fallback-test.log");
+        File.WriteAllText(log, "some log content\n");
+
+        NewEngine().RotateLogFile(log, string.Empty);
+
+        // Rotated log ends up in the same directory as the log file
+        string[] siblings = Directory.GetFiles(_tempDir, "fallback-test.*.log");
+        Assert.Single(siblings);
+        Assert.Equal("some log content\n", File.ReadAllText(siblings[0]));
     }
 
     [Fact]
     public void RotateLogFile_is_a_noop_when_the_log_does_not_exist_yet()
     {
         string log = Path.Combine(_tempDir, "never-started.log");
+        string logsDir = Path.Combine(_tempDir, "logs");
+        Directory.CreateDirectory(logsDir);
 
-        NewEngine().RotateLogFile(log); // must not throw — first-ever spawn, nothing to rotate
+        NewEngine().RotateLogFile(log, logsDir); // must not throw — first-ever spawn, nothing to rotate
 
         Assert.False(File.Exists(log));
-        Assert.Empty(Directory.GetFiles(_tempDir));
+        Assert.Empty(Directory.GetFiles(logsDir));
     }
 
     [Fact]
     public void RotateLogFile_is_a_noop_on_an_already_empty_log()
     {
         string log = Path.Combine(_tempDir, "empty.log");
+        string logsDir = Path.Combine(_tempDir, "logs");
+        Directory.CreateDirectory(logsDir);
         File.WriteAllText(log, "");
 
-        NewEngine().RotateLogFile(log);
+        NewEngine().RotateLogFile(log, logsDir);
 
         // Left in place at the SAME inode — nothing worth rotating away.
         Assert.True(File.Exists(log));
-        Assert.Single(Directory.GetFiles(_tempDir));
+        Assert.Empty(Directory.GetFiles(logsDir));
     }
 
     [Fact]
@@ -175,9 +203,11 @@ public sealed class SpawnEngineTests : IDisposable
     {
         string missingDir = Path.Combine(_tempDir, "vanished");
         string log = Path.Combine(missingDir, "x.log");
+        string logsDir = Path.Combine(_tempDir, "logs");
+        Directory.CreateDirectory(logsDir);
         // Deliberately do NOT create `missingDir` — File.Exists(log) is false, so this is the
         // same "nothing to rotate" no-op path; asserts the best-effort contract never throws.
-        var ex = Record.Exception(() => NewEngine().RotateLogFile(log));
+        var ex = Record.Exception(() => NewEngine().RotateLogFile(log, logsDir));
         Assert.Null(ex);
     }
 }

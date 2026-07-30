@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **RCON player-presence poller** (`RconPlayerPresencePoller`). A new `BackgroundService`
+  that polls game servers supporting Source RCON for connected players, detecting disconnects
+  when the game server does not log them. For each native instance with RCON configured
+  (`rcon_port` non-null, `rcon_password` non-empty), it periodically connects via RCON,
+  executes the configured `players` command, diffs the result against the previous poll, and
+  emits `instance-player-joined` / `instance-player-left` wire events — the same events the
+  log-based `NativePlayerPresenceIngester` produces. Coexists with the log tail via the shared
+  `PlayerSessionStore`; the store's dedup logic prevents double-counting. Per-instance poll
+  interval is configurable (default 10s, minimum 5s).
+- **RCON client in kgsm-lib** (`IRconClient`, `RconClient`). Minimal Source RCON protocol
+  implementation — TCP, length-prefixed binary packets, auth handshake, command/response.
+  AOT-safe (no reflection, no external dependencies). Lives in kgsm-lib so other consumers
+  (bot, API) can use it.
+- **RCON properties on `Instance` model**. `RconPort`, `RconPassword`, `RconPollIntervalSeconds`,
+  `RconPlayersCommand` — materialized from the blueprint into the instance config.
+
 ### Fixed
 - **A stop is never mistaken for a crash.** `Reconcile` now checks `DesiredRunning` before it classifies
   an exit: a record whose intent is "stopped" has its teardown completed (handle disposed, cgroup purged,

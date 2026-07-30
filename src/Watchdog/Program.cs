@@ -149,6 +149,12 @@ builder.Services.AddHostedService<ContainerLifecycleIngester>();
 builder.Services.AddSingleton<PlayerSessionStore>();
 builder.Services.AddHostedService<NativePlayerPresenceIngester>();
 
+// RCON player-presence poller: polls game servers that support Source RCON for connected
+// players, detecting leaves when the game server does not log disconnects. Additive to
+// the native log-based ingester above — both write to the same PlayerSessionStore, and
+// the store's dedup logic prevents double-counting.
+builder.Services.AddHostedService<RconPlayerPresencePoller>();
+
 // Control plane: a unix domain socket (no TCP port; the socket's filesystem perms are the
 // security boundary, same model as kgsm-monitor).
 builder.WebHost.ConfigureKestrel(kestrel =>

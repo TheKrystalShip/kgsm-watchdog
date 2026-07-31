@@ -42,16 +42,20 @@ for spawn tests. systemd-only, one canonical unit (`deploy/kgsm-watchdog.service
 (the invoking user), `Slice=kgsm.slice`, `Delegate=yes`.
 
 ```bash
+./deploy/setup.sh            # ONCE per host — asks for sudo; provisions and verifies the headless grant
 ./deploy/deploy.sh           # HOT-swap if running (zero-downtime SIGHUP re-exec), else COLD install
-./deploy/deploy.sh --cold    # force stop → install → start (required for the FIRST migration off the old root-boot unit)
+./deploy/deploy.sh --cold    # force stop → install → start
 ```
 
 - **HOT** (default when the service is active): the new binary is `--selfcheck`'d, atomically
   `rename(2)`'d onto the live path, then `systemctl reload` (SIGHUP) makes the daemon `execv` the new
   image **in place — same PID** — carrying each game's stdin-FIFO fd across, so no supervised game
   restarts and no console EOF. Verified by a new `/version` + an **unchanged** `MainPID`.
-- `sudo` is used only for systemd / root-owned paths; the binary is published as the invoking user. If
-  an op needs root, **stop and ask** — don't work around it.
+- **`deploy.sh` needs no privilege at all** (the ecosystem pattern —
+  `../scripts/deploy-template/README.md`): `/opt/kgsm-watchdog` is yours, the real unit lives in
+  `/etc/kgsm-watchdog/systemd/` with `/etc/systemd/system/kgsm-watchdog.service` symlinked to it, and
+  the `systemctl` verbs go through a scoped polkit grant. `setup.sh` provisions all of that once. If
+  some *other* op needs root, **stop and ask** — don't work around it.
 - `deploy/validate-increment*.sh` are root-run end-to-end harnesses (persist → adopt → respawn → prune
   across real daemon restarts against a live game server). They are the regression net for boot/cgroup
   behavior that unit tests can't reach.

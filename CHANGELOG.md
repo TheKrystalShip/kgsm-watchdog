@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — headless deploys (`setup.sh` once, `deploy.sh` forever after)
+- **`deploy/setup.sh` provisions the host once** (asks for sudo; idempotent): chowns
+  `/opt/kgsm-watchdog` to the deploying user, seeds the env file, puts the real unit in
+  `/etc/kgsm-watchdog/systemd/` with `/etc/systemd/system/kgsm-watchdog.service` symlinked to it,
+  installs a polkit grant scoped to this project's units, enables the unit, and verifies the grant
+  with the same unprivileged `systemctl` calls `deploy.sh` makes.
+- **`deploy/deploy.sh` runs with no `sudo` and no prompts**, and refuses up-front (before building)
+  with "run `deploy/setup.sh`" when the host is not provisioned. The hot-swap path is unchanged —
+  `--selfcheck` gate → atomic `rename(2)` → `systemctl reload` → verify a new `/version` on an
+  **unchanged** `MainPID` — it simply no longer escalates to do it.
+- `deploy/deploy-common.sh` carries the project block plus the shared helpers, sourced by both entry
+  points so they cannot drift. Canonical template and contract:
+  `tks/scripts/deploy-template/README.md`.
+
 ### Added
 - **RCON player-presence poller** (`RconPlayerPresencePoller`). A new `BackgroundService`
   that polls game servers supporting Source RCON for connected players, detecting disconnects

@@ -51,11 +51,17 @@ for spawn tests. systemd-only, one canonical unit (`deploy/kgsm-watchdog.service
   `rename(2)`'d onto the live path, then `systemctl reload` (SIGHUP) makes the daemon `execv` the new
   image **in place — same PID** — carrying each game's stdin-FIFO fd across, so no supervised game
   restarts and no console EOF. Verified by a new `/version` + an **unchanged** `MainPID`.
-- **`deploy.sh` needs no privilege at all** (the ecosystem pattern —
-  `../scripts/deploy-template/README.md`): `/opt/kgsm-watchdog` is yours, the real unit lives in
-  `/etc/kgsm-watchdog/systemd/` with `/etc/systemd/system/kgsm-watchdog.service` symlinked to it, and
-  the `systemctl` verbs go through a scoped polkit grant. `setup.sh` provisions all of that once. If
-  some *other* op needs root, **stop and ask** — don't work around it.
+- **`deploy.sh` needs no privilege at all.** `/opt/kgsm-watchdog` is yours (so installing a binary is
+  a plain file write), the real unit lives in **user-owned** `/etc/kgsm-watchdog/systemd/` with
+  `/etc/systemd/system/kgsm-watchdog.service` symlinked to it (so a unit change is also a plain file
+  write), and the `systemctl` verbs — including the hot-swap `reload` — go through a polkit rule
+  scoped to this project's units. `setup.sh` provisions all of that once, asking for sudo, and ends
+  by verifying the grant with the same unprivileged calls `deploy.sh` makes. `deploy.sh` refuses
+  **before building** with *"run `deploy/setup.sh`"* on an unprovisioned host. If some *other* op
+  needs root, **stop and ask** — don't reintroduce `sudo` here.
+- The three files in `deploy/` (`deploy-common.sh` + the two entry points) are self-contained: a
+  standalone clone deploys with no other repo checked out. Every `kgsm-*` repo carries the same
+  pattern, so what you learn here transfers.
 - `deploy/validate-increment*.sh` are root-run end-to-end harnesses (persist → adopt → respawn → prune
   across real daemon restarts against a live game server). They are the regression net for boot/cgroup
   behavior that unit tests can't reach.

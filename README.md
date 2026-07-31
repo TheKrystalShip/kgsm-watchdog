@@ -87,8 +87,20 @@ user, templated by `deploy.sh`), `Slice=kgsm.slice`, `Delegate=yes`. Configurati
 [`kgsm-watchdog.env.example`](deploy/kgsm-watchdog.env.example).
 
 ```bash
+./deploy/setup.sh            # ONCE per host. Asks for sudo. Idempotent, re-runnable.
 ./deploy/deploy.sh           # hot-swap if running (zero-downtime re-exec), else cold install
+./deploy/deploy.sh --cold    # force stop → install → start
 ```
+
+`setup.sh` provisions the host: `/opt/kgsm-watchdog` chowned to you, the real unit installed into
+user-owned `/etc/kgsm-watchdog/systemd/` with `/etc/systemd/system/kgsm-watchdog.service` symlinked
+to it, a polkit rule scoped to this project's units, the unit enabled — then it verifies the grant
+with the same unprivileged `systemctl` calls the deploy will make.
+
+`deploy.sh` then needs **no privilege and asks nothing**: installing a binary and refreshing a unit
+are plain file writes into directories you own, and the `systemctl` verbs (including the hot-swap
+`reload`) go through the polkit grant. On an unprovisioned host it stops before building and tells
+you to run `setup.sh`.
 
 systemd creates `kgsm.slice` + the delegated `kgsm.slice/kgsm-watchdog.service` subtree, enables
 the controllers, and chowns the subtree to the user — so per-instance cgroups (and their

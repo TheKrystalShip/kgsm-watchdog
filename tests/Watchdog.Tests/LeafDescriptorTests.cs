@@ -38,7 +38,7 @@ public class LeafDescriptorTests
     };
 
     private static readonly string[] FieldTypes =
-        ["string", "int", "bool", "enum", "secret", "path", "csv", "duration"];
+        ["string", "int", "bool", "enum", "secret", "path", "csv", "duration", "float"];
 
     private static readonly string[] RiskLevels = ["safe", "wiring", "destructive"];
 
@@ -205,7 +205,7 @@ public class LeafDescriptorTests
         foreach (JsonElement f in Fields())
         {
             string key = Str(f, "key");
-            bool numeric = Str(f, "type") is "int" or "duration";
+            bool numeric = Str(f, "type") is "int" or "duration" or "float";
 
             if (!numeric)
             {
@@ -218,11 +218,13 @@ public class LeafDescriptorTests
             // otherwise the API rejects the leaf's own default the moment someone re-enters it.
             if (OptionalStr(f, "default") is { } def)
             {
-                Assert.True(long.TryParse(def, out long value), $"{key}: default '{def}' is not an integer");
+                Assert.True(double.TryParse(def, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out double value),
+                    $"{key}: default '{def}' is not a number");
                 if (f.TryGetProperty("min", out JsonElement min))
-                    Assert.True(value >= min.GetInt64(), $"{key}: default {value} is below its own min");
+                    Assert.True(value >= min.GetDouble(), $"{key}: default {value} is below its own min");
                 if (f.TryGetProperty("max", out JsonElement max))
-                    Assert.True(value <= max.GetInt64(), $"{key}: default {value} is above its own max");
+                    Assert.True(value <= max.GetDouble(), $"{key}: default {value} is above its own max");
             }
         }
     }

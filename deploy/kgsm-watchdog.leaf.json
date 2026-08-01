@@ -1,0 +1,252 @@
+{
+  "schemaVersion": 1,
+  "id": "watchdog",
+  "displayName": "Watchdog",
+  "unit": "kgsm-watchdog.service",
+  "role": "Supervises native game-server instances in their own cgroups, holds desired state, and does crash-restart and boot autostart.",
+  "onDemand": false,
+  "applyMode": "restart",
+  "floorSources": [
+    { "kind": "systemd-unit", "path": "/etc/kgsm-watchdog/systemd/kgsm-watchdog.service" },
+    { "kind": "env-file", "path": "/etc/kgsm-watchdog/kgsm-watchdog.env" },
+    { "kind": "appsettings", "path": "/opt/kgsm-watchdog/kgsm-watchdog.settings.json" }
+  ],
+  "groups": [
+    { "id": "general", "label": "General", "order": 1 },
+    { "id": "kgsm", "label": "KGSM integration", "order": 2 },
+    { "id": "socket", "label": "Control socket", "order": 3 },
+    { "id": "cgroup", "label": "Cgroup layout", "order": 4 },
+    { "id": "supervision", "label": "Crash detection & restart", "order": 5 },
+    { "id": "persistence", "label": "Boot persistence", "order": 6 },
+    { "id": "ingesters", "label": "Event ingesters & console", "order": 7 }
+  ],
+  "fields": [
+    {
+      "key": "logLevel",
+      "env": "Logging__LogLevel__Default",
+      "label": "Log level",
+      "description": "Minimum severity this leaf logs.",
+      "group": "general",
+      "type": "enum",
+      "values": ["Trace", "Debug", "Information", "Warning", "Error", "Critical"],
+      "default": "Information",
+      "risk": "safe"
+    },
+    {
+      "key": "kgsmPath",
+      "env": "KGSM_WATCHDOG_KGSM_PATH",
+      "label": "KGSM executable",
+      "description": "Path to the KGSM executable. Required: the watchdog reads each instance's spawn configuration through it before forking the game, so it has nothing to supervise without one.",
+      "group": "kgsm",
+      "type": "path",
+      "risk": "wiring"
+    },
+    {
+      "key": "kgsmSocketPath",
+      "env": "KGSM_WATCHDOG_KGSM_SOCKET",
+      "label": "KGSM event socket",
+      "description": "Unix socket the watchdog receives KGSM lifecycle events on. It must be one of the paths the engine is configured to deliver to, and belong to no other consumer.",
+      "group": "kgsm",
+      "type": "path",
+      "default": "/run/kgsm-watchdog/events.sock",
+      "risk": "wiring"
+    },
+    {
+      "key": "instancesDir",
+      "env": "KGSM_WATCHDOG_INSTANCES_DIR",
+      "label": "Instances directory",
+      "description": "KGSM's instances directory, watched for the per-instance event channels that drive player presence and container lifecycle. Empty derives it under the KGSM user's data directory; set it only to relocate it.",
+      "group": "kgsm",
+      "type": "path",
+      "risk": "wiring"
+    },
+    {
+      "key": "socketPath",
+      "env": "KGSM_WATCHDOG_SOCKET",
+      "label": "Control socket",
+      "description": "Unix socket the watchdog serves its control plane on. Every surface that starts or stops a native server reaches it here.",
+      "group": "socket",
+      "type": "path",
+      "default": "/run/kgsm-watchdog/control.sock",
+      "risk": "wiring",
+      "pairedApiKey": "KGSM_API_WATCHDOG_SOCKET"
+    },
+    {
+      "key": "socketMode",
+      "env": "KGSM_WATCHDOG_SOCKET_MODE",
+      "label": "Control socket permissions",
+      "description": "Octal permission bits applied to the control socket. These are the whole security boundary — the socket can start and kill game servers, and the daemon does no authentication of its own.",
+      "group": "socket",
+      "type": "string",
+      "default": "660",
+      "risk": "wiring"
+    },
+    {
+      "key": "cgroupMount",
+      "env": "KGSM_WATCHDOG_CGROUP_MOUNT",
+      "label": "Cgroup v2 mount point",
+      "description": "Where the cgroup v2 hierarchy is mounted. Everything the watchdog supervises lives below this path.",
+      "group": "cgroup",
+      "type": "path",
+      "default": "/sys/fs/cgroup",
+      "risk": "wiring"
+    },
+    {
+      "key": "cgroupBase",
+      "env": "KGSM_WATCHDOG_CGROUP_BASE",
+      "label": "Cgroup base (fallback)",
+      "description": "Fallback name for KGSM's delegated cgroup base. The real base is discovered from the daemon's own cgroup, so this is used only when that discovery finds nothing.",
+      "group": "cgroup",
+      "type": "string",
+      "default": "kgsm.slice",
+      "risk": "wiring"
+    },
+    {
+      "key": "cgroupControllers",
+      "env": "KGSM_WATCHDOG_CGROUP_CONTROLLERS",
+      "label": "Cgroup controllers",
+      "description": "Controllers enabled on the base subtree so each per-instance cgroup inherits them. Dropping one removes the matching per-server metric.",
+      "group": "cgroup",
+      "type": "csv",
+      "default": "cpu,memory,io,pids",
+      "risk": "wiring"
+    },
+    {
+      "key": "supervisorLeaf",
+      "env": "KGSM_WATCHDOG_SUPERVISOR_LEAF",
+      "label": "Supervisor leaf cgroup",
+      "description": "Name of the cgroup the daemon itself sits in, a sibling of every instance cgroup. It has to be a leaf, because cgroup v2 forbids enabling controllers on a cgroup that holds processes.",
+      "group": "cgroup",
+      "type": "string",
+      "default": "supervisor",
+      "risk": "wiring"
+    },
+    {
+      "key": "pollIntervalMs",
+      "env": "KGSM_WATCHDOG_POLL_INTERVAL_MS",
+      "label": "Supervision poll interval",
+      "description": "How often each supervised instance is checked for liveness. This bounds how quickly a crash is noticed.",
+      "group": "supervision",
+      "type": "int",
+      "default": "1000",
+      "min": 50,
+      "unit": "ms",
+      "risk": "safe"
+    },
+    {
+      "key": "restartPolicy",
+      "env": "KGSM_WATCHDOG_RESTART_POLICY",
+      "label": "Restart policy",
+      "description": "What counts as restartable. 'always' restarts any exit while the instance is meant to be running; 'on-failure' leaves a clean exit stopped. Many games exit 0 on a crash, which is why 'always' is the default.",
+      "group": "supervision",
+      "type": "enum",
+      "values": ["always", "on-failure"],
+      "default": "always",
+      "risk": "safe"
+    },
+    {
+      "key": "restartBaseDelayMs",
+      "env": "KGSM_WATCHDOG_RESTART_BASE_DELAY_MS",
+      "label": "First restart delay",
+      "description": "How long to wait before the first restart attempt. The delay doubles with each consecutive failure.",
+      "group": "supervision",
+      "type": "int",
+      "default": "1000",
+      "min": 0,
+      "unit": "ms",
+      "risk": "safe"
+    },
+    {
+      "key": "restartMaxDelayMs",
+      "env": "KGSM_WATCHDOG_RESTART_MAX_DELAY_MS",
+      "label": "Maximum restart delay",
+      "description": "Ceiling on the doubling restart delay, so a long failure streak still retries at a predictable rate.",
+      "group": "supervision",
+      "type": "int",
+      "default": "60000",
+      "min": 0,
+      "unit": "ms",
+      "risk": "safe"
+    },
+    {
+      "key": "restartMaxRetries",
+      "env": "KGSM_WATCHDOG_RESTART_MAX_RETRIES",
+      "label": "Maximum consecutive restarts",
+      "description": "How many consecutive failures to tolerate before giving up on an instance and marking it failed. Zero means never restart.",
+      "group": "supervision",
+      "type": "int",
+      "default": "5",
+      "min": 0,
+      "risk": "safe"
+    },
+    {
+      "key": "restartStabilitySec",
+      "env": "KGSM_WATCHDOG_RESTART_STABILITY_SEC",
+      "label": "Stability window",
+      "description": "How long an instance must stay up before it counts as healthy and its failure streak resets.",
+      "group": "supervision",
+      "type": "int",
+      "default": "300",
+      "min": 1,
+      "unit": "s",
+      "risk": "safe"
+    },
+    {
+      "key": "restartGraceSec",
+      "env": "KGSM_WATCHDOG_RESTART_GRACE_SEC",
+      "label": "Post-spawn grace period",
+      "description": "How long after spawning an instance crash detection stays suppressed, so a slow-starting game is not mistaken for a crash.",
+      "group": "supervision",
+      "type": "int",
+      "default": "10",
+      "min": 0,
+      "unit": "s",
+      "risk": "safe"
+    },
+    {
+      "key": "stateFile",
+      "env": "KGSM_WATCHDOG_STATE_FILE",
+      "label": "Desired-state file",
+      "description": "File holding the set of instances that should come back up after a restart or reboot. Empty derives it under the KGSM user's data directory. Pointing it elsewhere orphans the existing set, and those instances stop being started at boot.",
+      "group": "persistence",
+      "type": "path",
+      "risk": "destructive"
+    },
+    {
+      "key": "playerPresencePollMs",
+      "env": "KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS",
+      "label": "Player presence poll interval",
+      "description": "How often the player-presence channels are scanned and tailed. This bounds how quickly a join or leave is reported.",
+      "group": "ingesters",
+      "type": "int",
+      "default": "1000",
+      "min": 50,
+      "unit": "ms",
+      "risk": "safe"
+    },
+    {
+      "key": "containerLifecyclePollMs",
+      "env": "KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS",
+      "label": "Container lifecycle poll interval",
+      "description": "How often a container's self-reported lifecycle channel is scanned and tailed. This drives port forwarding open and closed as a container starts and stops.",
+      "group": "ingesters",
+      "type": "int",
+      "default": "1000",
+      "min": 50,
+      "unit": "ms",
+      "risk": "safe"
+    },
+    {
+      "key": "consolePollMs",
+      "env": "KGSM_WATCHDOG_CONSOLE_POLL_MS",
+      "label": "Console follow interval",
+      "description": "How often a followed console polls a native instance's log for new lines. Tighter than the other pollers because someone is watching the output live.",
+      "group": "ingesters",
+      "type": "int",
+      "default": "250",
+      "min": 50,
+      "unit": "ms",
+      "risk": "safe"
+    }
+  ]
+}

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the Control Panel can configure this daemon
+- **`deploy/kgsm-watchdog.leaf.json` declares every knob the watchdog reads** — all 20
+  `KGSM_WATCHDOG_*` variables plus the standard logging level, grouped for display, each with its
+  type, coded default, bounds, unit and risk. `deploy.sh` installs it into `/var/lib/kgsm/leaves/`,
+  where kgsm-api scans for it and renders this daemon's configuration page. Nothing in kgsm-api
+  needs to know about the watchdog for that to work.
+- **A coverage test fails the build if the descriptor and the daemon disagree.** It scans the
+  daemon's own source, so a knob added without a descriptor entry fails here, and a descriptor entry
+  naming a variable the watchdog does not read fails here too — an override written for a variable
+  nothing reads would otherwise be reported as applied while changing nothing. It also holds the
+  descriptor to the same surface `--help` documents.
+- The cgroup layout, both socket keys, the KGSM path and the instances directory are marked
+  `wiring`; the desired-state file is `destructive` (repointing it orphans the set of instances that
+  come back after a reboot). The control socket names `KGSM_API_WATCHDOG_SOCKET` as the API setting
+  that has to move with it.
+
 ### Changed — headless deploys (`setup.sh` once, `deploy.sh` forever after)
 - **`deploy/setup.sh` provisions the host once** (asks for sudo; idempotent): chowns
   `/opt/kgsm-watchdog` to the deploying user, seeds the env file, puts the real unit in

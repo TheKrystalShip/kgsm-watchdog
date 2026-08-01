@@ -72,6 +72,16 @@ else
     ENV_SEEDED=0
 fi
 
+# ── 2b. The shared leaf-descriptor directory ──────────────────────────────────
+# Where this leaf declares its configurable surface for the Control Panel. Shared by every leaf
+# and scanned by kgsm-api, so it is created once by whichever project's setup.sh runs first and
+# owned by the deploying user — deploy.sh then writes the descriptor with no privilege. Skipped
+# entirely for a project that ships no descriptor.
+if [[ -n "${LEAF_DESCRIPTOR:-}" && -f "$LEAF_DESCRIPTOR" && ! -d "$LEAF_DESCRIPTOR_DIR" ]]; then
+    log "creating ${LEAF_DESCRIPTOR_DIR} (owned by ${DEPLOY_USER}) — the leaf config descriptors"
+    $SUDO install -d -m 0755 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$LEAF_DESCRIPTOR_DIR"
+fi
+
 # ── 3. The user-owned unit directory ──────────────────────────────────────────
 if [[ ! -d "$UNIT_DIR" ]]; then
     log "creating ${UNIT_DIR} (owned by ${DEPLOY_USER} — this is what makes deploys sudo-free)"

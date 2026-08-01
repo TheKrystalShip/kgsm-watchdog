@@ -40,6 +40,18 @@ ENV_EXAMPLE="${REPO_DIR}/deploy/${PROJECT}.env.example"
 
 HEALTH_TRIES="${HEALTH_TRIES:-30}"
 
+# This project's leaf config descriptor — the JSON declaring its full configurable surface, which
+# kgsm-api reads to render the Control Panel's config page for this leaf. setup.sh creates the
+# discovery directory; deploy.sh installs the file there unprivileged on every deploy, so the
+# descriptor can never be older than the binary it describes. Format: tks/leaf-config-descriptor.md.
+# Leave empty for a project that is not a leaf (nothing is installed and nothing is asserted).
+LEAF_DESCRIPTOR="${REPO_DIR}/deploy/${PROJECT}.leaf.json"
+
+# The leaf id kgsm-api knows this project by — the descriptor's "id", its filename stem in the
+# discovery dir, and the {leaf} segment of the API's config route. Usually the project name minus
+# the kgsm- prefix, but NOT always: kgsm-llm ships the leaf "assistant". State it, don't derive it.
+LEAF_ID="${PROJECT#kgsm-}"
+
 # systemd starts the daemon AS this user and delegates it the kgsm.slice cgroup subtree, so
 # User=/Group= are rewritten per host — a fresh host needs no dedicated 'kgsm' user.
 render_unit() {   # $1 = unit filename
@@ -73,6 +85,10 @@ POLKIT_DST="/etc/polkit-1/rules.d/48-${PROJECT}-deploy.rules"
 
 SERVICE="${UNITS[0]}"           # the primary unit, e.g. kgsm-api.service
 PUBLISH_DIR="${REPO_DIR}/artifacts/publish"
+
+# Where every leaf drops its config descriptor. Shared across projects and scanned by kgsm-api —
+# the API holds no list of leaves, so a new leaf becomes configurable by landing a file here.
+LEAF_DESCRIPTOR_DIR="${KGSM_LEAF_DESCRIPTOR_DIR:-/var/lib/kgsm/leaves}"
 
 # Privileged-call indirection, used by setup.sh ONLY. deploy.sh never calls this. An automated
 # run can set SUDO='sudo -A' + SUDO_ASKPASS=… to provision without an interactive prompt; no
@@ -162,4 +178,49 @@ install_units_unprivileged() {
         fi
         rm -f "$tmp"
     done
+}
+
+# Install this project's leaf config descriptor into the shared discovery directory. Unprivileged:
+# the directory is owned by DEPLOY_USER (setup.sh created it), so this is a plain file write.
+#
+# A project with no descriptor file is simply not a leaf — nothing is installed and nothing fails.
+# When the file IS present the descriptor is validated before it lands, because kgsm-api skips a
+# malformed one silently: catching it here is the difference between "the panel has no page for
+# this leaf" and knowing why.
+install_leaf_descriptor() {
+    [[ -n "${LEAF_DESCRIPTOR:-}" && -f "$LEAF_DESCRIPTOR" ]] || return 0
+
+    local dst="${LEAF_DESCRIPTOR_DIR}/${LEAF_ID}.json"
+
+    # Validate what we can before it lands: it must parse, and its "id" must be the id this
+    # project deploys under — a mismatch would install the file under a name kgsm-api then reads
+    # back as a different leaf.
+    if command -v python3 >/dev/null 2>&1; then
+        if ! python3 - "$LEAF_DESCRIPTOR" "$LEAF_ID" <<'PY'
+import json, sys
+path, want = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(open(path))
+except Exception as e:
+    sys.exit(f"{path} is not valid JSON: {e}")
+if d.get("id") != want:
+    sys.exit(f"{path} declares id={d.get('id')!r}, but this project deploys leaf id {want!r}.")
+PY
+        then
+            err "refusing to install the leaf descriptor — kgsm-api would skip it and the"
+            err "Control Panel would show no configuration for ${PROJECT}."
+            return 1
+        fi
+    fi
+
+    if [[ ! -d "$LEAF_DESCRIPTOR_DIR" ]]; then
+        err "leaf descriptor directory ${LEAF_DESCRIPTOR_DIR} is missing."
+        err "run ONCE (it will ask for your sudo password):   ${REPO_DIR}/deploy/setup.sh"
+        return 1
+    fi
+
+    if ! cmp -s "$LEAF_DESCRIPTOR" "$dst"; then
+        log "leaf descriptor changed → ${dst}"
+        install -m 0644 "$LEAF_DESCRIPTOR" "$dst"
+    fi
 }

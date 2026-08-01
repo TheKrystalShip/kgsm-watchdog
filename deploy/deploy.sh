@@ -261,6 +261,10 @@ fi
 
 install_units_unprivileged
 
+# ── 2b. Publish the leaf config descriptor ────────────────────────────────────
+# Before the swap, so the surface kgsm-api reads never lags the binary that implements it.
+install_leaf_descriptor
+
 # ── 3. Choose mode + install ─────────────────────────────────────────────────────
 # DEFAULT = HOT (zero-downtime in-place swap) when the service is already running and --cold was not
 # passed. Otherwise COLD: a first install (nothing running to swap) or an explicit --cold bounce.

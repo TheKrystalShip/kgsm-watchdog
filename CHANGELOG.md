@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — kgsm-lib 2.0.0 (the socket event transport is gone)
+- **Pinned to `TheKrystalShip.KGSM.Lib` 2.0.0**, which removes `UnixSocketClient`,
+  `KgsmEventTransport` and `KgsmOptions.SocketPath`/`EventTransport`. The watchdog consumes no events and
+  needed no source change; the pin keeps it on the one lib version the ecosystem runs. No behaviour
+  change.
+
 ### Removed — the KGSM event socket knob
 
 - **`KGSM_WATCHDOG_KGSM_SOCKET` is gone.** It was vestigial: the watchdog registers no event

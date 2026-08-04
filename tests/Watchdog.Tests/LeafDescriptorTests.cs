@@ -188,6 +188,12 @@ public class LeafDescriptorTests
             Assert.Contains(Str(s, "kind"), kinds);
             Assert.StartsWith("/", Str(s, "path"));
         }
+
+        // floorSources is lowest-precedence-first, and the settings file is the base every other
+        // source overrides. Listed anywhere else, the Control Panel resolves a knob to the file's
+        // default and reports it as the deployed value — showing a blank where the unit sets a real
+        // path. That is wrong on a screen whose whole job is saying where a value came from.
+        Assert.Equal("appsettings", Str(sources[0], "kind"));
     }
 
     [Fact]

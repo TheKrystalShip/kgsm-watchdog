@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowest-precedence-first, and `appsettings` was last — outranking the unit. Harmless while the file
   held only logging, but a file that declares every knob then overwrites the deployed values in the
   Control Panel's floor computation, which showed `Watchdog__KgsmPath` as empty while the daemon ran
-  with a real path.
+  with a real path. A test pins the ordering, because nothing else catches it: the wrong order builds
+  and runs fine, and only shows up as a wrong value on the Control Panel after a deploy.
 
 - **A cadence below its floor is raised to the floor** instead of reverting to the coded default; the
   floor is the nearest legal value to what was asked for.

@@ -127,7 +127,7 @@ anything else as "unavailable, retry". The daemon supervises native-standalone i
   **without** binding the socket, entering the slice, or touching cgroups. `HotSwapCoordinator` +
   `HotSwapSignalListener` bridge SIGHUP → in-place `execv`. SIGTERM is a normal shutdown.
 - **Two persistence files, two independent axes.**
-  `desired-state.json` (`KGSM_WATCHDOG_STATE_FILE`) = the **boot/enable** axis (replaces `systemctl
+  `desired-state.json` (`Watchdog__StateFile`) = the **boot/enable** axis (replaces `systemctl
   enable`/`WantedBy=`): `enable`/`disable` add/remove a name; on startup `StartupRestorer` re-adopts a
   still-live cgroup or respawns a dead one. Stores **intent only** — each spawn config is re-read fresh
   from kgsm-lib, so no stale-spec drift. `supervision-state.json` (`SupervisionStateStore`) persists
@@ -152,9 +152,26 @@ anything else as "unavailable, retry". The daemon supervises native-standalone i
   ~100 MB idle RSS). `MemoryTrimmer` (hosted service) hands free pages back to the OS after activity
   bursts, growth-gated so a genuinely idle daemon just ticks. Don't flip these back to defaults.
 - **Naming:** project `kgsm-watchdog`; namespace `TheKrystalShip.KGSM.Watchdog`; assembly
-  `kgsm-watchdog`; env prefix `KGSM_WATCHDOG_*`. All config is env vars — the binary is
-  self-documenting (`kgsm-watchdog --help` prints every knob with live defaults; a misspelled
-  `KGSM_WATCHDOG_*` var is logged as a startup warning). Only `KGSM_WATCHDOG_KGSM_PATH` is required.
+  `kgsm-watchdog`; config section `Watchdog`, so env overrides are `Watchdog__*`. Only
+  `Watchdog__KgsmPath` is required.
+- **`kgsm-watchdog.settings.json` is the source of truth for every knob** (the ecosystem names these
+  `kgsm-<leaf>.settings.json`, never `appsettings.json`). It is loaded explicitly from
+  `AppContext.BaseDirectory` because the slim builder under systemd has no working directory and
+  default discovery finds nothing. An environment variable overrides one key of it; a variable naming
+  an undeclared key binds to nothing and is logged at startup as a probable typo.
+- **`AddEnvironmentVariables()` runs after the settings file, and the order is load-bearing.**
+  Configuration resolves by source order, so a file registered after the environment provider
+  outranks it and an override reads as applied while changing nothing. `AddWatchdogConfiguration`
+  owns that order and is used by both the pre-host reads (`--selfcheck`, the required-knob check)
+  and the host, so the two cannot diverge.
+- **`KnownEnvVars` is derived from `WatchdogSettings`, not hand-listed** — adding a property is the
+  only step needed to make a knob real, documented in `--help`, and exempt from the typo warning.
+- **A knob lives in three places and `LeafDescriptorTests` pins all of them**: a `WatchdogSettings`
+  property, a key in `kgsm-watchdog.settings.json`, and a descriptor entry. Miss one and the build
+  fails naming which.
+- **A config-key rename cannot be hot-swapped.** The hot-swap `execv` inherits the live process's
+  environment, which predates the rename, so `--selfcheck` on the new binary fails its required-knob
+  check and the swap correctly aborts. Deploy those with `--cold`.
 
 ## Version tracking
 

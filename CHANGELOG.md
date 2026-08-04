@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — configuration is bound from `kgsm-watchdog.settings.json`, which is now the source of truth
+
+- **Every knob is declared in the settings file and bound to `WatchdogSettings`.** The file ships all
+  19 keys with their defaults under a `Watchdog` section, and an environment variable overrides one of
+  them by spelling its path with `__` (`Watchdog__KgsmPath`, `Watchdog__PollIntervalMs`). The
+  hand-rolled `WatchdogOptions.FromEnvironment()` and the flat `KGSM_WATCHDOG_*` names are gone;
+  `WatchdogOptions.FromSettings` normalizes bound values instead of reading the environment.
+
+  A variable naming a key the file does not declare binds to nothing, so there is no longer a way to
+  configure this daemon that is invisible in the file. Binding is source-generated (the binder
+  generator is on under `PublishAot`), so the ILC pass stays at zero IL warnings.
+
+- **`KnownEnvVars` is derived from `WatchdogSettings` rather than hand-listed.** The list that feeds
+  `--help` and the startup typo warning was a parallel array that had to be edited alongside every new
+  knob — precisely the kind of second copy that falls behind. Adding a property is now the only step.
+
+- **`AddWatchdogConfiguration` owns the source order, and both readers use it.** `--selfcheck` and the
+  required-knob check run before the host exists and previously read the environment directly; they
+  now read the same file-then-environment stack the host does, so a selfcheck can no longer pass on
+  configuration the daemon will not see.
+
+- **Environment variables are registered after the settings file so they win.** Configuration resolves
+  by source order, and the explicitly-loaded file was appended after everything the slim builder
+  installed — including its own environment provider. This was already true of the logging-only file
+  that preceded this change: `Logging__LogLevel__Default` could not in fact override the level the
+  file set, despite the comment beside it saying it could.
+
+- **`floorSources` lists the settings file first, where it belongs.** The descriptor's list is
+  lowest-precedence-first, and `appsettings` was last — outranking the unit. Harmless while the file
+  held only logging, but a file that declares every knob then overwrites the deployed values in the
+  Control Panel's floor computation, which showed `Watchdog__KgsmPath` as empty while the daemon ran
+  with a real path.
+
+- **A cadence below its floor is raised to the floor** instead of reverting to the coded default; the
+  floor is the nearest legal value to what was asked for.
+
+- The hot-swap handoff variable keeps its own prefix, which is a separate namespace from the
+  `Watchdog__` config one — an internal IPC channel can no longer be mistaken for a config knob, so
+  the explicit exclusion it needed is gone.
+
+> **Deploying a config-key rename needs `--cold`.** The hot-swap `execv` inherits the live process's
+> environment, which predates the rename, so `--selfcheck` on the new binary fails its required-knob
+> check and the swap aborts rather than starting a daemon that cannot find its configuration.
+
 ### Changed — kgsm-lib 2.0.0 (the socket event transport is gone)
 - **Pinned to `TheKrystalShip.KGSM.Lib` 2.0.0**, which removes `UnixSocketClient`,
   `KgsmEventTransport` and `KgsmOptions.SocketPath`/`EventTransport`. The watchdog consumes no events and

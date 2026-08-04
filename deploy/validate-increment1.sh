@@ -32,7 +32,7 @@ ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 no() { echo "  FAIL: $1"; fail=$((fail + 1)); }
 
 echo "== launching daemon as root; it will drop to uid ${uid} gid ${gid} =="
-KGSM_WATCHDOG_KGSM_PATH="$KGSM" "$BIN" > /tmp/wd-root.log 2>&1 &
+Watchdog__KgsmPath="$KGSM" "$BIN" > /tmp/wd-root.log 2>&1 &
 DPID=$!
 for _ in $(seq 1 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
 

@@ -1,9 +1,39 @@
+using Microsoft.Extensions.Configuration;
 using TheKrystalShip.KGSM.Extensions;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+
+// The daemon's configuration sources, in precedence order, applied identically wherever config is
+// read. kgsm-watchdog.settings.json (beside the binary) declares every knob with its default; an
+// environment variable overrides one key of it.
+//
+// Two things about this are load-bearing:
+//   1. The file is resolved from AppContext.BaseDirectory, not the content root. Under a systemd
+//      unit with no WorkingDirectory the content root is "/", so default discovery finds nothing
+//      and every setting in the file silently fails to apply.
+//   2. Environment variables come LAST so they win. Configuration resolves by source order, and a
+//      file added after the environment provider outranks it — an override would then read as
+//      applied while changing nothing.
+// The file is named kgsm-watchdog.settings.json rather than appsettings.json (the ecosystem
+// convention, kgsm-<leaf>.settings.json) so it cannot collide with a sibling service's config.
+// optional:true so a missing file never stops the daemon.
+static void AddWatchdogConfiguration(IConfigurationBuilder cfg) => cfg
+    .AddJsonFile(Path.Combine(AppContext.BaseDirectory, "kgsm-watchdog.settings.json"),
+        optional: true, reloadOnChange: false)
+    .AddEnvironmentVariables();
+
+// Read config the same way the host will, but without building one — --selfcheck and the required
+// -knob check below both run before the host exists and must not bind or touch anything.
+static WatchdogOptions ReadOptions()
+{
+    var cfg = new ConfigurationBuilder();
+    AddWatchdogConfiguration(cfg);
+    return WatchdogOptions.FromSettings(
+        cfg.Build().GetSection(WatchdogSettings.Section).Get<WatchdogSettings>() ?? new WatchdogSettings());
+}
 
 // Self-documenting: an operator with only the compiled binary can discover every config knob.
 if (args.Any(a => a is "--help" or "-h" or "help"))
@@ -30,7 +60,7 @@ if (args.Any(a => a is "--selfcheck"))
 {
     try
     {
-        WatchdogOptions.FromEnvironment(); // throws if KGSM_WATCHDOG_* config is malformed
+        ReadOptions(); // throws if the settings file or a Watchdog__* override is malformed
         Console.WriteLine($"selfcheck ok {VersionInfo.Informational}");
         return 0;
     }
@@ -41,39 +71,31 @@ if (args.Any(a => a is "--selfcheck"))
     }
 }
 
-var options = WatchdogOptions.FromEnvironment();
+var options = ReadOptions();
 
 // Unlike the monitor, the watchdog cannot run "headless" without KGSM: it reads each instance's
 // spawn config via kgsm-lib before forking it. No path, nothing to do — fail fast and loud.
 if (string.IsNullOrEmpty(options.KgsmPath))
 {
-    Console.Error.WriteLine("FATAL: KGSM_WATCHDOG_KGSM_PATH is required (absolute path to kgsm.sh).");
+    Console.Error.WriteLine("FATAL: Watchdog__KgsmPath is required (absolute path to kgsm.sh).");
     Console.Error.WriteLine("Run 'kgsm-watchdog --help' for the full list of configuration variables.");
     return 1;
 }
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
-// Load the daemon's settings file from beside the binary. Two reasons it must be explicit:
-//   1. CreateSlimBuilder under a systemd unit with no WorkingDirectory leaves the content root at "/", so
-//      the framework's default appsettings.json discovery finds nothing — the file's settings (logging
-//      levels today, more to come) silently never applied. Resolve it from AppContext.BaseDirectory (the
-//      binary's own directory, /opt/kgsm-watchdog), where deploy installs it — independent of cwd/content root.
-//   2. It is named kgsm-watchdog.settings.json, NOT appsettings.json, so it can never collide with a sibling
-//      ecosystem service's config if they ever share a directory (every .NET project ships an appsettings.json).
-// optional:true so a missing file never stops the daemon; env vars (Logging__LogLevel__*) still override it.
-builder.Configuration.AddJsonFile(
-    Path.Combine(AppContext.BaseDirectory, "kgsm-watchdog.settings.json"), optional: true, reloadOnChange: false);
+// The same sources the options above were read from, so the host and the pre-host config cannot
+// diverge. See AddWatchdogConfiguration for why the path and the ordering are what they are.
+AddWatchdogConfiguration(builder.Configuration);
 
 // Ecosystem-standard logging (see ../tks/logging-convention.md): one journald-native SystemdConsole
 // sink (the <N> syslog priority prefix lets `journalctl -p` filter by level). AddConfiguration binds the
-// "Logging" section from the settings file + env overrides (Logging__LogLevel__Default=Debug) — wired
+// "Logging" section from the settings file plus any Logging__LogLevel__Default override — wired
 // explicitly so the level knob is deterministic on the slim builder rather than relying on an implicit
 // default. This is also where "Microsoft.AspNetCore": "Warning" (in the settings file) takes effect, which
 // silences ASP.NET's ~5-Information-lines-per-request chatter — at Information the surfaces' constant
 // /health·/list·/enabled polling both floods journald (rate-limiting away useful lines) and allocates on
-// every poll, feeding the heap growth the MemoryTrimmer then has to reclaim. The watchdog's own knobs still
-// come from env (WatchdogOptions.FromEnvironment); logging only.
+// every poll, feeding the heap growth the MemoryTrimmer then has to reclaim.
 builder.Logging.ClearProviders();
 builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
 builder.Logging.AddSystemdConsole();

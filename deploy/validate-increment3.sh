@@ -28,8 +28,8 @@ SOCK="/run/kgsm-watchdog/control.sock"
 CGROOT="/sys/fs/cgroup/kgsm.slice"
 INST="${1:-7dtd}"
 
-export KGSM_WATCHDOG_POLL_INTERVAL_MS=500
-export KGSM_WATCHDOG_RESTART_GRACE_SEC=3
+export Watchdog__PollIntervalMs=500
+export Watchdog__RestartGraceSeconds=3
 
 [ "$(id -u)" -eq 0 ] || { echo "FATAL: run with sudo"; exit 1; }
 [ -n "${SUDO_UID:-}" ] || { echo "FATAL: no SUDO_UID — run via 'sudo', not as a root login"; exit 1; }
@@ -64,7 +64,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== launching daemon as root; it will drop to uid ${SUDO_UID} =="
-KGSM_WATCHDOG_KGSM_PATH="${KGSM}" "${BIN}" > /tmp/wd-root-inc3.log 2>&1 &
+Watchdog__KgsmPath="${KGSM}" "${BIN}" > /tmp/wd-root-inc3.log 2>&1 &
 DPID=$!
 for _ in $(seq 1 50); do [ -S "${SOCK}" ] && break; sleep 0.1; done
 READY="$(curl -s --unix-socket "${SOCK}" http://x/ready)"

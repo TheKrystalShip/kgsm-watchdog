@@ -34,9 +34,12 @@ Slice=kgsm.slice
 Delegate=yes
 
 # REQUIRED: absolute path to kgsm.sh (read-only, via kgsm-lib, for each instance's spawn config). Point
-# at the packaged launcher, not a copy under /home. The full env reference: `kgsm-watchdog --help`.
-Environment=KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm
-# Optional: keep the rest of the knobs in a file. The leading '-' makes it optional (no failure if absent).
+# at the packaged launcher, not a copy under /home. The full reference: `kgsm-watchdog --help`.
+Environment=Watchdog__KgsmPath=/usr/local/bin/kgsm
+# Optional: keep the rest of the knobs in a file. The leading '-' makes it optional (no failure if
+# absent). Every key here must exist in kgsm-watchdog.settings.json, which declares the daemon's whole
+# configurable surface; a variable naming an undeclared key binds to nothing and is warned about at
+# startup as a probable typo.
 EnvironmentFile=-/etc/kgsm-watchdog/kgsm-watchdog.env
 
 # The control socket lives under /run/kgsm-watchdog. systemd creates it owned by User= — safe now

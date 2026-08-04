@@ -5,19 +5,25 @@ using TheKrystalShip.KGSM.Watchdog.Supervision;
 namespace TheKrystalShip.KGSM.Watchdog;
 
 /// <summary>
-/// Runtime configuration, sourced from environment variables (the idiomatic
-/// mechanism for a systemd daemon — see <c>Environment=</c> in the unit file).
-/// Reading is deliberately reflection-free (no config-binding source generator)
-/// so the daemon stays Native-AOT clean. Most knobs have sane defaults;
+/// The normalized runtime view of <see cref="WatchdogSettings"/> — what the daemon runs on, after
+/// octal parsing, the lenient restart-policy spelling and the per-knob floors. Configuration is
+/// declared in the <c>"Watchdog"</c> section of <c>kgsm-watchdog.settings.json</c> and overridden
+/// per-key by environment variables (<c>Watchdog__PollIntervalMs</c>); this type is the result of
+/// that, not a second place to configure anything. Most knobs have sane defaults;
 /// <see cref="KgsmPath"/> is the one hard requirement.
 /// </summary>
+/// <remarks>
+/// Kept separate from the bound settings so the raw configuration stays inspectable: a value the
+/// daemon clamped is still visible as what was configured. Binding is source-generated, so the
+/// daemon stays Native-AOT clean.
+/// </remarks>
 public sealed class WatchdogOptions
 {
-    /// <summary>Control unix domain socket the daemon listens on. <c>KGSM_WATCHDOG_SOCKET</c>.</summary>
+    /// <summary>Control unix domain socket the daemon listens on. <c>Watchdog__SocketPath</c>.</summary>
     public string SocketPath { get; init; } = "/run/kgsm-watchdog/control.sock";
 
     /// <summary>
-    /// Permission bits applied to the control socket once it exists. <c>KGSM_WATCHDOG_SOCKET_MODE</c>
+    /// Permission bits applied to the control socket once it exists. <c>Watchdog__SocketMode</c>
     /// (octal, e.g. <c>660</c>). Default <c>0660</c> — owner+group read/write. The socket can
     /// start/kill game servers, so its filesystem perms are the security boundary (no in-daemon
     /// authn; that is the surfaces' job — see PLAN §5/§8).
@@ -26,21 +32,21 @@ public sealed class WatchdogOptions
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.GroupWrite;
 
     /// <summary>
-    /// Path to the KGSM executable (<c>kgsm.sh</c>). <c>KGSM_WATCHDOG_KGSM_PATH</c>. <b>Required</b> —
+    /// Path to the KGSM executable (<c>kgsm.sh</c>). <c>Watchdog__KgsmPath</c>. <b>Required</b> —
     /// unlike the monitor (which can run host-only), the watchdog has nothing to do without KGSM:
     /// it reads each instance's spawn config via kgsm-lib before forking it.
     /// </summary>
     public string KgsmPath { get; init; } = string.Empty;
 
-    /// <summary>cgroup v2 mount point. <c>KGSM_WATCHDOG_CGROUP_MOUNT</c>. Default <c>/sys/fs/cgroup</c>.</summary>
+    /// <summary>cgroup v2 mount point. <c>Watchdog__CgroupMountPoint</c>. Default <c>/sys/fs/cgroup</c>.</summary>
     public string CgroupMountPoint { get; init; } = "/sys/fs/cgroup";
 
-    /// <summary>KGSM's delegated cgroup base. <c>KGSM_WATCHDOG_CGROUP_BASE</c>. Default <c>kgsm.slice</c>.</summary>
+    /// <summary>KGSM's delegated cgroup base. <c>Watchdog__CgroupBaseName</c>. Default <c>kgsm.slice</c>.</summary>
     public string CgroupBaseName { get; init; } = "kgsm.slice";
 
     /// <summary>
     /// Controllers to enable on the base subtree so per-instance children inherit them.
-    /// <c>KGSM_WATCHDOG_CGROUP_CONTROLLERS</c> (space/comma-separated). Default <c>cpu memory io pids</c>.
+    /// <c>Watchdog__CgroupControllers</c> (space/comma-separated). Default <c>cpu memory io pids</c>.
     /// </summary>
     public IReadOnlyList<string> CgroupControllers { get; init; } = ["cpu", "memory", "io", "pids"];
 
@@ -48,7 +54,7 @@ public sealed class WatchdogOptions
     /// Leaf cgroup the daemon itself lives in, a sibling of every instance cgroup under the base
     /// (<c>kgsm.slice/&lt;leaf&gt;</c>). It must be a non-internal leaf because cgroup v2 forbids
     /// processes in a cgroup that has enabled controllers in <c>subtree_control</c>.
-    /// <c>KGSM_WATCHDOG_SUPERVISOR_LEAF</c>. Default <c>supervisor</c>.
+    /// <c>Watchdog__SupervisorLeaf</c>. Default <c>supervisor</c>.
     /// </summary>
     public string SupervisorLeaf { get; init; } = "supervisor";
 
@@ -56,28 +62,28 @@ public sealed class WatchdogOptions
 
     /// <summary>
     /// How often the crash watcher polls each instance's <c>cgroup.events</c> for liveness.
-    /// <c>KGSM_WATCHDOG_POLL_INTERVAL_MS</c>. Default <c>1000</c>. Cheap at this scale (a handful of
+    /// <c>Watchdog__PollIntervalMs</c>. Default <c>1000</c>. Cheap at this scale (a handful of
     /// instances), so 1 Hz is plenty; lower it only to make crash-detection latency tighter.
     /// </summary>
     public int PollIntervalMs { get; init; } = 1000;
 
-    /// <summary>First-restart delay; doubles each consecutive failure. <c>KGSM_WATCHDOG_RESTART_BASE_DELAY_MS</c>. Default <c>1000</c>.</summary>
+    /// <summary>First-restart delay; doubles each consecutive failure. <c>Watchdog__RestartBaseDelayMs</c>. Default <c>1000</c>.</summary>
     public int RestartBaseDelayMs { get; init; } = 1000;
 
-    /// <summary>Ceiling on the exponential restart delay. <c>KGSM_WATCHDOG_RESTART_MAX_DELAY_MS</c>. Default <c>60000</c>.</summary>
+    /// <summary>Ceiling on the exponential restart delay. <c>Watchdog__RestartMaxDelayMs</c>. Default <c>60000</c>.</summary>
     public int RestartMaxDelayMs { get; init; } = 60_000;
 
-    /// <summary>Max consecutive restarts before giving up ("failed"). <c>KGSM_WATCHDOG_RESTART_MAX_RETRIES</c>. Default <c>5</c>.</summary>
+    /// <summary>Max consecutive restarts before giving up ("failed"). <c>Watchdog__RestartMaxRetries</c>. Default <c>5</c>.</summary>
     public int RestartMaxRetries { get; init; } = 5;
 
-    /// <summary>Uptime after which an instance is "healthy" and its failure counter resets. <c>KGSM_WATCHDOG_RESTART_STABILITY_SEC</c>. Default <c>300</c>.</summary>
+    /// <summary>Uptime after which an instance is "healthy" and its failure counter resets. <c>Watchdog__RestartStabilitySeconds</c>. Default <c>300</c>.</summary>
     public int RestartStabilitySeconds { get; init; } = 300;
 
-    /// <summary>Post-spawn grace window in which crash-detection is suppressed. <c>KGSM_WATCHDOG_RESTART_GRACE_SEC</c>. Default <c>10</c>.</summary>
+    /// <summary>Post-spawn grace window in which crash-detection is suppressed. <c>Watchdog__RestartGraceSeconds</c>. Default <c>10</c>.</summary>
     public int RestartGraceSeconds { get; init; } = 10;
 
     /// <summary>
-    /// What counts as restartable. <c>KGSM_WATCHDOG_RESTART_POLICY</c> = <c>always</c> (default) | <c>on-failure</c>.
+    /// What counts as restartable. <c>Watchdog__RestartPolicy</c> = <c>always</c> (default) | <c>on-failure</c>.
     /// <c>always</c>: restart on any exit while desired-running (the only "stay down" is <c>stop</c>);
     /// <c>on-failure</c>: leave a clean (code 0) exit stopped, restart only crashes. See <see cref="RestartPolicyMode"/>.
     /// </summary>
@@ -88,7 +94,7 @@ public sealed class WatchdogOptions
     /// <summary>
     /// On-disk file holding the set of instances the operator left desired-running, so the daemon can
     /// restore supervision after a restart or host reboot — the in-house replacement for systemd's
-    /// <c>systemctl enable</c> + <c>WantedBy=</c>. <c>KGSM_WATCHDOG_STATE_FILE</c>. <b>Empty (the
+    /// <c>systemctl enable</c> + <c>WantedBy=</c>. <c>Watchdog__StateFile</c>. <b>Empty (the
     /// default)</b> means "derive it lazily" as <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog/desired-state.json</c>
     /// — resolved AFTER the privilege drop, so it lands in the dropped KGSM user's data tree (writable
     /// by construction, no extra privileged setup step). Set this only to relocate it.
@@ -100,7 +106,7 @@ public sealed class WatchdogOptions
     /// <summary>
     /// KGSM's instances directory — the root the player-presence ingester watches for container event
     /// channels (<c>&lt;root&gt;/&lt;blueprint&gt;/&lt;instance&gt;/events/events.ndjson</c>, each instance
-    /// dir a symlink to its working dir). <c>KGSM_WATCHDOG_INSTANCES_DIR</c>. <b>Empty (the default)</b>
+    /// dir a symlink to its working dir). <c>Watchdog__InstancesDir</c>. <b>Empty (the default)</b>
     /// means "derive it lazily" as <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm/instances</c> — resolved
     /// AFTER the privilege drop, so <c>HOME</c> is the dropped KGSM user's (mirrors
     /// <see cref="StateFile"/>; the watchdog does not inherit KGSM's <c>KGSM_INSTANCES_DIR</c> env). Set
@@ -110,7 +116,7 @@ public sealed class WatchdogOptions
 
     /// <summary>
     /// How often the player-presence ingester scans for channels and tails them.
-    /// <c>KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS</c>. Default <c>1000</c>. Presence latency is bounded by
+    /// <c>Watchdog__PlayerPresencePollMs</c>. Default <c>1000</c>. Presence latency is bounded by
     /// this; cheap at this scale (a handful of files), so 1 Hz is plenty.
     /// </summary>
     public int PlayerPresencePollMs { get; init; } = 1000;
@@ -121,7 +127,7 @@ public sealed class WatchdogOptions
     /// How often the container lifecycle ingester scans for
     /// <c>events/lifecycle.ndjson</c> channels and tails them, driving <see cref="TheKrystalShip.KGSM.Watchdog.PortForwarding.UpnpService"/>
     /// open/close off a container's self-reported <c>instance_started</c>/<c>instance_stopping</c>.
-    /// <c>KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS</c>. Default <c>1000</c> (same default as
+    /// <c>Watchdog__ContainerLifecyclePollMs</c>. Default <c>1000</c> (same default as
     /// <see cref="PlayerPresencePollMs"/> — same instances-dir scan cost, no reason to diverge).
     /// </summary>
     public int ContainerLifecyclePollMs { get; init; } = 1000;
@@ -130,7 +136,7 @@ public sealed class WatchdogOptions
 
     /// <summary>
     /// How often the <c>GET /console/{name}/follow</c> handler polls a native instance's log file for
-    /// newly-appended lines. <c>KGSM_WATCHDOG_CONSOLE_POLL_MS</c>. Default <c>250</c> — tighter than the
+    /// newly-appended lines. <c>Watchdog__ConsolePollMs</c>. Default <c>250</c> — tighter than the
     /// presence poll because a human is watching the stream live, so latency matters; still cheap (one
     /// stat + a short read per connected client). Floored at 50ms.
     /// </summary>
@@ -139,41 +145,51 @@ public sealed class WatchdogOptions
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
-    public static WatchdogOptions FromEnvironment()
+    /// <summary>
+    /// Normalizes bound configuration into the runtime view: octal socket mode, the lenient
+    /// restart-policy spelling, and the per-knob floors. A value below its floor is raised to the
+    /// floor — the nearest legal value to what was asked for — rather than reverting to the coded
+    /// default, which would run at a figure nobody named.
+    /// </summary>
+    public static WatchdogOptions FromSettings(WatchdogSettings s)
     {
-        static string? Env(string key) => Environment.GetEnvironmentVariable(key);
-
         var defaults = new WatchdogOptions();
-
-        UnixFileMode mode = defaults.SocketMode;
-        if (Env("KGSM_WATCHDOG_SOCKET_MODE") is { Length: > 0 } modeStr)
-        {
-            try { mode = (UnixFileMode)Convert.ToInt32(modeStr, 8); }
-            catch (Exception) { /* malformed octal -> keep default */ }
-        }
 
         return new WatchdogOptions
         {
-            SocketPath = Env("KGSM_WATCHDOG_SOCKET") is { Length: > 0 } s ? s : defaults.SocketPath,
-            SocketMode = mode,
-            KgsmPath = Env("KGSM_WATCHDOG_KGSM_PATH") is { Length: > 0 } kp ? kp : defaults.KgsmPath,
-            CgroupMountPoint = Env("KGSM_WATCHDOG_CGROUP_MOUNT") is { Length: > 0 } cm ? cm : defaults.CgroupMountPoint,
-            CgroupBaseName = Env("KGSM_WATCHDOG_CGROUP_BASE") is { Length: > 0 } cb ? cb : defaults.CgroupBaseName,
-            CgroupControllers = ParseControllers(Env("KGSM_WATCHDOG_CGROUP_CONTROLLERS")) ?? defaults.CgroupControllers,
-            SupervisorLeaf = Env("KGSM_WATCHDOG_SUPERVISOR_LEAF") is { Length: > 0 } sl ? sl : defaults.SupervisorLeaf,
-            PollIntervalMs = ParseInt(Env("KGSM_WATCHDOG_POLL_INTERVAL_MS"), defaults.PollIntervalMs, min: 50),
-            RestartBaseDelayMs = ParseInt(Env("KGSM_WATCHDOG_RESTART_BASE_DELAY_MS"), defaults.RestartBaseDelayMs, min: 0),
-            RestartMaxDelayMs = ParseInt(Env("KGSM_WATCHDOG_RESTART_MAX_DELAY_MS"), defaults.RestartMaxDelayMs, min: 0),
-            RestartMaxRetries = ParseInt(Env("KGSM_WATCHDOG_RESTART_MAX_RETRIES"), defaults.RestartMaxRetries, min: 0),
-            RestartStabilitySeconds = ParseInt(Env("KGSM_WATCHDOG_RESTART_STABILITY_SEC"), defaults.RestartStabilitySeconds, min: 1),
-            RestartGraceSeconds = ParseInt(Env("KGSM_WATCHDOG_RESTART_GRACE_SEC"), defaults.RestartGraceSeconds, min: 0),
-            RestartPolicy = ParseRestartPolicy(Env("KGSM_WATCHDOG_RESTART_POLICY"), defaults.RestartPolicy),
-            StateFile = Env("KGSM_WATCHDOG_STATE_FILE") is { Length: > 0 } st ? st : defaults.StateFile,
-            InstancesDir = Env("KGSM_WATCHDOG_INSTANCES_DIR") is { Length: > 0 } id ? id : defaults.InstancesDir,
-            PlayerPresencePollMs = ParseInt(Env("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS"), defaults.PlayerPresencePollMs, min: 50),
-            ContainerLifecyclePollMs = ParseInt(Env("KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS"), defaults.ContainerLifecyclePollMs, min: 50),
-            ConsolePollMs = ParseInt(Env("KGSM_WATCHDOG_CONSOLE_POLL_MS"), defaults.ConsolePollMs, min: 50),
+            SocketPath = Or(s.SocketPath, defaults.SocketPath),
+            SocketMode = ParseMode(s.SocketMode, defaults.SocketMode),
+            KgsmPath = s.KgsmPath?.Trim() ?? string.Empty,
+            CgroupMountPoint = Or(s.CgroupMountPoint, defaults.CgroupMountPoint),
+            CgroupBaseName = Or(s.CgroupBaseName, defaults.CgroupBaseName),
+            CgroupControllers = ParseControllers(s.CgroupControllers) ?? defaults.CgroupControllers,
+            SupervisorLeaf = Or(s.SupervisorLeaf, defaults.SupervisorLeaf),
+            PollIntervalMs = Floor(s.PollIntervalMs, 50),
+            RestartBaseDelayMs = Floor(s.RestartBaseDelayMs, 0),
+            RestartMaxDelayMs = Floor(s.RestartMaxDelayMs, 0),
+            RestartMaxRetries = Floor(s.RestartMaxRetries, 0),
+            RestartStabilitySeconds = Floor(s.RestartStabilitySeconds, 1),
+            RestartGraceSeconds = Floor(s.RestartGraceSeconds, 0),
+            RestartPolicy = ParseRestartPolicy(s.RestartPolicy, defaults.RestartPolicy),
+            StateFile = s.StateFile?.Trim() ?? string.Empty,
+            InstancesDir = s.InstancesDir?.Trim() ?? string.Empty,
+            PlayerPresencePollMs = Floor(s.PlayerPresencePollMs, 50),
+            ContainerLifecyclePollMs = Floor(s.ContainerLifecyclePollMs, 50),
+            ConsolePollMs = Floor(s.ConsolePollMs, 50),
         };
+    }
+
+    private static int Floor(int value, int min) => value < min ? min : value;
+
+    private static string Or(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+
+    private static UnixFileMode ParseMode(string? octal, UnixFileMode fallback)
+    {
+        if (string.IsNullOrWhiteSpace(octal))
+            return fallback;
+        try { return (UnixFileMode)Convert.ToInt32(octal.Trim(), 8); }
+        catch (Exception) { return fallback; }   // malformed octal -> keep the default
     }
 
     /// <summary>Lenient parse: any spelling reducing to "onfailure" selects on-failure; everything else (incl. blank) is always.</summary>
@@ -191,54 +207,41 @@ public sealed class WatchdogOptions
     }
 
     /// <summary>
-    /// Every environment variable the daemon reads. The single source of truth for config discovery:
-    /// <see cref="DescribeEnvironment"/> renders it for <c>--help</c>, and <see cref="UnknownConfigVars"/>
-    /// uses it to flag typo'd <c>KGSM_WATCHDOG_*</c> vars at startup. <b>Add a new knob here</b> when you
-    /// add one to <see cref="FromEnvironment"/> (a unit test asserts every name appears in the help).
+    /// The environment-variable spelling of every knob, derived from <see cref="WatchdogSettings"/>
+    /// rather than listed by hand. Adding a property to that class is the only step needed to make a
+    /// knob discoverable: <see cref="DescribeEnvironment"/> renders these for <c>--help</c> and
+    /// <see cref="UnknownConfigVars"/> flags anything else in the namespace as a typo.
     /// </summary>
+    /// <remarks>
+    /// The property names are read from the settings type, so a hand-maintained list can no longer
+    /// fall behind the knobs it claims to describe. This runs once at startup and once per
+    /// <c>--help</c>, both outside any hot path.
+    /// </remarks>
     public static readonly string[] KnownEnvVars =
-    [
-        "KGSM_WATCHDOG_KGSM_PATH",
-        "KGSM_WATCHDOG_SOCKET",
-        "KGSM_WATCHDOG_SOCKET_MODE",
-        "KGSM_WATCHDOG_CGROUP_MOUNT",
-        "KGSM_WATCHDOG_CGROUP_BASE",
-        "KGSM_WATCHDOG_CGROUP_CONTROLLERS",
-        "KGSM_WATCHDOG_SUPERVISOR_LEAF",
-        "KGSM_WATCHDOG_POLL_INTERVAL_MS",
-        "KGSM_WATCHDOG_RESTART_BASE_DELAY_MS",
-        "KGSM_WATCHDOG_RESTART_MAX_DELAY_MS",
-        "KGSM_WATCHDOG_RESTART_MAX_RETRIES",
-        "KGSM_WATCHDOG_RESTART_STABILITY_SEC",
-        "KGSM_WATCHDOG_RESTART_GRACE_SEC",
-        "KGSM_WATCHDOG_RESTART_POLICY",
-        "KGSM_WATCHDOG_STATE_FILE",
-        "KGSM_WATCHDOG_INSTANCES_DIR",
-        "KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS",
-        "KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS",
-        "KGSM_WATCHDOG_CONSOLE_POLL_MS",
-    ];
+        [.. typeof(WatchdogSettings)
+            .GetProperties()
+            .Select(p => $"{WatchdogSettings.Section}__{p.Name}")
+            .OrderBy(n => n, StringComparer.Ordinal)];
 
     /// <summary>
-    /// Any <c>KGSM_WATCHDOG_*</c> environment variables that are set but not recognised — almost always
-    /// a typo silently falling back to a default. Logged as a warning at startup so the config surface
-    /// is not invisible (the cost of stringly-typed env config; see PLAN §8 discussion).
-    /// <para>
-    /// The self-re-exec hot-swap handoff (<see cref="HotSwapHandoff.EnvVarName"/>) shares the
-    /// <c>KGSM_WATCHDOG_</c> prefix but is an internal IPC channel set by the predecessor image just before
-    /// the <c>execv</c>, NOT an operator config knob — so it is excluded here rather than listed in
-    /// <see cref="KnownEnvVars"/> (which would force it into the <c>--help</c> reference).
-    /// </para>
+    /// Any <c>Watchdog__*</c> environment variables that are set but not recognised — almost always a
+    /// typo binding to nothing and leaving the default in place. Logged as a warning at startup so a
+    /// misspelled knob is visible rather than silently inert.
     /// </summary>
+    /// <remarks>
+    /// The hot-swap handoff channel (<see cref="HotSwapHandoff.EnvVarName"/>) lives in a separate
+    /// namespace from the <c>Watchdog__</c> config one, so an internal IPC variable cannot be
+    /// mistaken for a config knob and needs no exclusion here.
+    /// </remarks>
     public static IReadOnlyList<string> UnknownConfigVars()
     {
+        string prefix = $"{WatchdogSettings.Section}__";
         var known = new HashSet<string>(KnownEnvVars, StringComparer.Ordinal);
         var unknown = new List<string>();
         foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
         {
             if (e.Key is string key
-                && key.StartsWith("KGSM_WATCHDOG_", StringComparison.Ordinal)
-                && key != HotSwapHandoff.EnvVarName   // internal hot-swap handoff channel, not config
+                && key.StartsWith(prefix, StringComparison.Ordinal)
                 && !known.Contains(key))
                 unknown.Add(key);
         }
@@ -261,48 +264,49 @@ public sealed class WatchdogOptions
         sb.AppendLine("  kgsm-watchdog [--help|-h]");
         sb.AppendLine();
         sb.AppendLine("CONFIGURATION");
-        sb.AppendLine("  All configuration is via environment variables — idiomatic for a systemd/init");
-        sb.AppendLine("  daemon (set them in the unit's Environment= / EnvironmentFile=). Exactly one var");
-        sb.AppendLine("  is REQUIRED; every other knob has a working default, shown in [brackets].");
+        sb.AppendLine("  kgsm-watchdog.settings.json (beside the binary) declares every knob with its");
+        sb.AppendLine("  default. An environment variable overrides one key of it — set them in the unit's");
+        sb.AppendLine("  Environment= / EnvironmentFile=. A variable naming a key the file does not declare");
+        sb.AppendLine("  binds to nothing. Exactly one knob is REQUIRED; defaults are shown in [brackets].");
 
         void Section(string title) { sb.AppendLine(); sb.AppendLine(title); }
         void Row(string name, string def, string desc)
-            => sb.AppendLine($"  {name,-37} {def,-26} {desc}");
+            => sb.AppendLine($"  {name,-38} {def,-26} {desc}");
 
         Section("KGSM integration");
-        Row("KGSM_WATCHDOG_KGSM_PATH", "[REQUIRED]", "absolute path to kgsm.sh (read via kgsm-lib for spawn config)");
+        Row("Watchdog__KgsmPath", "[REQUIRED]", "absolute path to kgsm.sh (read via kgsm-lib for spawn config)");
 
         Section("Control socket (the security boundary is its filesystem perms)");
-        Row("KGSM_WATCHDOG_SOCKET", $"[{d.SocketPath}]", "control unix-domain socket path");
-        Row("KGSM_WATCHDOG_SOCKET_MODE", "[0660]", "octal perms applied to the socket");
+        Row("Watchdog__SocketPath", $"[{d.SocketPath}]", "control unix-domain socket path");
+        Row("Watchdog__SocketMode", "[0660]", "octal perms applied to the socket");
 
         Section("Cgroup layout (rarely changed)");
-        Row("KGSM_WATCHDOG_CGROUP_MOUNT", $"[{d.CgroupMountPoint}]", "cgroup v2 mount point");
-        Row("KGSM_WATCHDOG_CGROUP_BASE", $"[{d.CgroupBaseName}]", "fallback base only; the real base is discovered from /proc/self/cgroup (systemd delegation)");
-        Row("KGSM_WATCHDOG_CGROUP_CONTROLLERS", $"[{string.Join(' ', d.CgroupControllers)}]", "controllers enabled on the base subtree");
-        Row("KGSM_WATCHDOG_SUPERVISOR_LEAF", $"[{d.SupervisorLeaf}]", "leaf cgroup the daemon itself lives in (under the delegated base)");
+        Row("Watchdog__CgroupMountPoint", $"[{d.CgroupMountPoint}]", "cgroup v2 mount point");
+        Row("Watchdog__CgroupBaseName", $"[{d.CgroupBaseName}]", "fallback base only; the real base is discovered from /proc/self/cgroup (systemd delegation)");
+        Row("Watchdog__CgroupControllers", $"[{string.Join(' ', d.CgroupControllers)}]", "controllers enabled on the base subtree");
+        Row("Watchdog__SupervisorLeaf", $"[{d.SupervisorLeaf}]", "leaf cgroup the daemon itself lives in (under the delegated base)");
 
         Section("Supervision: crash detection + restart");
-        Row("KGSM_WATCHDOG_POLL_INTERVAL_MS", $"[{d.PollIntervalMs}]", "how often cgroup.events is polled for liveness");
-        Row("KGSM_WATCHDOG_RESTART_POLICY", $"[{d.RestartPolicy.ToString().ToLowerInvariant()}]", "always = restart any exit; on-failure = keep clean code-0 exits stopped");
-        Row("KGSM_WATCHDOG_RESTART_BASE_DELAY_MS", $"[{d.RestartBaseDelayMs}]", "first-restart delay; doubles each consecutive failure");
-        Row("KGSM_WATCHDOG_RESTART_MAX_DELAY_MS", $"[{d.RestartMaxDelayMs}]", "ceiling on the exponential delay");
-        Row("KGSM_WATCHDOG_RESTART_MAX_RETRIES", $"[{d.RestartMaxRetries}]", "consecutive failures before giving up (phase=failed)");
-        Row("KGSM_WATCHDOG_RESTART_STABILITY_SEC", $"[{d.RestartStabilitySeconds}]", "uptime after which the failure streak resets");
-        Row("KGSM_WATCHDOG_RESTART_GRACE_SEC", $"[{d.RestartGraceSeconds}]", "post-spawn window where crash-detection is suppressed");
+        Row("Watchdog__PollIntervalMs", $"[{d.PollIntervalMs}]", "how often cgroup.events is polled for liveness");
+        Row("Watchdog__RestartPolicy", $"[{d.RestartPolicy.ToString().ToLowerInvariant()}]", "always = restart any exit; on-failure = keep clean code-0 exits stopped");
+        Row("Watchdog__RestartBaseDelayMs", $"[{d.RestartBaseDelayMs}]", "first-restart delay; doubles each consecutive failure");
+        Row("Watchdog__RestartMaxDelayMs", $"[{d.RestartMaxDelayMs}]", "ceiling on the exponential delay");
+        Row("Watchdog__RestartMaxRetries", $"[{d.RestartMaxRetries}]", "consecutive failures before giving up (phase=failed)");
+        Row("Watchdog__RestartStabilitySeconds", $"[{d.RestartStabilitySeconds}]", "uptime after which the failure streak resets");
+        Row("Watchdog__RestartGraceSeconds", $"[{d.RestartGraceSeconds}]", "post-spawn window where crash-detection is suppressed");
 
         Section("Boot persistence (auto-start across restarts — replaces systemd enable/WantedBy)");
-        Row("KGSM_WATCHDOG_STATE_FILE", "[~/.local/share/kgsm-watchdog/desired-state.json]", "desired-running set restored on boot; default under the KGSM user's data dir");
+        Row("Watchdog__StateFile", "[~/.local/share/kgsm-watchdog/desired-state.json]", "desired-running set restored on boot; default under the KGSM user's data dir");
 
         Section("Player presence (container event-channel ingester)");
-        Row("KGSM_WATCHDOG_INSTANCES_DIR", "[~/.local/share/kgsm/instances]", "kgsm instances dir watched for container events/events.ndjson channels");
-        Row("KGSM_WATCHDOG_PLAYER_PRESENCE_POLL_MS", $"[{d.PlayerPresencePollMs}]", "how often presence channels are scanned and tailed");
+        Row("Watchdog__InstancesDir", "[~/.local/share/kgsm/instances]", "kgsm instances dir watched for container events/events.ndjson channels");
+        Row("Watchdog__PlayerPresencePollMs", $"[{d.PlayerPresencePollMs}]", "how often presence channels are scanned and tailed");
 
         Section("Container lifecycle (UPnP + host-visible run-state ingester)");
-        Row("KGSM_WATCHDOG_CONTAINER_LIFECYCLE_POLL_MS", $"[{d.ContainerLifecyclePollMs}]", "how often events/lifecycle.ndjson channels are scanned and tailed");
+        Row("Watchdog__ContainerLifecyclePollMs", $"[{d.ContainerLifecyclePollMs}]", "how often events/lifecycle.ndjson channels are scanned and tailed");
 
         Section("Console stream (live follow of a native instance's stdout)");
-        Row("KGSM_WATCHDOG_CONSOLE_POLL_MS", $"[{d.ConsolePollMs}]", "how often /console/{instance}/follow polls the log for new lines");
+        Row("Watchdog__ConsolePollMs", $"[{d.ConsolePollMs}]", "how often /console/{instance}/follow polls the log for new lines");
 
         sb.AppendLine();
         sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");

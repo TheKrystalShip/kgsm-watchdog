@@ -27,7 +27,7 @@ cgroup foundation (Increment 0, in the `kgsm` repo).
 >
 > **Increment 5 — boot persistence (done).** The in-house replacement for systemd's
 > `systemctl enable` + `WantedBy=` — and the prerequisite for the planned systemd hard-break. The
-> enabled-for-boot set is persisted to disk (`KGSM_WATCHDOG_STATE_FILE`, default under the KGSM user's
+> enabled-for-boot set is persisted to disk (`Watchdog__StateFile`, default under the KGSM user's
 > data dir) — written by `enable`/`disable` (independent of runtime `start`/`stop`) — and **restored on
 > daemon startup**: an instance whose cgroup is still
 > live (survived a *daemon* restart) is **re-adopted** without a respawn; one whose cgroup is empty (a
@@ -138,43 +138,50 @@ prints the full list with live defaults, so config is never invisible to an oper
 kgsm-watchdog --help
 ```
 
-A ready-to-edit template ships as [`deploy/kgsm-watchdog.env.example`](deploy/kgsm-watchdog.env.example)
-(point the unit at it with `EnvironmentFile=`). Only **`KGSM_WATCHDOG_KGSM_PATH` is required**;
-everything else has a working default. A misspelled `KGSM_WATCHDOG_*` var is logged as a warning at
-startup (it would otherwise silently fall back to its default).
+`kgsm-watchdog.settings.json`, installed beside the binary, is the source of truth: every knob is
+declared there with its default, under the `Watchdog` section. An environment variable overrides one
+key of it, spelling the path with `__` — set them in the unit's `Environment=` / `EnvironmentFile=`.
+A variable naming a key the file does not declare binds to nothing and is logged as a probable typo
+at startup. Only **`Watchdog__KgsmPath` is required**; everything else has a working default.
 
-| Env | Default | Meaning |
-|---|---|---|
-| `KGSM_WATCHDOG_KGSM_PATH` | *(required)* | absolute path to `kgsm.sh` (read via kgsm-lib for spawn config) |
-| `KGSM_WATCHDOG_KGSM_SOCKET` | `/run/kgsm-watchdog/events.sock` | kgsm-lib event socket |
-| `KGSM_WATCHDOG_SOCKET` | `/run/kgsm-watchdog/control.sock` | control unix-domain socket path |
-| `KGSM_WATCHDOG_SOCKET_MODE` | `0660` | octal perms applied to the control socket |
-| `KGSM_WATCHDOG_CGROUP_MOUNT` | `/sys/fs/cgroup` | cgroup v2 mount point |
-| `KGSM_WATCHDOG_CGROUP_BASE` | `kgsm.slice` | fallback base only; the real base is discovered from `/proc/self/cgroup` under delegation (= `kgsm.slice/kgsm-watchdog.service`) |
-| `KGSM_WATCHDOG_CGROUP_CONTROLLERS` | `cpu memory io pids` | controllers enabled on the base subtree |
-| `KGSM_WATCHDOG_SUPERVISOR_LEAF` | `supervisor` | leaf cgroup the daemon itself lives in (under the delegated base) |
-| `KGSM_WATCHDOG_POLL_INTERVAL_MS` | `1000` | how often each instance's `cgroup.events` is polled |
-| `KGSM_WATCHDOG_RESTART_POLICY` | `always` | `always` = restart any exit; `on-failure` = leave clean code-0 exits stopped |
-| `KGSM_WATCHDOG_RESTART_BASE_DELAY_MS` | `1000` | first-restart delay; doubles each consecutive failure |
-| `KGSM_WATCHDOG_RESTART_MAX_DELAY_MS` | `60000` | ceiling on the exponential delay |
-| `KGSM_WATCHDOG_RESTART_MAX_RETRIES` | `5` | consecutive failures before giving up (`phase=failed`) |
-| `KGSM_WATCHDOG_RESTART_STABILITY_SEC` | `300` | uptime after which the failure streak resets |
-| `KGSM_WATCHDOG_RESTART_GRACE_SEC` | `10` | post-spawn window where crash-detection is suppressed |
-| `KGSM_WATCHDOG_STATE_FILE` | *(`~/.local/share/kgsm-watchdog/desired-state.json`)* | boot-autostart (enabled) set persisted here + restored on boot (replaces systemd `enable`/`WantedBy`) |
+| Key | Variable | Default | Meaning |
+|---|---|---|---|
+| `KgsmPath` | `Watchdog__KgsmPath` | *(required)* | absolute path to `kgsm.sh` (read via kgsm-lib for spawn config) |
+| `SocketPath` | `Watchdog__SocketPath` | `/run/kgsm-watchdog/control.sock` | control unix-domain socket path |
+| `SocketMode` | `Watchdog__SocketMode` | `660` | octal perms applied to the control socket |
+| `CgroupMountPoint` | `Watchdog__CgroupMountPoint` | `/sys/fs/cgroup` | cgroup v2 mount point |
+| `CgroupBaseName` | `Watchdog__CgroupBaseName` | `kgsm.slice` | fallback base only; the real base is discovered from `/proc/self/cgroup` under delegation (= `kgsm.slice/kgsm-watchdog.service`) |
+| `CgroupControllers` | `Watchdog__CgroupControllers` | `cpu memory io pids` | controllers enabled on the base subtree |
+| `SupervisorLeaf` | `Watchdog__SupervisorLeaf` | `supervisor` | leaf cgroup the daemon itself lives in (under the delegated base) |
+| `PollIntervalMs` | `Watchdog__PollIntervalMs` | `1000` | how often each instance's `cgroup.events` is polled |
+| `RestartPolicy` | `Watchdog__RestartPolicy` | `always` | `always` = restart any exit; `on-failure` = leave clean code-0 exits stopped |
+| `RestartBaseDelayMs` | `Watchdog__RestartBaseDelayMs` | `1000` | first-restart delay; doubles each consecutive failure |
+| `RestartMaxDelayMs` | `Watchdog__RestartMaxDelayMs` | `60000` | ceiling on the exponential delay |
+| `RestartMaxRetries` | `Watchdog__RestartMaxRetries` | `5` | consecutive failures before giving up (`phase=failed`) |
+| `RestartStabilitySeconds` | `Watchdog__RestartStabilitySeconds` | `300` | uptime after which the failure streak resets |
+| `RestartGraceSeconds` | `Watchdog__RestartGraceSeconds` | `10` | post-spawn window where crash-detection is suppressed |
+| `StateFile` | `Watchdog__StateFile` | *(`~/.local/share/kgsm-watchdog/desired-state.json`)* | boot-autostart (enabled) set persisted here + restored on boot (replaces systemd `enable`/`WantedBy`) |
+| `InstancesDir` | `Watchdog__InstancesDir` | *(`~/.local/share/kgsm/instances`)* | kgsm instances dir watched for container event channels |
+| `PlayerPresencePollMs` | `Watchdog__PlayerPresencePollMs` | `1000` | how often presence channels are scanned and tailed |
+| `ContainerLifecyclePollMs` | `Watchdog__ContainerLifecyclePollMs` | `1000` | how often `events/lifecycle.ndjson` channels are scanned and tailed |
+| `ConsolePollMs` | `Watchdog__ConsolePollMs` | `250` | how often `/console/{instance}/follow` polls the log for new lines |
+
+A cadence below its floor is raised to the floor rather than reverting to the default, so a value
+that is too small runs at the nearest legal one instead of silently at something nobody named.
 
 A manual `start` clears a `failed` instance's give-up latch. A deliberate `stop` is never restarted.
 
 > **Restart policy.** Default **`always`**: any exit while the instance is desired-running is
 > restarted — the only way to keep a server down is to `stop` it through the watchdog. This suits game
 > servers, whose exit codes are an unreliable crash signal (many exit **0** even on a fatal error).
-> Set `KGSM_WATCHDOG_RESTART_POLICY=on-failure` for systemd-style semantics, where a clean code-0 exit
+> Set `Watchdog__RestartPolicy=on-failure` for systemd-style semantics, where a clean code-0 exit
 > is treated as an intentional shutdown and left stopped (only non-zero / signal exits restart) — but
 > note that then a server crashing with exit 0 will *not* come back.
 
 ## Boot persistence (desired-state file)
 
 The daemon records which instances are *enabled for boot auto-start* in a small JSON file
-(`KGSM_WATCHDOG_STATE_FILE`, default `~/.local/share/kgsm-watchdog/desired-state.json`) and restores
+(`Watchdog__StateFile`, default `~/.local/share/kgsm-watchdog/desired-state.json`) and restores
 them on startup — the in-house replacement for `systemctl enable` / `WantedBy=`. On boot each listed
 instance is **re-adopted** if its cgroup is still live (a *daemon* restart) or **spawned fresh** if not
 (a *host reboot*).

@@ -14,28 +14,14 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// </summary>
 public class LeafDescriptorTests
 {
-    private const string EnvPrefix = "KGSM_WATCHDOG_";
-
     /// <summary>
-    /// Variables the watchdog genuinely reads that do NOT appear as literals in its source: the
-    /// ecosystem logging convention resolves these through Microsoft.Extensions.Logging. Named
-    /// explicitly rather than allowed by a pattern, so the exception cannot quietly widen.
+    /// Keys owned by Microsoft.Extensions.Logging rather than by the watchdog. The panel offers
+    /// exactly one of them — <c>Logging__LogLevel__Default</c>, the overall level — while the rest of
+    /// the namespace is per-category filtering, an open-ended set a category name can spell any way
+    /// it likes. Exempted as a namespace because enumerating it in the descriptor is not possible.
     /// </summary>
-    private static readonly HashSet<string> FrameworkKeys = new(StringComparer.Ordinal)
-    {
-        "Logging__LogLevel__Default",
-    };
-
-    /// <summary>
-    /// Variables that carry the <c>KGSM_WATCHDOG_</c> prefix but are not operator configuration, so
-    /// describing them would put a knob on the Control Panel that configures nothing. Only the hot-swap
-    /// handoff qualifies: the outgoing image sets it on the incoming one across the re-exec, an internal
-    /// channel with a lifetime of one syscall.
-    /// </summary>
-    private static readonly HashSet<string> NotConfiguration = new(StringComparer.Ordinal)
-    {
-        Model.HotSwapHandoff.EnvVarName,
-    };
+    private static bool IsFrameworkKey(string key) =>
+        key.StartsWith("Logging__", StringComparison.Ordinal);
 
     private static readonly string[] FieldTypes =
         ["string", "int", "bool", "enum", "secret", "path", "csv", "duration", "float"];
@@ -69,55 +55,108 @@ public class LeafDescriptorTests
     private static string? OptionalStr(JsonElement field, string name) =>
         field.TryGetProperty(name, out JsonElement v) ? v.GetString() : null;
 
-    /// <summary>Every KGSM_WATCHDOG_* variable named anywhere in the daemon's own source.</summary>
-    private static HashSet<string> EnvKeysInSource()
+    /// <summary>
+    /// Every environment variable that can configure the daemon, derived from
+    /// <c>kgsm-watchdog.settings.json</c> — the source of truth. A variable overrides a key only if
+    /// that key exists in the file, so the file's leaves ARE the settable surface: each
+    /// <c>Section:Key</c> path is reachable as <c>Section__Key</c>.
+    /// </summary>
+    /// <remarks>
+    /// This reads the settings file rather than scanning the source for string literals because with
+    /// bound configuration there are none left to scan — the binder matches property names against
+    /// the file. It is also the stronger check: the file is the same artifact the daemon loads, so it
+    /// cannot describe a surface the daemon does not have.
+    /// </remarks>
+    private static HashSet<string> SettableEnvKeys()
     {
-        string src = Path.Combine(RepoRoot(), "src", "Watchdog");
+        string path = Path.Combine(RepoRoot(), "src", "Watchdog", "kgsm-watchdog.settings.json");
+        Assert.True(File.Exists(path), $"the settings file is missing: {path}");
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
         var found = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (string file in Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories))
+        static void Walk(JsonElement node, string prefix, HashSet<string> into)
         {
-            // The build's own generated sources are not configuration reads.
-            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
-                file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-                continue;
-
-            foreach (System.Text.RegularExpressions.Match m in
-                     System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(file), @"KGSM_WATCHDOG_[A-Z0-9_]+"))
-                found.Add(m.Value);
+            foreach (JsonProperty prop in node.EnumerateObject())
+            {
+                string key = prefix.Length == 0 ? prop.Name : $"{prefix}__{prop.Name}";
+                if (prop.Value.ValueKind == JsonValueKind.Object)
+                    Walk(prop.Value, key, into);
+                else
+                    into.Add(key);
+            }
         }
 
-        found.ExceptWith(NotConfiguration);
+        Walk(doc.RootElement, string.Empty, found);
+
         Assert.NotEmpty(found);   // a scan that finds nothing would pass every check below vacuously
         return found;
     }
 
-    // ── Coverage: the descriptor and the code agree, both ways ───────────────
+    // ── Coverage: the descriptor and the settings file agree, both ways ──────
 
     [Fact]
-    public void Every_env_var_the_watchdog_reads_is_described()
+    public void Every_configurable_key_is_described()
     {
         var described = Fields().Select(f => Str(f, "env")).ToHashSet(StringComparer.Ordinal);
-        var missing = EnvKeysInSource().Where(k => !described.Contains(k)).OrderBy(k => k, StringComparer.Ordinal).ToList();
+        var missing = SettableEnvKeys()
+            .Where(k => !described.Contains(k) && !IsFrameworkKey(k))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
 
         Assert.True(missing.Count == 0,
-            "these variables are read by the watchdog but not described in deploy/kgsm-watchdog.leaf.json, so " +
-            "the Control Panel cannot show or set them:\n  " + string.Join("\n  ", missing));
+            "these keys are declared in kgsm-watchdog.settings.json but not described in " +
+            "deploy/kgsm-watchdog.leaf.json, so the Control Panel cannot show or set them:\n  " +
+            string.Join("\n  ", missing));
     }
 
     [Fact]
-    public void Every_described_env_var_is_real()
+    public void Every_described_key_is_really_settable()
     {
-        var inSource = EnvKeysInSource();
+        var settable = SettableEnvKeys();
         var fabricated = Fields()
             .Select(f => Str(f, "env"))
-            .Where(e => !inSource.Contains(e) && !FrameworkKeys.Contains(e))
+            .Where(e => !settable.Contains(e) && !IsFrameworkKey(e))
             .OrderBy(e => e, StringComparer.Ordinal)
             .ToList();
 
         Assert.True(fabricated.Count == 0,
-            "these descriptor fields name variables the watchdog does not read — an override written for one " +
-            "would be reported as applied while changing nothing:\n  " + string.Join("\n  ", fabricated));
+            "these descriptor fields name keys that do not exist in kgsm-watchdog.settings.json, so nothing " +
+            "binds them — an override written for one would be reported as applied while changing " +
+            "nothing:\n  " + string.Join("\n  ", fabricated));
+    }
+
+    [Fact]
+    public void Every_settings_key_binds_to_a_property()
+    {
+        // The settings file is only a source of truth if the daemon reads what it declares. A key
+        // with no matching property is inert: the panel offers it, an operator sets it, nothing moves.
+        var bound = WatchdogOptions.KnownEnvVars.ToHashSet(StringComparer.Ordinal);
+        var orphaned = SettableEnvKeys()
+            .Where(k => k.StartsWith($"{WatchdogSettings.Section}__", StringComparison.Ordinal))
+            .Where(k => !bound.Contains(k))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(orphaned.Count == 0,
+            "these keys are declared in kgsm-watchdog.settings.json but have no WatchdogSettings property " +
+            "to bind to, so setting them changes nothing:\n  " + string.Join("\n  ", orphaned));
+    }
+
+    [Fact]
+    public void Every_settings_property_is_declared_in_the_file()
+    {
+        // The other direction: a property missing from the file has an invisible default. The panel
+        // shows no fallback tier for it and an operator cannot discover it exists.
+        var declared = SettableEnvKeys();
+        var undeclared = WatchdogOptions.KnownEnvVars
+            .Where(k => !declared.Contains(k))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(undeclared.Count == 0,
+            "these WatchdogSettings properties are not declared in kgsm-watchdog.settings.json, so their " +
+            "defaults are invisible to anyone reading the file:\n  " + string.Join("\n  ", undeclared));
     }
 
     // ── Structure ────────────────────────────────────────────────────────────
@@ -289,7 +328,7 @@ public class LeafDescriptorTests
         var known = WatchdogOptions.KnownEnvVars.ToHashSet(StringComparer.Ordinal);
         var described = Fields()
             .Select(f => Str(f, "env"))
-            .Where(e => e.StartsWith(EnvPrefix, StringComparison.Ordinal))
+            .Where(e => e.StartsWith($"{WatchdogSettings.Section}__", StringComparison.Ordinal))
             .ToHashSet(StringComparer.Ordinal);
 
         var undescribed = known.Except(described).OrderBy(k => k, StringComparer.Ordinal).ToList();

@@ -1,4 +1,25 @@
 {
+  "Watchdog": {
+    "KgsmPath": "",
+    "SocketPath": "/run/kgsm-watchdog/control.sock",
+    "SocketMode": "660",
+    "CgroupMountPoint": "/sys/fs/cgroup",
+    "CgroupBaseName": "kgsm.slice",
+    "CgroupControllers": "cpu memory io pids",
+    "SupervisorLeaf": "supervisor",
+    "PollIntervalMs": 1000,
+    "RestartPolicy": "always",
+    "RestartBaseDelayMs": 1000,
+    "RestartMaxDelayMs": 60000,
+    "RestartMaxRetries": 5,
+    "RestartStabilitySeconds": 300,
+    "RestartGraceSeconds": 10,
+    "StateFile": "",
+    "InstancesDir": "",
+    "PlayerPresencePollMs": 1000,
+    "ContainerLifecyclePollMs": 1000,
+    "ConsolePollMs": 250
+  },
   "Logging": {
     "LogLevel": {
       "Default": "Information",

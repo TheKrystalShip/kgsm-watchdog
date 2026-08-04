@@ -25,12 +25,12 @@ INST="${1:-7dtd}"
 
 # Tuned so the give-up path runs in seconds, not minutes (defaults are 60s/5min-scale).
 GRACE=3
-export KGSM_WATCHDOG_RESTART_GRACE_SEC="${GRACE}"
-export KGSM_WATCHDOG_RESTART_BASE_DELAY_MS=500
-export KGSM_WATCHDOG_RESTART_MAX_DELAY_MS=2000
-export KGSM_WATCHDOG_RESTART_MAX_RETRIES=2          # 2 restarts, then give up on the 3rd crash
-export KGSM_WATCHDOG_RESTART_STABILITY_SEC=3600     # never auto-resets the streak mid-test
-export KGSM_WATCHDOG_POLL_INTERVAL_MS=500
+export Watchdog__RestartGraceSeconds="${GRACE}"
+export Watchdog__RestartBaseDelayMs=500
+export Watchdog__RestartMaxDelayMs=2000
+export Watchdog__RestartMaxRetries=2          # 2 restarts, then give up on the 3rd crash
+export Watchdog__RestartStabilitySeconds=3600     # never auto-resets the streak mid-test
+export Watchdog__PollIntervalMs=500
 
 [ "$(id -u)" -eq 0 ] || { echo "FATAL: run with sudo"; exit 1; }
 [ -n "${SUDO_UID:-}" ] || { echo "FATAL: no SUDO_UID — run via 'sudo', not as a root login"; exit 1; }
@@ -67,7 +67,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== launching daemon as root; it will drop to uid ${SUDO_UID} =="
-KGSM_WATCHDOG_KGSM_PATH="${KGSM}" "${BIN}" > /tmp/wd-root-inc2.log 2>&1 &
+Watchdog__KgsmPath="${KGSM}" "${BIN}" > /tmp/wd-root-inc2.log 2>&1 &
 DPID=$!
 for _ in $(seq 1 50); do [ -S "${SOCK}" ] && break; sleep 0.1; done
 READY="$(curl -s --unix-socket "${SOCK}" http://x/ready)"

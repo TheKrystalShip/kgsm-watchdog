@@ -103,7 +103,7 @@
       "type": "path",
       "default": "/run/kgsm-watchdog/control.sock",
       "risk": "wiring",
-      "pairedApiKey": "KGSM_API_WATCHDOG_SOCKET"
+      "pairedApiKey": "Api__WatchdogSocketPath"
     },
     {
       "key": "socketMode",

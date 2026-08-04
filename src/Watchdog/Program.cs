@@ -214,7 +214,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 app.MapWatchdog();
 app.MapConsole();
 
-// Surface typo'd config: a misspelled KGSM_WATCHDOG_* var silently falls back to its default
+// Surface typo'd config: a misspelled Watchdog__* var silently falls back to its default
 // otherwise (the cost of stringly-typed env config — make it visible, not invisible).
 foreach (var v in WatchdogOptions.UnknownConfigVars())
     app.Logger.LogWarning(

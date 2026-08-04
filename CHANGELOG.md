@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a knob written blank no longer takes the daemon down
+- **Every number in the settings type is nullable, so "written blank" means unset.** Binding a blank
+  value to a non-nullable `int` throws, which made a single stray `Watchdog__PollIntervalMs=` line in
+  an env file a startup crash — for this daemon, one that leaves every native game server
+  unsupervised until someone notices. A null one binds to `0`, silently discarding the coded default.
+  Null now means unset and the coded default applies. A value that is present but is not a number
+  still fails loudly, which is the point of typing it.
+
 ### Changed — configuration is bound from `kgsm-watchdog.settings.json`, which is now the source of truth
 
 - **Every knob is declared in the settings file and bound to `WatchdogSettings`.** The file ships all

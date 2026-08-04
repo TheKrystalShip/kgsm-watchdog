@@ -143,7 +143,7 @@ internal sealed class HotSwapCoordinator
         var psi = new ProcessStartInfo
         {
             FileName = path,
-            UseShellExecute = false,          // inherit the current environment (KGSM_WATCHDOG_*), no shell
+            UseShellExecute = false,          // inherit the current environment (Watchdog__*), no shell
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };

@@ -75,7 +75,7 @@ memory `kgsm-watchdog` / `kgsm-cgroup-supervision`.)
 - **Never fabricate state.** A status is measured (cgroup/`/proc`) or "unknown",
   never invented (the spine principle that killed kgsm-api).
 - **Naming:** project `kgsm-watchdog`; namespace `TheKrystalShip.KGSM.Watchdog`;
-  assembly `kgsm-watchdog`; env prefix `KGSM_WATCHDOG_*`; control socket default
+  assembly `kgsm-watchdog`; config section `Watchdog` (env prefix `Watchdog__`); control socket default
   `/run/kgsm-watchdog/control.sock`.
 
 ## 4. Boot & privilege model (the load-bearing sequence)
@@ -169,7 +169,8 @@ kgsm-watchdog/
 ├── src/Watchdog/
 │   ├── Watchdog.csproj            (net10.0, PublishAot, refs KGSM.Lib)
 │   ├── Program.cs                 (CreateSlimBuilder, UDS, hosted services)
-│   ├── WatchdogOptions.cs         (KGSM_WATCHDOG_* FromEnvironment)
+│   ├── WatchdogSettings.cs        (the bound Watchdog section, 1:1 with the settings file)
+│   ├── WatchdogOptions.cs         (the validated form — FromSettings)
 │   ├── Model/
 │   │   ├── Contracts.cs           (control request/response records)
 │   │   └── WatchdogJsonContext.cs (source-gen)

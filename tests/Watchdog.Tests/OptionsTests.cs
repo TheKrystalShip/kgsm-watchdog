@@ -22,6 +22,45 @@ public sealed class OptionsTests
             config.GetSection(WatchdogSettings.Section).Get<WatchdogSettings>() ?? new WatchdogSettings());
     }
 
+    // A knob written blank is "unset", not a startup crash and not zero. Both failure modes are real
+    // binder behaviour on a non-nullable property: a blank value throws, and a null one binds to 0 —
+    // so `Watchdog__PollIntervalMs=` left in an env file would have taken the supervisor down, leaving
+    // every native game server unsupervised until someone noticed. Every number here is nullable so
+    // both land on the coded default instead.
+    [Fact]
+    public void A_blank_value_means_unset_and_takes_the_coded_default()
+    {
+        var o = Bind(
+            (nameof(WatchdogSettings.PollIntervalMs), ""),
+            (nameof(WatchdogSettings.RestartBaseDelayMs), ""),
+            (nameof(WatchdogSettings.RestartMaxDelayMs), ""),
+            (nameof(WatchdogSettings.RestartMaxRetries), ""),
+            (nameof(WatchdogSettings.RestartStabilitySeconds), ""),
+            (nameof(WatchdogSettings.RestartGraceSeconds), ""),
+            (nameof(WatchdogSettings.PlayerPresencePollMs), ""),
+            (nameof(WatchdogSettings.ContainerLifecyclePollMs), ""),
+            (nameof(WatchdogSettings.ConsolePollMs), ""));
+
+        var defaults = new WatchdogOptions();
+        Assert.Equal(defaults.PollIntervalMs, o.PollIntervalMs);
+        Assert.Equal(defaults.RestartBaseDelayMs, o.RestartBaseDelayMs);
+        Assert.Equal(defaults.RestartMaxDelayMs, o.RestartMaxDelayMs);
+        Assert.Equal(defaults.RestartMaxRetries, o.RestartMaxRetries);
+        Assert.Equal(defaults.RestartStabilitySeconds, o.RestartStabilitySeconds);
+        Assert.Equal(defaults.RestartGraceSeconds, o.RestartGraceSeconds);
+        Assert.Equal(defaults.PlayerPresencePollMs, o.PlayerPresencePollMs);
+        Assert.Equal(defaults.ContainerLifecyclePollMs, o.ContainerLifecyclePollMs);
+        Assert.Equal(defaults.ConsolePollMs, o.ConsolePollMs);
+    }
+
+    // The other half of the contract: a value that is present but is not a number is NOT quietly
+    // ignored. Typed configuration is worth having only if it refuses what it cannot read.
+    [Fact]
+    public void A_value_that_is_not_a_number_is_refused()
+    {
+        Assert.ThrowsAny<Exception>(() => Bind((nameof(WatchdogSettings.PollIntervalMs), "often")));
+    }
+
     [Fact]
     public void Defaults_when_nothing_is_configured()
     {

@@ -18,6 +18,16 @@ namespace TheKrystalShip.KGSM.Watchdog;
 /// derives its <c>--help</c> reference and its typo detection from them, so adding a property is
 /// the only step needed to make a knob discoverable.
 /// </para>
+/// <para>
+/// Every number is <b>nullable</b>, and null means "not written" — the coded default in
+/// <see cref="WatchdogOptions"/> applies. Two binder behaviours make this load-bearing rather than
+/// stylistic: a blank value (<c>Watchdog__PollIntervalMs=</c>, a single stray line in an env file)
+/// binds to a non-nullable <see cref="int"/> by throwing, which for this daemon means every native
+/// game server goes unsupervised until someone notices; and a JSON null binds to <c>0</c>, silently
+/// discarding the default a property initializer here would have carried. Nullable turns both into
+/// "unset". A value that is present but is not a number still fails loudly, which is the point of
+/// typing it at all.
+/// </para>
 /// </remarks>
 public sealed class WatchdogSettings
 {
@@ -63,7 +73,7 @@ public sealed class WatchdogSettings
     /// <summary>How often the crash watcher polls each instance's <c>cgroup.events</c> for
     /// liveness. Floor 50. Cheap at this scale, so 1 Hz is plenty; lower it only to make
     /// crash-detection latency tighter.</summary>
-    public int PollIntervalMs { get; set; } = 1000;
+    public int? PollIntervalMs { get; set; }
 
     /// <summary>
     /// What counts as restartable: <c>always</c> (restart on any exit while desired-running) or
@@ -74,21 +84,21 @@ public sealed class WatchdogSettings
     public string RestartPolicy { get; set; } = "always";
 
     /// <summary>First-restart delay; doubles each consecutive failure. Floor 0.</summary>
-    public int RestartBaseDelayMs { get; set; } = 1000;
+    public int? RestartBaseDelayMs { get; set; }
 
     /// <summary>Ceiling on the exponential restart delay. Floor 0.</summary>
-    public int RestartMaxDelayMs { get; set; } = 60_000;
+    public int? RestartMaxDelayMs { get; set; }
 
     /// <summary>Max consecutive restarts before giving up (<c>phase=failed</c>). Floor 0.</summary>
-    public int RestartMaxRetries { get; set; } = 5;
+    public int? RestartMaxRetries { get; set; }
 
     /// <summary>Uptime after which an instance is "healthy" and its failure counter resets,
     /// seconds. Floor 1.</summary>
-    public int RestartStabilitySeconds { get; set; } = 300;
+    public int? RestartStabilitySeconds { get; set; }
 
     /// <summary>Post-spawn grace window in which crash-detection is suppressed, seconds.
     /// Floor 0.</summary>
-    public int RestartGraceSeconds { get; set; } = 10;
+    public int? RestartGraceSeconds { get; set; }
 
     /// <summary>
     /// On-disk file holding the set of instances the operator left desired-running, so the daemon
@@ -110,15 +120,15 @@ public sealed class WatchdogSettings
 
     /// <summary>How often the player-presence ingester scans for channels and tails them. Floor 50.
     /// Presence latency is bounded by this; cheap at this scale, so 1 Hz is plenty.</summary>
-    public int PlayerPresencePollMs { get; set; } = 1000;
+    public int? PlayerPresencePollMs { get; set; }
 
     /// <summary>How often the container lifecycle ingester scans for <c>events/lifecycle.ndjson</c>
     /// channels and tails them, driving UPnP open/close off a container's self-reported
     /// start/stop. Floor 50.</summary>
-    public int ContainerLifecyclePollMs { get; set; } = 1000;
+    public int? ContainerLifecyclePollMs { get; set; }
 
     /// <summary>How often the console-follow handler polls a native instance's log file for newly
     /// appended lines. Floor 50. Tighter than the presence poll because a human is watching the
     /// stream live, so latency matters; still cheap (one stat plus a short read per client).</summary>
-    public int ConsolePollMs { get; set; } = 250;
+    public int? ConsolePollMs { get; set; }
 }

@@ -459,7 +459,7 @@ internal sealed class NativePlayerPresenceIngester(
     }
 
     /// <summary>
-    /// The instances dir to watch — <c>KGSM_WATCHDOG_INSTANCES_DIR</c> if set, else
+    /// The instances dir to watch — <c>Watchdog__InstancesDir</c> if set, else
     /// <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm/instances</c>. Mirrors
     /// <see cref="PlayerPresenceIngester.ResolveInstancesDir"/> (the watchdog does not inherit KGSM's own
     /// <c>KGSM_INSTANCES_DIR</c>); resolved lazily here, after the user-drop in <c>CgroupBootstrap</c>.

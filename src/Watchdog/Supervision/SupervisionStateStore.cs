@@ -14,7 +14,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// forbids.
 /// <para>
 /// This mirrors <see cref="DesiredStateStore"/> exactly — same lazily-resolved directory
-/// (<c>KGSM_WATCHDOG_STATE_FILE</c>'s parent, else
+/// (<c>Watchdog__StateFile</c>'s parent, else
 /// <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog</c>), same atomic same-dir temp+rename, same
 /// best-effort posture (a failed write or a corrupt file degrades to "nothing to rehydrate", never
 /// throws). Unlike the desired-state set, the on-disk shape here is a full snapshot
@@ -84,7 +84,7 @@ internal sealed class SupervisionStateStore(WatchdogOptions options, ILogger<Sup
 
     /// <summary>
     /// The state-file path: <c>supervision-state.json</c> in the SAME directory the
-    /// <see cref="DesiredStateStore"/> uses — the parent of an explicit <c>KGSM_WATCHDOG_STATE_FILE</c>
+    /// <see cref="DesiredStateStore"/> uses — the parent of an explicit <c>Watchdog__StateFile</c>
     /// if set, else <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog/</c>. Resolved lazily (never at
     /// options construction) because <c>HOME</c> only becomes the dropped KGSM user's after the bootstrap
     /// privilege drop, and every call site runs after that.

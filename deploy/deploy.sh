@@ -69,7 +69,7 @@ on_err() {
 trap 'on_err "$LINENO"' ERR
 
 # The path to kgsm.sh the UNIT runs with — needed so the new binary's --selfcheck (a no-side-effect
-# WatchdogOptions parse + load probe) sees the SAME KGSM_WATCHDOG_KGSM_PATH the live daemon resolves.
+# WatchdogOptions parse + load probe) sees the SAME Watchdog__KgsmPath the live daemon resolves.
 # Source order mirrors the unit: an EnvironmentFile assignment overrides the unit's inline default,
 # so the env file (if present) wins; else fall back to the unit's documented default. This file is
 # the systemd EnvironmentFile format (KEY=VALUE / # comments), so a plain grep is the safe reader
@@ -78,7 +78,7 @@ resolve_kgsm_path() {
     local p=""
     if [[ -r "$ENV_FILE" ]]; then
         # last uncommented assignment wins (systemd applies them top-to-bottom)
-        p="$(grep -E '^[[:space:]]*KGSM_WATCHDOG_KGSM_PATH=' "$ENV_FILE" 2>/dev/null \
+        p="$(grep -E '^[[:space:]]*Watchdog__KgsmPath=' "$ENV_FILE" 2>/dev/null \
                 | tail -n1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     fi
     # Default = the unit's inline Environment= value (kept in lockstep with kgsm-watchdog.service).
@@ -125,11 +125,11 @@ hot_swap() {
 
     # (a) SAFETY GATE — validate the NEW binary BEFORE it touches the live path. --selfcheck is a
     #     no-side-effect runnability probe (no socket bind, no cgroup writes). Run it with the unit's
-    #     KGSM_WATCHDOG_KGSM_PATH so the option-parse sees what the daemon will. Non-zero → ABORT the
+    #     Watchdog__KgsmPath so the option-parse sees what the daemon will. Non-zero → ABORT the
     #     deploy: we refuse to install a binary that can't even self-validate. The running daemon is
     #     untouched (nothing has been installed yet), so this is a clean no-op abort.
-    log "validating new binary: ${new_bin} --selfcheck (KGSM_WATCHDOG_KGSM_PATH=${kgsm_path})"
-    if ! KGSM_WATCHDOG_KGSM_PATH="$kgsm_path" "$new_bin" --selfcheck; then
+    log "validating new binary: ${new_bin} --selfcheck (Watchdog__KgsmPath=${kgsm_path})"
+    if ! Watchdog__KgsmPath="$kgsm_path" "$new_bin" --selfcheck; then
         err "the NEW binary FAILED --selfcheck — ABORTING the deploy."
         err "nothing was installed; the running ${SERVICE} is untouched (still the previous build)."
         err "fix the build, or if this is an OLDER binary without --selfcheck, re-run with --cold."

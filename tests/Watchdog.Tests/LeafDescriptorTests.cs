@@ -323,7 +323,7 @@ public class LeafDescriptorTests
 
     /// <summary>
     /// The daemon already keeps its own list of the variables it recognises — it is what
-    /// <c>--help</c> renders and what flags a typo'd <c>KGSM_WATCHDOG_*</c> var at startup. The
+    /// <c>--help</c> renders and what flags a typo'd <c>Watchdog__*</c> var at startup. The
     /// descriptor and that list describe the same surface to two different audiences, so they must
     /// agree exactly: a knob in one and not the other means the Control Panel and the daemon's own
     /// documentation disagree about what this leaf can be configured with.

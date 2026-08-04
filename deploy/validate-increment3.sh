@@ -22,7 +22,7 @@ set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="${REPO}/src/Watchdog/bin/Release/net10.0/linux-x64/publish/kgsm-watchdog"
-KGSM="${KGSM_WATCHDOG_KGSM_PATH:-/home/heisen/tks/kgsm/kgsm.sh}"
+KGSM="${Watchdog__KgsmPath:-/home/heisen/tks/kgsm/kgsm.sh}"
 KGSM_DIR="$(dirname "${KGSM}")"
 SOCK="/run/kgsm-watchdog/control.sock"
 CGROOT="/sys/fs/cgroup/kgsm.slice"

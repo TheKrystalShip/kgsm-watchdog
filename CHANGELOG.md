@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the env template is held to the settings file
+- **A test fails the build when `deploy/kgsm-watchdog.env.example` names a key
+  `kgsm-watchdog.settings.json` does not declare.** The env file overrides the settings file one
+  key at a time, so a variable naming an undeclared key binds to nothing — it reads as configuration
+  and is inert. The template is the one copy of that file in version control, so it is the copy that
+  can be checked. Commented lines count too, since a commented key is what someone uncomments;
+  systemd's own directives quoted in the prose (`EnvironmentFile=`, `Delegate=`) do not, because they
+  configure the unit rather than the leaf.
+
 ### Changed
 - **`pairedApiKey` names the Control Panel API's renamed setting.** kgsm-api's environment
   variables are now spelled `Api__<Property>`, and this value is what the API resolves to warn that

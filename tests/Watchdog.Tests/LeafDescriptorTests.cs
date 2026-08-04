@@ -93,6 +93,55 @@ public class LeafDescriptorTests
         return found;
     }
 
+
+    /// <summary>
+    /// The env file overrides the settings file one key at a time, so a variable naming a key the file
+    /// does not declare binds to nothing — it looks like configuration and is inert. The template is the
+    /// one copy of that file in version control, so it is the copy that can be checked.
+    /// </summary>
+    [Fact]
+    public void The_env_example_sets_no_key_the_settings_file_does_not_declare()
+    {
+        string path = Path.Combine(RepoRoot(), "deploy", "kgsm-watchdog.env.example");
+        Assert.True(File.Exists(path), $"the env template is missing: {path}");
+
+        var declared = SettableEnvKeys();
+        var unknown = new List<string>();
+
+        foreach (string raw in File.ReadAllLines(path))
+        {
+            // Both live lines and the commented-out examples: a commented key is what someone uncomments.
+            bool commented = raw.TrimStart().StartsWith('#');
+            string line = raw.TrimStart().TrimStart('#').Trim();
+            int eq = line.IndexOf('=');
+            if (eq <= 0)
+                continue;
+
+            string key = line[..eq];
+            // Prose, not an assignment — a sentence that happens to contain '='.
+            if (key.Any(char.IsWhiteSpace))
+                continue;
+
+            // A commented line counts only when it is spelled like an override (Section__Key). These
+            // templates also quote systemd's own directives in their prose — "EnvironmentFile=...",
+            // "Delegate=yes" — and those configure the unit, not the leaf.
+            if (commented && !key.Contains("__", StringComparison.Ordinal))
+                continue;
+
+            // The runtime's own variables are settings by another name, reached without the settings file.
+            if (key.StartsWith("DOTNET_", StringComparison.Ordinal)
+                || key.StartsWith("ASPNETCORE_", StringComparison.Ordinal))
+                continue;
+
+            if (!declared.Contains(key))
+                unknown.Add(key);
+        }
+
+        Assert.True(unknown.Count == 0,
+            "deploy/kgsm-watchdog.env.example sets these, and kgsm-watchdog.settings.json declares no such key, so " +
+            "they bind to nothing:\n  " + string.Join("\n  ", unknown.Distinct()));
+    }
+
     // ── Coverage: the descriptor and the settings file agree, both ways ──────
 
     [Fact]

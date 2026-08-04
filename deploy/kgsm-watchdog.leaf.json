@@ -42,16 +42,6 @@
       "risk": "wiring"
     },
     {
-      "key": "kgsmSocketPath",
-      "env": "KGSM_WATCHDOG_KGSM_SOCKET",
-      "label": "KGSM event socket",
-      "description": "Unix socket the watchdog receives KGSM lifecycle events on. It must be one of the paths the engine is configured to deliver to, and belong to no other consumer.",
-      "group": "kgsm",
-      "type": "path",
-      "default": "/run/kgsm-watchdog/events.sock",
-      "risk": "wiring"
-    },
-    {
       "key": "instancesDir",
       "env": "KGSM_WATCHDOG_INSTANCES_DIR",
       "label": "Instances directory",

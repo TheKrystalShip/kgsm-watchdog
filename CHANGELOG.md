@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — the KGSM event socket knob
+
+- **`KGSM_WATCHDOG_KGSM_SOCKET` is gone.** It was vestigial: the watchdog registers no event
+  handler and never resolves `IEventService`, so no socket was ever created at that path and
+  nothing was ever delivered to it. It described a capability the daemon does not have, which is
+  worse than describing nothing — an operator could point it somewhere and reasonably expect
+  events to arrive. The watchdog reads instance config through kgsm-lib and consumes no engine
+  events at all.
+
 ### Added — the Control Panel can configure this daemon
 - **`deploy/kgsm-watchdog.leaf.json` declares every knob the watchdog reads** — all 20
   `KGSM_WATCHDOG_*` variables plus the standard logging level, grouped for display, each with its

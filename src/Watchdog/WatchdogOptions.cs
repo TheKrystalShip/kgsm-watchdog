@@ -32,12 +32,6 @@ public sealed class WatchdogOptions
     /// </summary>
     public string KgsmPath { get; init; } = string.Empty;
 
-    /// <summary>
-    /// Unix socket kgsm-lib uses for KGSM event delivery. <c>KGSM_WATCHDOG_KGSM_SOCKET</c>.
-    /// Wired in Increment 2 (lifecycle-event awareness); passed to <c>AddKgsmServices</c> now.
-    /// </summary>
-    public string KgsmSocketPath { get; init; } = "/run/kgsm-watchdog/events.sock";
-
     /// <summary>cgroup v2 mount point. <c>KGSM_WATCHDOG_CGROUP_MOUNT</c>. Default <c>/sys/fs/cgroup</c>.</summary>
     public string CgroupMountPoint { get; init; } = "/sys/fs/cgroup";
 
@@ -163,7 +157,6 @@ public sealed class WatchdogOptions
             SocketPath = Env("KGSM_WATCHDOG_SOCKET") is { Length: > 0 } s ? s : defaults.SocketPath,
             SocketMode = mode,
             KgsmPath = Env("KGSM_WATCHDOG_KGSM_PATH") is { Length: > 0 } kp ? kp : defaults.KgsmPath,
-            KgsmSocketPath = Env("KGSM_WATCHDOG_KGSM_SOCKET") is { Length: > 0 } ks ? ks : defaults.KgsmSocketPath,
             CgroupMountPoint = Env("KGSM_WATCHDOG_CGROUP_MOUNT") is { Length: > 0 } cm ? cm : defaults.CgroupMountPoint,
             CgroupBaseName = Env("KGSM_WATCHDOG_CGROUP_BASE") is { Length: > 0 } cb ? cb : defaults.CgroupBaseName,
             CgroupControllers = ParseControllers(Env("KGSM_WATCHDOG_CGROUP_CONTROLLERS")) ?? defaults.CgroupControllers,
@@ -206,7 +199,6 @@ public sealed class WatchdogOptions
     public static readonly string[] KnownEnvVars =
     [
         "KGSM_WATCHDOG_KGSM_PATH",
-        "KGSM_WATCHDOG_KGSM_SOCKET",
         "KGSM_WATCHDOG_SOCKET",
         "KGSM_WATCHDOG_SOCKET_MODE",
         "KGSM_WATCHDOG_CGROUP_MOUNT",
@@ -279,7 +271,6 @@ public sealed class WatchdogOptions
 
         Section("KGSM integration");
         Row("KGSM_WATCHDOG_KGSM_PATH", "[REQUIRED]", "absolute path to kgsm.sh (read via kgsm-lib for spawn config)");
-        Row("KGSM_WATCHDOG_KGSM_SOCKET", $"[{d.KgsmSocketPath}]", "kgsm-lib event socket");
 
         Section("Control socket (the security boundary is its filesystem perms)");
         Row("KGSM_WATCHDOG_SOCKET", $"[{d.SocketPath}]", "control unix-domain socket path");

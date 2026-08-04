@@ -80,9 +80,11 @@ builder.Logging.AddSystemdConsole();
 
 builder.Services.AddSingleton(options);
 
-// The single KGSM chokepoint — used ONLY to read instance config (and, in Inc 2, to watch
-// lifecycle events). The watchdog never calls Start/Stop on it (that path spawns detached).
-builder.Services.AddKgsmServices(options.KgsmPath, options.KgsmSocketPath);
+// The single KGSM chokepoint — used ONLY to read instance config. The watchdog never calls
+// Start/Stop on it (that path spawns detached) and consumes no engine events: it registers no
+// handler and never resolves IEventService, so the lazily-registered event singletons are never
+// constructed and nothing is read.
+builder.Services.AddKgsmServices(options.KgsmPath);
 
 // Cgroup layer + boot.
 builder.Services.AddSingleton<CgroupManager>();

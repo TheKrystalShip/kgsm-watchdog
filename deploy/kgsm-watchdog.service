@@ -39,7 +39,7 @@ Environment=KGSM_WATCHDOG_KGSM_PATH=/usr/local/bin/kgsm
 # Optional: keep the rest of the knobs in a file. The leading '-' makes it optional (no failure if absent).
 EnvironmentFile=-/etc/kgsm-watchdog/kgsm-watchdog.env
 
-# Control + events sockets live under /run/kgsm-watchdog. systemd creates it owned by User= — safe now
+# The control socket lives under /run/kgsm-watchdog. systemd creates it owned by User= — safe now
 # that no root→user drop happens (the root-boot unit avoided RuntimeDirectory= because a `reload`
 # re-chowned it back to root and broke the dropped daemon's socket bind; with User= that cannot arise).
 RuntimeDirectory=kgsm-watchdog

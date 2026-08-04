@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — the leaf config descriptor is generated, not written
+- **`deploy/kgsm-watchdog.leaf.json` is now written by `TheKrystalShip.KGSM.LeafConfig` on every build**, from
+  `[LeafField]` attributes and `<panel>` doc tags on `WatchdogSettings`. A knob lives in two places —
+  the property and the settings-file key — instead of three, and the descriptor cannot describe a
+  variable this leaf does not read: the `env` name is derived from the property's position under its
+  bound section, and the default from the settings file itself. **Edit the settings class, not the
+  JSON.**
+- **A field's operator-facing prose comes from a `<panel>` tag**, falling back to `<summary>` with a
+  build message naming the field. The two are separate because they answer different questions: the
+  summary tells a developer what the value means to the code, the panel tells whoever runs the host
+  what changing it does.
+- **`LeafDescriptorTests` is gone.** Every check it made — settings coverage in both directions, the
+  field vocabulary, group and `dependsOn` references, enum values and defaults, bounds, floor-source
+  order — now runs in the generator, at the point the file is produced rather than after, and in one
+  implementation shared by every leaf instead of a copy per repo.
+- The package is **build-only** and declares no dependencies: the attributes arrive as source and the
+  generator reads this assembly's metadata in its own process, so nothing reaches the published
+  output and this leaf gains no reflection.
+
+- **`Watchdog__CgroupControllers` ships comma-separated** (`cpu,memory,io,pids`). The parser has
+  always taken either spelling, but the settings file said spaces while the descriptor published
+  commas as the default — so the Control Panel showed a default and a floor that disagreed for a
+  value neither side was wrong about. The file, the coded default and the panel now all say the same
+  thing, which is the one the panel writes.
+
 ### Added — the env template is held to the settings file
 - **A test fails the build when `deploy/kgsm-watchdog.env.example` names a key
   `kgsm-watchdog.settings.json` does not declare.** The env file overrides the settings file one

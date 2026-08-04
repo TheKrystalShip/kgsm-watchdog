@@ -46,7 +46,7 @@ public sealed class WatchdogOptions
 
     /// <summary>
     /// Controllers to enable on the base subtree so per-instance children inherit them.
-    /// <c>Watchdog__CgroupControllers</c> (space/comma-separated). Default <c>cpu memory io pids</c>.
+    /// <c>Watchdog__CgroupControllers</c> (space/comma-separated). Default <c>cpu,memory,io,pids</c>.
     /// </summary>
     public IReadOnlyList<string> CgroupControllers { get; init; } = ["cpu", "memory", "io", "pids"];
 
@@ -164,18 +164,18 @@ public sealed class WatchdogOptions
             CgroupBaseName = Or(s.CgroupBaseName, defaults.CgroupBaseName),
             CgroupControllers = ParseControllers(s.CgroupControllers) ?? defaults.CgroupControllers,
             SupervisorLeaf = Or(s.SupervisorLeaf, defaults.SupervisorLeaf),
-            PollIntervalMs = Floor(s.PollIntervalMs ?? defaults.PollIntervalMs, 50),
-            RestartBaseDelayMs = Floor(s.RestartBaseDelayMs ?? defaults.RestartBaseDelayMs, 0),
-            RestartMaxDelayMs = Floor(s.RestartMaxDelayMs ?? defaults.RestartMaxDelayMs, 0),
-            RestartMaxRetries = Floor(s.RestartMaxRetries ?? defaults.RestartMaxRetries, 0),
-            RestartStabilitySeconds = Floor(s.RestartStabilitySeconds ?? defaults.RestartStabilitySeconds, 1),
-            RestartGraceSeconds = Floor(s.RestartGraceSeconds ?? defaults.RestartGraceSeconds, 0),
+            PollIntervalMs = Floor(s.PollIntervalMs ?? defaults.PollIntervalMs, WatchdogSettings.Floors.PollMs),
+            RestartBaseDelayMs = Floor(s.RestartBaseDelayMs ?? defaults.RestartBaseDelayMs, WatchdogSettings.Floors.Zero),
+            RestartMaxDelayMs = Floor(s.RestartMaxDelayMs ?? defaults.RestartMaxDelayMs, WatchdogSettings.Floors.Zero),
+            RestartMaxRetries = Floor(s.RestartMaxRetries ?? defaults.RestartMaxRetries, WatchdogSettings.Floors.Zero),
+            RestartStabilitySeconds = Floor(s.RestartStabilitySeconds ?? defaults.RestartStabilitySeconds, WatchdogSettings.Floors.StabilitySeconds),
+            RestartGraceSeconds = Floor(s.RestartGraceSeconds ?? defaults.RestartGraceSeconds, WatchdogSettings.Floors.Zero),
             RestartPolicy = ParseRestartPolicy(s.RestartPolicy, defaults.RestartPolicy),
             StateFile = s.StateFile?.Trim() ?? string.Empty,
             InstancesDir = s.InstancesDir?.Trim() ?? string.Empty,
-            PlayerPresencePollMs = Floor(s.PlayerPresencePollMs ?? defaults.PlayerPresencePollMs, 50),
-            ContainerLifecyclePollMs = Floor(s.ContainerLifecyclePollMs ?? defaults.ContainerLifecyclePollMs, 50),
-            ConsolePollMs = Floor(s.ConsolePollMs ?? defaults.ConsolePollMs, 50),
+            PlayerPresencePollMs = Floor(s.PlayerPresencePollMs ?? defaults.PlayerPresencePollMs, WatchdogSettings.Floors.PollMs),
+            ContainerLifecyclePollMs = Floor(s.ContainerLifecyclePollMs ?? defaults.ContainerLifecyclePollMs, WatchdogSettings.Floors.PollMs),
+            ConsolePollMs = Floor(s.ConsolePollMs ?? defaults.ConsolePollMs, WatchdogSettings.Floors.PollMs),
         };
     }
 

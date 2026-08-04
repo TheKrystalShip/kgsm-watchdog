@@ -23,7 +23,7 @@
 
     <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
     <AssemblyName>kgsm-watchdog</AssemblyName>
-    <Version>1.13.2</Version>
+    <Version>1.14.0</Version>
 
     <!-- The source-generated [LibraryImport] p/invokes (mkfifo/open/write/setres*uid)
          emit unsafe marshalling stubs; no hand-written unsafe code in the project. -->
@@ -43,7 +43,19 @@
     <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
     <StripSymbols>true</StripSymbols>
     <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+
+    <!-- The leaf config descriptor is generated from WatchdogSettings. These name the two files the
+         generator works between; the attribute source, the documentation file the <panel> tags travel
+         in, and the build step all come with the package below. -->
+    <LeafSettingsFile>kgsm-watchdog.settings.json</LeafSettingsFile>
+    <LeafDescriptorFile>$(MSBuildProjectDirectory)/../../deploy/kgsm-watchdog.leaf.json</LeafDescriptorFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Build-only: the descriptor attributes arrive as source and the generator as a tool, and the
+         package declares no dependencies, so nothing here reaches the AOT publish. -->
+    <PackageReference Include="TheKrystalShip.KGSM.LeafConfig" Version="1.0.0" PrivateAssets="all" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Tell the GC to decommit eagerly on every collection (0-9; 5 = moderate). Pairs with the

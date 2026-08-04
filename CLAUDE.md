@@ -166,9 +166,13 @@ anything else as "unavailable, retry". The daemon supervises native-standalone i
   and the host, so the two cannot diverge.
 - **`KnownEnvVars` is derived from `WatchdogSettings`, not hand-listed** — adding a property is the
   only step needed to make a knob real, documented in `--help`, and exempt from the typo warning.
-- **A knob lives in three places and `LeafDescriptorTests` pins all of them**: a `WatchdogSettings`
-  property, a key in `kgsm-watchdog.settings.json`, and a descriptor entry. Miss one and the build
-  fails naming which.
+- **A knob lives in two places**: a `WatchdogSettings` property carrying `[LeafField]` and a
+  `<panel>` doc tag, and a key in `kgsm-watchdog.settings.json`. `deploy/kgsm-watchdog.leaf.json` is
+  **generated** from the first, with defaults read from the second, by
+  `TheKrystalShip.KGSM.LeafConfig` on every build — so edit the settings class, never the JSON, and
+  commit what the build produces. Miss either and the build fails naming the key. The package is
+  build-only and declares no dependencies, so the AOT publish is unaffected. Format:
+  `../leaf-config-descriptor.md`; mechanism: `../kgsm-leafconfig/README.md`.
 - **A config-key rename cannot be hot-swapped.** The hot-swap `execv` inherits the live process's
   environment, which predates the rename, so `--selfcheck` on the new binary fails its required-knob
   check and the swap correctly aborts. Deploy those with `--cold`.

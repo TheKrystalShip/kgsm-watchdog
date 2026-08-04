@@ -5,7 +5,7 @@
     "SocketMode": "660",
     "CgroupMountPoint": "/sys/fs/cgroup",
     "CgroupBaseName": "kgsm.slice",
-    "CgroupControllers": "cpu memory io pids",
+    "CgroupControllers": "cpu,memory,io,pids",
     "SupervisorLeaf": "supervisor",
     "PollIntervalMs": 1000,
     "RestartPolicy": "always",

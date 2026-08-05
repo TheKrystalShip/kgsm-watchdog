@@ -82,7 +82,21 @@ if (string.IsNullOrEmpty(options.KgsmPath))
     return 1;
 }
 
-var builder = WebApplication.CreateSlimBuilder(args);
+// ContentRootPath is pinned to the binary's own directory rather than left to default to the
+// process working directory. The unit starts the daemon with no WorkingDirectory, so that default
+// is "/", and the builder installs its own appsettings.json providers with reloadOnChange:true —
+// which hangs a RECURSIVE FileSystemWatcher off the content root. Rooted at "/", that watch walks
+// the entire filesystem and takes an inotify watch per directory (~165k here), exhausting the
+// per-user fs.inotify.max_user_watches budget the daemon's own supervised game servers draw from.
+// A game that cannot get a watch fails to boot, and a game that fails to boot is a game this
+// daemon restarts forever. The path is AppContext.BaseDirectory for the same reason the settings
+// file is (see AddWatchdogConfiguration): it is the one directory that is correct no matter where
+// the process was started from.
+var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
 
 // The same sources the options above were read from, so the host and the pre-host config cannot
 // diverge. See AddWatchdogConfiguration for why the path and the ordering are what they are.

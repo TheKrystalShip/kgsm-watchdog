@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The daemon no longer watches the entire filesystem, and no longer starves the games it supervises
+  of inotify watches.** The host builder's content root defaulted to the process working directory,
+  which under this unit is `/`, and the builder's own `appsettings.json` providers watch that root
+  *recursively* for reload — one inotify watch per directory, ~165k of the 524k per-user budget, held
+  for the daemon's lifetime and growing as supervised games created directories. Game servers draw on
+  the same per-user budget: with the budget exhausted, Project Zomboid's `DebugFileWatcher` could not
+  register a watch, threw, and terminated during boot — with exit code 0, which under the default
+  `always` restart policy is a restart. The daemon then restarted it forever, each attempt creating
+  more directories and taking more watches. The content root is now pinned to `AppContext.BaseDirectory`,
+  and the unit sets `WorkingDirectory=` so the working directory is the install prefix rather than `/`.
 - **An instance installed while the daemon is running now gets its real readiness config.** The native
   presence/readiness watch is built the moment an instance's directory appears — which, for an install
   in progress, is several seconds before kgsm has written the instance's config — so the first read saw

@@ -16,6 +16,13 @@ Type=simple
 # service untouched.
 ExecStart=/opt/kgsm-watchdog/kgsm-watchdog
 
+# Start the daemon in its own install prefix so the process working directory is never "/". The
+# daemon pins its content root in code and does not depend on this, but a service left at "/" makes
+# any future default-rooted file provider walk the whole filesystem — which, for a provider that
+# watches (reloadOnChange), silently consumes one inotify watch per directory out of the same
+# per-user budget the supervised game servers draw from.
+WorkingDirectory=/opt/kgsm-watchdog
+
 # `systemctl reload` → SIGHUP → the daemon re-execs the freshly-deployed binary IN PLACE (same PID,
 # same children, open fds carried across the execve) — a zero-downtime hot-swap, not a process bounce.
 # On re-exec the daemon is already in kgsm.slice/kgsm-watchdog.service/supervisor; base discovery folds

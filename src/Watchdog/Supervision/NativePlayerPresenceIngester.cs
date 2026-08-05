@@ -48,7 +48,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <b>Readiness (per instance start/session).</b> See <see cref="ProcessReadiness"/>: the authoritative
 /// "a fresh run started" edge is the instance's cgroup transitioning not-populated → populated (read via
 /// <see cref="CgroupManager.IsPopulated"/>, the SAME child-inclusive liveness signal <c>CrashWatcher</c>
-/// polls) — this is universal across every spawn path (manual start, boot autostart, crash-restart,
+/// polls; that edge is also when the instance's config is re-read, so a run is always judged by the
+/// config it actually started with — see <see cref="IngestOnce"/>) — this is universal across every spawn path (manual start, boot autostart, crash-restart,
 /// daemon-restart re-adopt) without depending on log-rotation semantics. It also re-arms on
 /// <see cref="EventChannelTail.LastReadResetSession"/> as a defensive second trigger — <c>SpawnEngine</c>
 /// now rotates <c>instance_log_file</c> to a fresh inode on every FRESH SPAWN (mirroring the bash
@@ -82,10 +83,17 @@ internal sealed class NativePlayerPresenceIngester(
     /// </summary>
     private sealed class NativeWatch(EventChannelTail? tail, NativeLogMatcher matcher, NativeReadinessMatcher readiness, string logFile)
     {
-        public EventChannelTail? Tail { get; } = tail;
-        public NativeLogMatcher Matcher { get; } = matcher;
-        public NativeReadinessMatcher Readiness { get; } = readiness;
-        public string LogFile { get; } = logFile;
+        // The tail carries live bookkeeping (cursor, inode/session identity) and is deliberately NOT
+        // replaced by a config re-read: only a change of log PATH can justify starting a new one, since
+        // a fresh tail would prime at the end of the current file and skip whatever sits between.
+        public EventChannelTail? Tail { get; set; } = tail;
+        // Config-derived, refreshed on every fresh run (see IngestOnce).
+        public NativeLogMatcher Matcher { get; set; } = matcher;
+        public NativeReadinessMatcher Readiness { get; set; } = readiness;
+        public string LogFile { get; set; } = logFile;
+        /// <summary>The raw patterns + log path this watch's matchers were built from, so a re-read can
+        /// tell whether anything actually changed (a matcher doesn't carry its source pattern).</summary>
+        public string ConfigKey { get; set; } = "";
 
         /// <summary>Cgroup-populated state observed on the PREVIOUS tick; null before the first observation
         /// (so a late attach to an already-running instance is still treated as a start edge).</summary>
@@ -162,7 +170,22 @@ internal sealed class NativePlayerPresenceIngester(
                 _watches[name] = watch;
             }
 
-            ProcessReadiness(name, watch);
+            // Re-resolve the instance's config on every fresh run, because the config that matters is
+            // the one in effect for THIS run — and the one captured when the watch was first built can
+            // be a different, or an incomplete, thing. The case that forced this: an instance INSTALLED
+            // while the daemon is running is discovered the moment its directory appears, several
+            // seconds before kgsm finishes writing its config, so the first read sees no
+            // startup_success_regex and no log file and settles on immediate-readiness — permanently,
+            // since a watch was never re-read. That instance then reports itself ready the instant it
+            // spawns, for the rest of the daemon's life, no matter what its blueprint actually says.
+            // A start edge is rare (and the game is milliseconds old), so the extra engine read costs
+            // nothing measurable; the fresh tail primes at the end of the just-rotated log, and the
+            // readiness one-shot scan below covers anything the game printed in between.
+            bool populated = cgroups.IsPopulated(name);
+            if (watch.LastPopulated != true && populated)
+                RefreshConfig(name, watch);
+
+            ProcessReadiness(name, watch, populated);
 
             if (watch.Tail is null)
                 continue; // pure immediate-readiness, cgroup-poll-driven only — nothing to tail
@@ -201,9 +224,8 @@ internal sealed class NativePlayerPresenceIngester(
     /// re-fires within the same run — <see cref="NativeWatch.ReadyFired"/> is the latch, re-armed only
     /// here (or by the tail's own session-reset, see <see cref="IngestOnce"/>).
     /// </summary>
-    private void ProcessReadiness(string name, NativeWatch watch)
+    private void ProcessReadiness(string name, NativeWatch watch, bool populated)
     {
-        bool populated = cgroups.IsPopulated(name);
         bool startEdge = watch.LastPopulated != true && populated;
         watch.LastPopulated = populated;
 
@@ -241,6 +263,67 @@ internal sealed class NativePlayerPresenceIngester(
     /// cached, so it retries on the next tick.
     /// </summary>
     private NativeWatch? BuildWatch(string name)
+    {
+        WatchConfig? config = ResolveConfig(name);
+        if (config is null)
+            return null;
+
+        logger.LogInformation(
+            "native player-presence/readiness watching {Instance} (log {Log})", name, config.LogFile);
+        return new NativeWatch(MakeTail(config), config.Matcher, config.Readiness, config.LogFile)
+        {
+            ConfigKey = config.Key,
+        };
+    }
+
+    /// <summary>
+    /// Re-read an existing watch's instance config at the start of a fresh run and apply any change in
+    /// place. The tail is kept unless the log PATH itself moved — it holds the cursor and session
+    /// identity this pass depends on, and a replacement would prime at the end of the current file.
+    /// A config that can't be resolved this instant (transient engine error) leaves the watch as-is;
+    /// the run is then judged by the previous config rather than by nothing.
+    /// </summary>
+    private void RefreshConfig(string name, NativeWatch watch)
+    {
+        WatchConfig? config = ResolveConfig(name);
+        if (config is null)
+            return;
+
+        bool logMoved = !string.Equals(watch.LogFile, config.LogFile, StringComparison.Ordinal);
+        bool changed = !string.Equals(watch.ConfigKey, config.Key, StringComparison.Ordinal);
+
+        watch.Matcher = config.Matcher;
+        watch.Readiness = config.Readiness;
+        watch.LogFile = config.LogFile;
+        watch.ConfigKey = config.Key;
+        if (logMoved || watch.Tail is null)
+            watch.Tail = MakeTail(config);
+
+        if (changed)
+            logger.LogInformation(
+                "native player-presence/readiness re-read {Instance}'s config for this run (log {Log})",
+                name, config.LogFile);
+    }
+
+    /// <summary>What a watch is built from: the instance's own detection config, already validated.</summary>
+    private sealed record WatchConfig(
+        NativeLogMatcher Matcher, NativeReadinessMatcher Readiness, string LogFile, string Key)
+    {
+        /// <summary>Whether anything here needs to READ the log (as opposed to the pure
+        /// immediate-readiness fallback, which only needs the cgroup populated-edge).</summary>
+        public bool NeedsLog => Matcher.Enabled || Readiness.Enabled;
+    }
+
+    private static EventChannelTail? MakeTail(WatchConfig config) =>
+        config.NeedsLog && !string.IsNullOrEmpty(config.LogFile)
+            ? new EventChannelTail(config.LogFile, primeAtEnd: true)
+            : null;
+
+    /// <summary>
+    /// Read one instance's detection config through the kgsm-lib chokepoint, or record it as
+    /// out-of-scope. Null means skipped OR not resolvable right now (see <see cref="BuildWatch"/>).
+    /// </summary>
+    private WatchConfig? ResolveConfig(string name)
     {
         Instance? instance;
         try
@@ -287,30 +370,24 @@ internal sealed class NativePlayerPresenceIngester(
         // readiness regex) — but NOT for the pure immediate-readiness fallback, which only needs the
         // cgroup populated-edge (see ProcessReadiness). So a missing log path disables pattern-based
         // reading without necessarily skipping the instance outright.
-        bool needsLog = matcher.Enabled || readiness.Enabled;
-        EventChannelTail? tail = null;
-        if (needsLog)
+        if ((matcher.Enabled || readiness.Enabled) && string.IsNullOrEmpty(instance.LogFile))
         {
-            if (string.IsNullOrEmpty(instance.LogFile))
+            logger.LogWarning(
+                "native player-presence/readiness for {Instance}: patterns set but log_file is empty — pattern-based detection skipped",
+                name);
+            if (!readiness.IsImmediate)
             {
-                logger.LogWarning(
-                    "native player-presence/readiness for {Instance}: patterns set but log_file is empty — pattern-based detection skipped",
-                    name);
-                if (!readiness.IsImmediate)
-                {
-                    _skip.Add(name); // nothing left to detect without a log file
-                    return null;
-                }
-            }
-            else
-            {
-                tail = new EventChannelTail(instance.LogFile, primeAtEnd: true);
+                _skip.Add(name); // nothing left to detect without a log file
+                return null;
             }
         }
 
-        logger.LogInformation(
-            "native player-presence/readiness watching {Instance} (log {Log})", name, instance.LogFile);
-        return new NativeWatch(tail, matcher, readiness, instance.LogFile);
+        // The raw strings the matchers were compiled from — the only honest way to tell one config from
+        // the next, since a matcher doesn't carry its source pattern.
+        string key = string.Join('\u0000',
+            instance.StartupSuccessRegex ?? "", instance.PlayerJoinedRegex ?? "",
+            instance.PlayerLeftRegex ?? "", instance.LogFile ?? "");
+        return new WatchConfig(matcher, readiness, instance.LogFile ?? "", key);
     }
 
     private void HandleLine(string instanceName, string line, NativeLogMatcher matcher)

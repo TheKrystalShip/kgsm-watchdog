@@ -617,6 +617,44 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     private NativePlayerPresenceIngester NewIngester(IEventManagementService events, IInstanceService instances, CgroupManager? cgroups = null)
         => new(new WatchdogOptions { InstancesDir = _root }, instances, events, new PlayerSessionStore(), cgroups ?? NewCgroups(), NullLogger<NativePlayerPresenceIngester>.Instance);
 
+    [Fact]
+    public void A_config_read_before_the_install_finished_is_re_read_on_the_first_run()
+    {
+        // The bug this exists for: an instance INSTALLED while the daemon runs is discovered the moment
+        // its directory appears — seconds before kgsm finishes writing its config — so the first read
+        // sees no startup_success_regex and no log file, and the watch settles on immediate-readiness.
+        // Without a re-read that instance then claims to be ready the instant it spawns, for the rest of
+        // the daemon's life, whatever its blueprint says. The Control Panel shows that as a server stuck
+        // on "Starting": the ready lands BEFORE the start it belongs to, so nothing is left to close the
+        // window.
+        string log = MakeInstanceWithLog("factorio", "factorio-fresh", "");
+        var fake = new FakeInstanceService();
+        // What kgsm reports mid-install: the instance exists, its detection config does not yet.
+        fake.Add(Native("factorio-fresh", log: "", joined: "", left: "", ready: ""));
+
+        var cgroups = NewCgroups();
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake, cgroups);
+
+        ingester.IngestOnce(_root);          // watch built from the half-written config
+        Assert.Empty(rec.Calls);
+
+        // The install completes and kgsm writes the real config.
+        fake.Add(Native("factorio-fresh", log, joined: "", left: "", ready: @"Hosting game at IP ADDR"));
+
+        // The game spawns. Readiness must now be judged by the pattern, NOT declared immediately.
+        SetPopulated("factorio-fresh", populated: true);
+        ingester.IngestOnce(_root);
+        Assert.Empty(rec.Calls);
+
+        // …and fires when the game actually says it is up.
+        File.AppendAllText(log, "   0.890 Hosting game at IP ADDR:({0.0.0.0:34197})\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+    }
+
     private static Instance Native(string name, string log, string joined, string left, string ready = "") => new()
     {
         Name = name,

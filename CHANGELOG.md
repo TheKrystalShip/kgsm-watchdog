@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **An instance installed while the daemon is running now gets its real readiness config.** The native
+  presence/readiness watch is built the moment an instance's directory appears — which, for an install
+  in progress, is several seconds before kgsm has written the instance's config — so the first read saw
+  no `startup_success_regex` and no log file and settled on the immediate-readiness fallback,
+  permanently. That instance then reported `instance-ready` the instant it spawned, for the rest of the
+  daemon's life, no matter what its blueprint declared. The config is now re-read on every fresh run
+  (the cgroup start edge), so a run is always judged by the config it actually started with, and an
+  operator editing a blueprint's regex sees it take effect on the next start. The tail is kept across a
+  re-read unless the log path itself moved: it holds the cursor and session identity, and a replacement
+  would prime at the end of the current file and skip what sits between.
+
 ### Changed — the leaf config descriptor is generated, not written
 - **`deploy/kgsm-watchdog.leaf.json` is now written by `TheKrystalShip.KGSM.LeafConfig` on every build**, from
   `[LeafField]` attributes and `<panel>` doc tags on `WatchdogSettings`. A knob lives in two places —

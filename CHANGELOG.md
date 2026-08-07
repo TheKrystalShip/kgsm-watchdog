@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — kgsm-lib 3.1.0
+
+Up from 2.0.0. The engine event journal is now queried directly through the library
+(`IEventJournalHistory`), which retires kgsm-monitor's event index — nothing here read that index, so
+this repo only follows the pin.
+
+Two breaking changes in the library reach this code. `IEventService.RegisterRawHandler` and
+`IEventSource.EventReceived` carry an `EventPosition` alongside the envelope, because an event's
+journal position is now its identity: it is unique by construction, so two identical events emitted
+within one second are no longer collapsed the way a content hash collapsed them.
+`IInstanceService` gained the player-moderation verbs (`Kick`/`Ban`/`Unban`) back in 2.1.0, which
+this repo skipped over. Every `IInstanceService` test fake implements them now.
+
 ### Fixed
 - **The daemon no longer watches the entire filesystem, and no longer starves the games it supervises
   of inotify watches.** The host builder's content root defaulted to the process working directory,

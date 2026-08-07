@@ -142,6 +142,13 @@ public sealed class WatchdogOptions
     /// </summary>
     public int ConsolePollMs { get; init; } = 250;
 
+    /// <summary>
+    /// Control socket of the kgsm-firewall authority, which the supervisor asks to open an instance's
+    /// ports on a bring-up and close them on a deliberate stop. <c>Watchdog__FirewallSocketPath</c>.
+    /// Matches the authority's own default. An unreachable authority is logged, never fatal.
+    /// </summary>
+    public string FirewallSocketPath { get; init; } = "/run/kgsm-firewall/firewall.sock";
+
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
@@ -176,6 +183,7 @@ public sealed class WatchdogOptions
             PlayerPresencePollMs = Floor(s.PlayerPresencePollMs ?? defaults.PlayerPresencePollMs, WatchdogSettings.Floors.PollMs),
             ContainerLifecyclePollMs = Floor(s.ContainerLifecyclePollMs ?? defaults.ContainerLifecyclePollMs, WatchdogSettings.Floors.PollMs),
             ConsolePollMs = Floor(s.ConsolePollMs ?? defaults.ConsolePollMs, WatchdogSettings.Floors.PollMs),
+            FirewallSocketPath = Or(s.FirewallSocketPath, defaults.FirewallSocketPath),
         };
     }
 
@@ -307,6 +315,9 @@ public sealed class WatchdogOptions
 
         Section("Console stream (live follow of a native instance's stdout)");
         Row("Watchdog__ConsolePollMs", $"[{d.ConsolePollMs}]", "how often /console/{instance}/follow polls the log for new lines");
+
+        Section("Host firewall (ports open while an instance runs)");
+        Row("Watchdog__FirewallSocketPath", $"[{d.FirewallSocketPath}]", "kgsm-firewall authority control socket; unreachable is logged, never fatal");
 
         sb.AppendLine();
         sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");

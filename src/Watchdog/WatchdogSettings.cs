@@ -230,4 +230,11 @@ public sealed class WatchdogSettings
     [LeafField("consolePollMs", "Console follow interval", Group = "ingesters",
         Min = Floors.PollMs, Unit = "ms")]
     public int? ConsolePollMs { get; set; }
+
+    /// <panel>Control socket of the kgsm-firewall authority, which the supervisor asks to open an
+    /// instance's ports when it starts and to close them when it stops. An unreachable authority is
+    /// logged and never blocks a start.</panel>
+    [LeafField("firewallSocket", "Firewall socket", Group = "firewall", Type = LeafType.Path,
+        Risk = LeafRisk.Wiring)]
+    public string FirewallSocketPath { get; set; } = "/run/kgsm-firewall/firewall.sock";
 }

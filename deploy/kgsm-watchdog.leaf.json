@@ -55,6 +55,11 @@
       "id": "ingesters",
       "label": "Event ingesters & console",
       "order": 7
+    },
+    {
+      "id": "firewall",
+      "label": "Host firewall",
+      "order": 8
     }
   ],
   "fields": [
@@ -284,6 +289,16 @@
       "min": 50,
       "unit": "ms",
       "risk": "safe"
+    },
+    {
+      "key": "firewallSocket",
+      "env": "Watchdog__FirewallSocketPath",
+      "label": "Firewall socket",
+      "description": "Control socket of the kgsm-firewall authority, which the supervisor asks to open an instance's ports when it starts and to close them when it stops. An unreachable authority is logged and never blocks a start.",
+      "group": "firewall",
+      "type": "path",
+      "default": "/run/kgsm-firewall/firewall.sock",
+      "risk": "wiring"
     }
   ]
 }

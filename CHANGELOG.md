@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — an instance's ports are open while it runs
+
+The supervisor now asks the kgsm-firewall authority to open an instance's ports as it spawns it, and
+to release them on a deliberate stop — the host-side peer of the UPnP mapping it already opens and
+closes on those same edges. UPnP opens the router; this opens the host.
+
+The trigger belongs here because the supervisor is the only thing that sees every bring-up. A boot
+auto-start and a crash-respawn never pass through the kgsm CLI, so an instance that only ever comes
+up that way could run behind a host ruleset that was reset or rebuilt underneath it, with nothing to
+say why it was unreachable. It fires on exactly the two edges UPnP does — a fresh start and a boot
+respawn of a dead instance, never a crash-restart — because a dead process does not drop a host
+rule and the restart still needs it.
+
+It owns the trigger, not the firewall: every write goes through kgsm-lib's `IFirewallService` to the
+authority, which stays the single owner of host firewall state. `Watchdog__FirewallSocketPath`
+points at its control socket.
+
+Best-effort, and deliberately louder than UPnP. A failure never fails a start — an authority that is
+down must not keep a game server off the air — but a failed *open* leaves the server unreachable to
+everyone rather than only to off-LAN players, so it is logged at warning, and the absent
+`instance-ports-opened` event is what says the ports were never confirmed open. Only a confirmed rule
+change emits: a rule staged against an inactive backend, a no-op, and an unsupported backend all
+report honestly as nothing having happened.
+
+### Changed — one place owns the bring-up side-effect mechanics
+
+`FireAndForget` carries the rules every side effect on these edges has to get right — run it off the
+supervisor thread so a slow router or an unreachable authority never delays a start or holds the
+gate, emit the audit event only on a confirmed change, and let nothing escape to fault supervision.
+UPnP and the firewall are two call sites over it rather than two restatements of it.
+
 ### Changed — kgsm-lib 3.1.0
 
 Up from 2.0.0. The engine event journal is now queried directly through the library

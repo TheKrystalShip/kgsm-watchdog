@@ -4,6 +4,7 @@ using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
+using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.Interop;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
@@ -43,6 +44,7 @@ internal sealed class InstanceSupervisor(
     SupervisionStateStore supervisionStore,
     IEventManagementService events,
     UpnpService upnp,
+    FirewallPortsService firewall,
     ILogger<InstanceSupervisor> logger) : IDisposable
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
@@ -139,6 +141,7 @@ internal sealed class InstanceSupervisor(
             si.LastReason = "started";
             _instances[name] = si;
             OpenPortForwarding(si.Spec); // fresh bring-up → open UPnP (fire-and-forget, best-effort)
+            OpenFirewallPorts(si.Spec);  // …and the host firewall rule, on the same edge
             logger.LogInformation("started {Instance} (pid {Pid})", name, si.Current!.Pid);
             return new ActionResult(name, true, $"started (pid {si.Current!.Pid})");
         }
@@ -189,6 +192,9 @@ internal sealed class InstanceSupervisor(
             // that throws or hard-kills mid-drain still closes it). Held across crash-restarts, only an
             // intended stop closes it. No-op unless enable_port_forwarding.
             ClosePortForwarding(si.Spec);
+            // Same intent, host side: a stopped instance holds no open ports. Held across crash-restarts
+            // (the rule is not what a crash breaks), so only this deliberate-stop edge closes it.
+            CloseFirewallPorts(si.Spec);
 
             // No live handle. Either there genuinely is no process (RestartPending / Stopped / Failed —
             // just cancel and forget), or this is an ADOPTED-live instance: re-attached after a daemon
@@ -675,6 +681,9 @@ internal sealed class InstanceSupervisor(
             // likely gone. Open UPnP (upnpc -r is idempotent, so a surviving lease is harmless). Only the
             // ADOPTED-live path (AdoptLive) deliberately does NOT re-assert — its mapping persisted.
             OpenPortForwarding(si.Spec);
+            // The host firewall rule is in exactly the same position as the router lease at a clean boot:
+            // the instance is coming up and nothing has opened its ports for this run.
+            OpenFirewallPorts(si.Spec);
             logger.LogInformation("restore: spawned {Instance} ({Reason})", name, reason);
             // Autonomous boot bring-up of a dead enabled instance — emit instance-started (system/system)
             // so the action is auditable downstream. NOT a crash recovery (there is no firing alert to
@@ -1353,37 +1362,68 @@ internal sealed class InstanceSupervisor(
     // ---- helpers ----------------------------------------------------------------------------
 
     /// <summary>
-    /// Fire-and-forget, best-effort UPnP open on a fresh bring-up (a manual <c>start</c> or a boot
-    /// respawn of a dead instance — NOT a crash-restart, where the router lease is deliberately held).
-    /// Off-loaded to the thread pool so a slow/absent router never delays the start result or holds the
-    /// supervisor gate; the service self-gates on <c>enable_port_forwarding</c> and time-boxes upnpc.
+    /// The shared mechanics of every bring-up/teardown network side effect: run it off the supervisor
+    /// thread so a slow router or an unreachable authority never delays a start result or holds the gate,
+    /// emit the audit event ONLY when the side effect reports a confirmed change, and let nothing escape
+    /// — a faulted side effect must not take down supervision.
+    /// <para>
+    /// Each caller passes its own gate-and-apply (the services self-gate on their per-instance config) and
+    /// the dash event name for a confirmed transition. Extracted so the rules that are easy to get wrong —
+    /// off-thread, emit-only-on-applied, swallow-and-log — live in one place rather than being restated by
+    /// every side effect that hangs off these edges.
+    /// </para>
     /// </summary>
-    private void OpenPortForwarding(Instance spec) => _ = Task.Run(async () =>
-    {
-        try
+    private void FireAndForget(string what, Instance spec, Func<Task<bool>> apply, string appliedEvent)
+        => _ = Task.Run(async () =>
         {
-            // Only a confirmed mapping (upnpc exit 0) emits the audit event — the watchdog is the
-            // actor that drove the router change, so it stamps system/system and renders the ports
-            // back to the canonical UFW string the kgsm events-emit positional arg expects.
-            if (await upnp.OpenAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied)
-                EmitSystemEvent("instance-upnp-opened", spec.Name, spec.Ports.ToUfwSpec());
-        }
-        catch (Exception ex) { logger.LogWarning(ex, "UPnP open task faulted for {Instance}", spec.Name); }
-    });
+            try
+            {
+                // The watchdog is the actor that drove the change, so it stamps system/system and renders
+                // the ports back to the canonical UFW string the kgsm events-emit positional arg expects.
+                if (await apply().ConfigureAwait(false))
+                    EmitSystemEvent(appliedEvent, spec.Name, spec.Ports.ToUfwSpec());
+            }
+            catch (Exception ex) { logger.LogWarning(ex, "{What} task faulted for {Instance}", what, spec.Name); }
+        });
 
     /// <summary>
-    /// Fire-and-forget, best-effort UPnP close on a deliberate stop. Same off-the-gate, swallow-failures
-    /// posture as <see cref="OpenPortForwarding"/>; a confirmed removal emits the close event.
+    /// Best-effort UPnP open on a fresh bring-up (a manual <c>start</c> or a boot respawn of a dead
+    /// instance — NOT a crash-restart, where the router lease is deliberately held). The service
+    /// self-gates on <c>enable_port_forwarding</c> and time-boxes upnpc.
     /// </summary>
-    private void ClosePortForwarding(Instance spec) => _ = Task.Run(async () =>
-    {
-        try
-        {
-            if (await upnp.CloseAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied)
-                EmitSystemEvent("instance-upnp-closed", spec.Name, spec.Ports.ToUfwSpec());
-        }
-        catch (Exception ex) { logger.LogWarning(ex, "UPnP close task faulted for {Instance}", spec.Name); }
-    });
+    private void OpenPortForwarding(Instance spec)
+        => FireAndForget("UPnP open", spec,
+            async () => await upnp.OpenAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied,
+            "instance-upnp-opened");
+
+    /// <summary>
+    /// Best-effort UPnP close on a deliberate stop. Same posture as <see cref="OpenPortForwarding"/>;
+    /// a confirmed removal emits the close event.
+    /// </summary>
+    private void ClosePortForwarding(Instance spec)
+        => FireAndForget("UPnP close", spec,
+            async () => await upnp.CloseAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied,
+            "instance-upnp-closed");
+
+    /// <summary>
+    /// Best-effort host-firewall open on a fresh bring-up, the host-side peer of
+    /// <see cref="OpenPortForwarding"/> — an instance's ports are open exactly while it runs. Fires on the
+    /// same edges as UPnP and for the same reason: a crash does not drop a host rule and the respawn still
+    /// needs it, so only a fresh bring-up opens and only an intended stop closes. The service self-gates
+    /// on <c>enable_firewall_management</c>.
+    /// </summary>
+    private void OpenFirewallPorts(Instance spec)
+        => FireAndForget("firewall open", spec,
+            async () => await firewall.OpenAsync(spec).ConfigureAwait(false) == FirewallPortsOutcome.Applied,
+            "instance-ports-opened");
+
+    /// <summary>
+    /// Best-effort host-firewall close on a deliberate stop, releasing the ports the instance held.
+    /// </summary>
+    private void CloseFirewallPorts(Instance spec)
+        => FireAndForget("firewall close", spec,
+            async () => await firewall.CloseAsync(spec).ConfigureAwait(false) == FirewallPortsOutcome.Applied,
+            "instance-ports-closed");
 
     /// <summary>
     /// Fire-and-forget emit of an autonomous supervision crash event (crash / give-up) through kgsm-lib.

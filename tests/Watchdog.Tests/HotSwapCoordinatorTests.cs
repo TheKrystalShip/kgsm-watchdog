@@ -4,6 +4,7 @@ using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
+using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -177,6 +178,8 @@ public sealed class HotSwapCoordinatorTests
             new SupervisionStateStore(options, NullLogger<SupervisionStateStore>.Instance),
             events,
             new UpnpService(NullLogger<UpnpService>.Instance),
+            new FirewallPortsService(
+                new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             NullLogger<InstanceSupervisor>.Instance);
     }
 

@@ -18,7 +18,8 @@
     "InstancesDir": "",
     "PlayerPresencePollMs": 1000,
     "ContainerLifecyclePollMs": 1000,
-    "ConsolePollMs": 250
+    "ConsolePollMs": 250,
+    "FirewallSocketPath": "/run/kgsm-firewall/firewall.sock"
   },
   "Logging": {
     "LogLevel": {

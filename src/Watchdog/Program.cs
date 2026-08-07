@@ -3,6 +3,7 @@ using TheKrystalShip.KGSM.Extensions;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
+using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -137,6 +138,12 @@ builder.Services.AddSingleton<SupervisionStateStore>();
 // UPnP port forwarding: process-lifetime network state the supervisor owns (opens on bring-up,
 // holds across crash-restart, closes on intended stop). Self-gates on enable_port_forwarding.
 builder.Services.AddSingleton<UpnpService>();
+// Host firewall: the same process-lifetime shape as UPnP on the other side of the door — UPnP opens the
+// ROUTER, this opens the HOST. The authority (kgsm-firewall) still owns every firewall write; the
+// supervisor only owns the trigger, because it is the only thing that sees a boot-autostart or a
+// crash-respawn. Reached through kgsm-lib's client, like every other C# consumer of the authority.
+builder.Services.AddKgsmFirewallClient(options.FirewallSocketPath);
+builder.Services.AddSingleton<FirewallPortsService>();
 builder.Services.AddSingleton<InstanceSupervisor>();
 
 // Inc 7 Phase 3+4 — the self-re-exec hot-swap (Option 3): on SIGHUP (systemctl reload) the daemon

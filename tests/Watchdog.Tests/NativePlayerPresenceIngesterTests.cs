@@ -18,10 +18,11 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// with no patterns are skipped, and the tail cursor resumes across passes (no redelivery).
 /// <para>
 /// Also covers the player-presence contract §4 correlation + dedup, fed the REAL log lines from all
-/// four validated games (matcher + <see cref="PlayerSessionMap"/> + <see cref="EventChannelTail"/>
+/// five validated games (matcher + <see cref="PlayerSessionMap"/> + <see cref="EventChannelTail"/>
 /// together): stationeers (self-identifying), romestead (addr-correlated, incl. co-NAT distinct ports),
 /// Valheim (doubled join lines + a 6x repeated leave burst, key-correlated), Core Keeper (opaque key +
-/// leave reason), and a log-rotation (inode change) resetting an instance's session map.
+/// leave reason), Minecraft (name-keyed, addr on the join line only, surrounded by lines that must not
+/// match), and a log-rotation (inode change) resetting an instance's session map.
 /// </para>
 /// </summary>
 public sealed class NativePlayerPresenceIngesterTests : IDisposable
@@ -342,6 +343,71 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.Equal(2, rec.Calls.Count);
         Assert.Equal("instance-player-left", rec.Calls[1].EventType);
         Assert.Equal(new[] { "corekeeper-test", "", "Woltah", "", "3801603394", "App_Min" }, rec.Calls[1].Parameters);
+    }
+
+    [Fact]
+    public void Minecraft_name_keyed_join_and_leave_correlate_and_the_surrounding_lines_are_ignored()
+    {
+        // Minecraft logs four lines around one session and only two of them are the connection pair.
+        // The username is the correlation token (`key`), because the address appears on the join line
+        // alone and the account UUID is on a separate line a per-line matcher cannot reach.
+        string log = MakeInstanceWithLog("minecraft", "minecraft-test", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("minecraft-test", log,
+            joined: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16}))\[/(?<addr>.+)\] logged in with entity id ",
+            left: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16})) lost connection: (?<reason>.*)"));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root);
+
+        File.AppendAllText(log,
+            "[19:31:29] [User Authenticator #1/INFO]: UUID of player Flysenberg is 7e7f5dfd-ea66-47a7-8d60-6ee0d0b1e39f\n" +
+            "[19:31:30] [Server thread/INFO]: Flysenberg[/192.168.1.127:55072] logged in with entity id 62 at (3068.5350361164747, 112.5, -2296.557766017725)\n" +
+            "[19:31:30] [Server thread/INFO]: Flysenberg joined the game\n");
+        ingester.IngestOnce(_root);
+
+        // The UUID line and the chat broadcast are not the pair — exactly one join.
+        Assert.Single(rec.Calls);
+        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
+        Assert.Equal(
+            new[] { "minecraft-test", "", "Flysenberg", "192.168.1.127:55072", "Flysenberg" },
+            rec.Calls[0].Parameters);
+
+        File.AppendAllText(log,
+            "[19:32:18] [Server thread/INFO]: Flysenberg lost connection: Disconnected\n" +
+            "[19:32:18] [Server thread/INFO]: Flysenberg left the game\n");
+        ingester.IngestOnce(_root);
+
+        // The leave carries no address of its own — the map supplies the one captured at join.
+        Assert.Equal(2, rec.Calls.Count);
+        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
+        Assert.Equal(
+            new[] { "minecraft-test", "", "Flysenberg", "192.168.1.127:55072", "Flysenberg", "Disconnected" },
+            rec.Calls[1].Parameters);
+    }
+
+    [Fact]
+    public void Minecraft_a_pre_login_disconnect_by_someone_who_never_joined_emits_nothing()
+    {
+        // A client that drops during the login handshake is logged with its GameProfile rather than a
+        // bare username. There was no join, so there is no leave to attribute — anchoring the username
+        // to Minecraft's legal charset at the start of the message is what keeps this line out.
+        string log = MakeInstanceWithLog("minecraft", "minecraft-prelogin", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("minecraft-prelogin", log,
+            joined: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16}))\[/(?<addr>.+)\] logged in with entity id ",
+            left: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16})) lost connection: (?<reason>.*)"));
+
+        var rec = new RecordingEvents();
+        var ingester = NewIngester(rec, fake);
+        ingester.IngestOnce(_root);
+
+        File.AppendAllText(log,
+            "[19:29:04] [Server thread/INFO]: com.mojang.authlib.GameProfile@4f2b1a[id=7e7f5dfd-ea66-47a7-8d60-6ee0d0b1e39f,name=Flysenberg,properties={},legacy=false] (/192.168.1.127:55071) lost connection: Disconnected\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Empty(rec.Calls);
     }
 
     [Fact]

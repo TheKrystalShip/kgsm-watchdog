@@ -258,13 +258,19 @@ internal sealed class InstanceSupervisor(
     /// Atomically restart an instance: stop it, wait for its cgroup to drain, then start it again.
     /// Routes through <see cref="StopAsync"/> + <see cref="StartAsync"/>, so it deliberately does NOT
     /// count as a crash — <see cref="StartAsync"/> calls <c>si.Restart.Reset()</c>, leaving the
-    /// crash-recovery streak untouched. Emits <c>instance-restarted</c> with the caller's
-    /// <paramref name="origin"/> (default <c>scheduler</c>) so the audit trail attributes the restart to
-    /// whoever asked for it rather than to <c>system</c> (the crash-recovery emitter). This is the
-    /// intentional-restart path (kgsm-scheduler), distinct from the autonomous respawn in
-    /// <see cref="ReconcileRestartPending"/>.
+    /// crash-recovery streak untouched. This is the intentional-restart path (kgsm-scheduler), distinct
+    /// from the autonomous respawn in <see cref="ReconcileRestartPending"/>, which is the watchdog's own.
     /// </summary>
-    public async Task<ActionResult> RestartAsync(string name, string origin = "scheduler", CancellationToken ct = default)
+    /// <param name="name">The instance to restart.</param>
+    /// <param name="ct">Cancels the drain wait only — the graceful stop it opens with is uncancellable.</param>
+    /// <param name="requester">
+    /// The leaf that asked, which the emitted <c>instance-restarted</c> is ATTRIBUTED to (see
+    /// <see cref="ProvenanceActor"/>) — so the audit trail names the scheduler rather than this daemon.
+    /// The event's ORIGIN is <c>system</c>: origin is the surface a human drove, and a scheduled restart
+    /// has none. The wire spells this query parameter <c>origin</c>, which is what kgsm-lib's
+    /// <c>IWatchdogClient.RestartAsync</c> sends.
+    /// </param>
+    public async Task<ActionResult> RestartAsync(string name, string requester = "scheduler", CancellationToken ct = default)
     {
         var stopResult = await StopAsync(name, ct).ConfigureAwait(false);
         if (!stopResult.Ok)
@@ -279,21 +285,14 @@ internal sealed class InstanceSupervisor(
         if (!startResult.Ok)
             return new ActionResult(name, false, $"restart: stop ok; start failed: {startResult.Message}");
 
-        // Emit instance-restarted stamped with the caller's origin (NOT system/system like a crash
-        // recovery) so kgsm-api audits this as e.g. "scheduler". Fire-and-forget, same posture as
+        // Emit instance-restarted attributed to the requester, so kgsm-api audits this as the scheduler
+        // rather than as the watchdog's own crash recovery. Fire-and-forget, same posture as
         // EmitSystemEvent: a slow kgsm.sh spawn must not stall the caller, and a dropped event is the
         // honest no-backfill boundary the consumer already accepts.
-        _ = Task.Run(() =>
-        {
-            try { events.EmitWithProvenance(EventRestarted, origin, origin, [name]); }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to emit {Event} for {Instance} (event dropped)", EventRestarted, name);
-            }
-        });
+        EmitProvenanceEvent(EventRestarted, ProvenanceActor(requester), OriginSystem, name);
 
-        logger.LogInformation("restarted {Instance} (origin={Origin})", name, origin);
-        return new ActionResult(name, true, $"restarted (origin={origin})");
+        logger.LogInformation("restarted {Instance} (requester={Requester})", name, requester);
+        return new ActionResult(name, true, $"restarted (requester={requester})");
     }
 
     // ---- on-demand UPnP control (external surface) ------------------------------------------
@@ -303,7 +302,8 @@ internal sealed class InstanceSupervisor(
     // close, or read an instance's router port-forwards on demand. The upnpc shell-out (up to 10s) runs
     // WITHOUT the supervisor gate: these touch neither desired-state nor cgroups, so they never stall a
     // lifecycle verb or reconcile (§3.5). A confirmed open/close emits the audit event stamped with the
-    // caller's origin (default "control" at the endpoint), not system/system.
+    // caller's origin (default "control" at the endpoint) — the SURFACE the request came through, on an
+    // action this daemon performs, so the actor stays the watchdog and only the origin varies.
 
     /// <summary>
     /// Open <paramref name="name"/>'s UPnP router mappings on demand — its configured ports, or the
@@ -325,7 +325,7 @@ internal sealed class InstanceSupervisor(
             // Render the ports actually forwarded back to the canonical UFW string the kgsm events-emit
             // positional arg expects (the override when given, else the instance's own ports).
             string portsSpec = (ports is { Count: > 0 } ? ports : instance.Ports).ToUfwSpec();
-            EmitProvenanceEvent("instance-upnp-opened", origin, origin, name, portsSpec);
+            EmitProvenanceEvent("instance-upnp-opened", ActorWatchdog, origin, name, portsSpec);
         }
 
         return new UpnpActionResult(name, UpnpService.OutcomeToWire(outcome), UpnpDetail(outcome, open: true));
@@ -343,7 +343,7 @@ internal sealed class InstanceSupervisor(
 
         var outcome = await upnp.CloseAsync(instance, ct).ConfigureAwait(false);
         if (outcome == UpnpOutcome.Applied)
-            EmitProvenanceEvent("instance-upnp-closed", origin, origin, name, instance.Ports.ToUfwSpec());
+            EmitProvenanceEvent("instance-upnp-closed", ActorWatchdog, origin, name, instance.Ports.ToUfwSpec());
 
         return new UpnpActionResult(name, UpnpService.OutcomeToWire(outcome), UpnpDetail(outcome, open: false));
     }
@@ -1446,7 +1446,26 @@ internal sealed class InstanceSupervisor(
     /// instance name (e.g. exit code + restart count for crash/failed; none for restarted).
     /// </summary>
     private void EmitSystemEvent(string dashEventName, string instanceName, params string[] extraData)
-        => EmitProvenanceEvent(dashEventName, "system:watchdog", "system", instanceName, extraData);
+        => EmitProvenanceEvent(dashEventName, ActorWatchdog, OriginSystem, instanceName, extraData);
+
+    // This daemon's own identity, and the origin of an action no human surface drove. `provider:name` is
+    // the actor convention every consumer parses: a bare name is read as an OS user (kgsm-api's
+    // ParseActor treats an unprefixed actor as a human on the local host), so an autonomous emitter must
+    // name its identity source.
+    private const string ActorWatchdog = "system:watchdog";
+    private const string OriginSystem = "system";
+
+    /// <summary>
+    /// The actor for an action another leaf asked this daemon to take: the requester, in the
+    /// <c>provider:name</c> form every consumer parses. A requester that already names its identity
+    /// source is passed through untouched; a bare leaf name (what every caller sends) is stamped
+    /// <c>system:&lt;name&gt;</c>, because an unprefixed actor is read downstream as a person on the local
+    /// host. A blank requester is this daemon — the honest fallback, never an invented name.
+    /// </summary>
+    private static string ProvenanceActor(string requester) =>
+        string.IsNullOrWhiteSpace(requester) ? ActorWatchdog
+            : requester.Contains(':') ? requester
+            : $"{OriginSystem}:{requester}";
 
     /// <summary>
     /// Fire-and-forget emit of an event through kgsm-lib with explicit provenance, so a caller-driven

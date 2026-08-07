@@ -54,12 +54,14 @@ internal static class ControlEndpoints
                 statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });
 
-        // Atomic restart (stop → drain → start) with caller provenance. `origin` (optional query, default
-        // "scheduler") flows to the emitted instance-restarted so the audit attributes it to the caller
-        // (e.g. kgsm-scheduler's scheduled-restart), not system/system. Does NOT touch the crash streak —
-        // it routes through StartAsync which resets it. 200/409 like start/stop (409 = restart couldn't
-        // complete: stop or the ensuing start failed). Uncancellable for the same reason as /stop — it
-        // performs a full graceful stop first, and an aborted one leaves the instance down but tabled.
+        // Atomic restart (stop → drain → start) with caller provenance. The `origin` query (optional,
+        // default "scheduler") names the REQUESTING LEAF — kgsm-scheduler's scheduled restart is the one
+        // caller — and the emitted instance-restarted is attributed to it, so the audit trail names the
+        // leaf that asked rather than this daemon. The query key stays `origin` because that is what
+        // kgsm-lib's IWatchdogClient.RestartAsync sends. Does NOT touch the crash streak — it routes
+        // through StartAsync which resets it. 200/409 like start/stop (409 = restart couldn't complete:
+        // stop or the ensuing start failed). Uncancellable for the same reason as /stop — it performs a
+        // full graceful stop first, and an aborted one leaves the instance down but tabled.
         app.MapPost("/restart/{name}", async (string name, string? origin, InstanceSupervisor sup) =>
         {
             var result = await sup.RestartAsync(name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, CancellationToken.None);

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — actor and origin are two axes, and a caller-driven event stamps each on its own
+
+Three emitters passed one caller-supplied string as **both** the actor and the origin, which cannot be
+right for either: the actor became a bare name — read downstream as a person on the local host, so the
+audit log grew people called `scheduler`, `assistant`, `harness` and `verify-test` — while the origin
+became a word outside the five surfaces the audit vocabulary knows (`ui|assistant|discord|system|api`)
+and was normalized away to nothing.
+
+- **The atomic restart** (`/restart/{name}`) is attributed to the leaf that asked, as
+  `system:<requester>` — the form a consumer reads as an autonomous leaf — with origin `system`, since
+  no human surface drove it. A scheduled restart now reads in the audit trail exactly like the
+  scheduler's backups do. The daemon's own crash-recovery respawn is unchanged (`system:watchdog`).
+- **On-demand UPnP open/close** keeps the caller's origin, which there genuinely IS the surface the
+  request came through (`assistant`, `ui`, or the endpoint's `control` default), and stamps the actor
+  as `system:watchdog` — the daemon performs the mapping, and the identity of whoever drove the surface
+  is not forwarded to it, so claiming one would be an invention.
+
+`ProvenanceActor` is the one place a requester becomes an actor: a requester that already names its
+identity source passes through, a bare leaf name gains the `system:` provider, and a blank one is the
+daemon itself. The `/restart` query key stays `origin` — that is what kgsm-lib's `IWatchdogClient`
+sends — and names the requesting leaf.
+
 ### Added — an instance's ports are open while it runs
 
 The supervisor now asks the kgsm-firewall authority to open an instance's ports as it spawns it, and

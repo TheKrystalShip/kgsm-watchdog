@@ -162,6 +162,12 @@ builder.Services.AddHostedService<StartupRestorer>();
 // clock; the supervisor holds all the state and makes all the decisions (one decision point).
 builder.Services.AddHostedService<CrashWatcher>();
 
+// The UPnP sweep: restores router forwards the IGD dropped underneath a running instance. Its own
+// timer rather than a slow sub-cadence of the crash watcher, because a sweep is a multi-second network
+// round trip and the supervision loop ticks at 1 Hz holding the gate. Needs no gate of its own — it
+// reads the instance table lock-free, exactly as /status and /list do.
+builder.Services.AddHostedService<UpnpReconciler>();
+
 // Heap trimmer: hands free memory back to the OS — once after startup, then periodically when activity
 // has grown the resident set and the daemon has settled again. A Workstation-GC daemon that allocates
 // almost nothing at idle never triggers a GC on its own, so each burst of control-plane traffic ratchets

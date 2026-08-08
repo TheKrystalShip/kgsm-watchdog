@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the router drops forwards, so the daemon puts them back
+
+A UPnP mapping is not durable the way a host firewall rule is. A router can accept one, report its
+lease as infinite, and discard it anyway — on a WAN reconnect, a reboot, table pressure, or nothing
+visible at all. When that happens a game server keeps running and quietly stops being reachable from
+outside, and nothing on this host is told.
+
+`UpnpReconciler` sweeps for exactly that: every `Watchdog__UpnpReconcileSeconds` (default 300, `0`
+disables) it compares what the IGD actually holds against what the running forwarding-enabled
+instances need, and re-opens what is missing. It reconciles rather than renews because there is no
+expiry to schedule against — the advertised lease is the number that turns out not to bind the
+router, and `upnpc -r` takes no duration to negotiate one. Measuring instead covers every cause
+uniformly, including a router reboot and a sibling instance whose stop deleted a shared external port
+(`upnpc -f` deletes by port, with no owner check).
+
+It is cheap and timid by construction. No forwarding instance running means the router is never
+contacted at all; one `upnpc -l` answers for every instance in the sweep however many there are; and
+a router it cannot reach leaves it doing nothing, because an unreadable table is not evidence of an
+empty one — treating it as such would turn a brief outage into a storm of redundant re-opens. A
+mapping owned by someone else on the same external port is not counted as ours, so a re-assert never
+silently steals a port from its owner. If the instance stops while `upnpc` is mid-call, the sweep
+releases what it just restored and reports nothing.
+
+- **`instance-upnp-reasserted`** (kgsm 3.11.0-rc1) is emitted only on a confirmed re-open, carrying
+  the subset that was missing rather than the instance's whole set. Its own event rather than a second
+  `instance-upnp-opened` because the two are different facts: an open accompanies a bring-up, this one
+  says the mapping went missing with nothing on this host asking for it. It is the only evidence an
+  operator gets that their router discards mappings it accepted, and how often.
+- `UpnpService` gains `ListAllAsync` (the whole redirection table, owner-tagged) and a subset-scoped
+  `CloseAsync`; `InstanceSupervisor` exposes `ForwardingCandidates`, `IsRunning`, and
+  `NoteUpnpReasserted`, all lock-free over the instance table the way `/status` and `/list` already are.
+
 ### Removed
 
 - **`POST /upnp/{name}/open` and `/close`**, and the supervisor methods behind them. Opening and closing

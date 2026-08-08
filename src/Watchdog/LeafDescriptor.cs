@@ -19,6 +19,7 @@ using TheKrystalShip.KGSM.LeafConfig;
 [assembly: LeafGroup("persistence", "Boot persistence", 6)]
 [assembly: LeafGroup("ingesters", "Event ingesters & console", 7)]
 [assembly: LeafGroup("firewall", "Host firewall", 8)]
+[assembly: LeafGroup("network", "Router port forwarding", 9)]
 
 // Lowest precedence first — the same order the daemon resolves them in.
 [assembly: LeafFloorSource("appsettings", "/opt/kgsm-watchdog/kgsm-watchdog.settings.json")]

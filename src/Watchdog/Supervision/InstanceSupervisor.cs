@@ -1084,6 +1084,42 @@ internal sealed class InstanceSupervisor(
         return null;
     }
 
+    /// <summary>
+    /// The instances the reconcile sweep is answerable for: running right now, and opted into port
+    /// forwarding. Lock-free over the same instance table <see cref="Status"/> reads, so a sweep never
+    /// contends with a lifecycle verb.
+    /// <para>
+    /// Liveness is measured (<c>cgroup.events</c>), not inferred from the phase alone — an instance
+    /// between a crash and its respawn holds no ports the router should be forwarding to, and a sweep
+    /// that re-opened for it would be asserting a mapping for nothing.
+    /// </para>
+    /// </summary>
+    public ForwardingCandidate[] ForwardingCandidates() =>
+        [.. _instances.Values
+            .Where(si => si.DesiredRunning
+                         && si.Spec.EnablePortForwarding
+                         && si.Spec.Ports.Count > 0
+                         && cgroups.IsPopulated(si.Name))
+            .Select(si => new ForwardingCandidate(si.Name, si.Spec))];
+
+    /// <summary>
+    /// Whether an instance is still running <em>right now</em> — the sweep's re-check after a re-assert.
+    /// A stop can land while upnpc is mid-call, and a forward left behind for something that is no longer
+    /// running is precisely the state the open-on-start/close-on-stop lifetime exists to prevent.
+    /// </summary>
+    public bool IsRunning(string name) =>
+        _instances.TryGetValue(name, out var si) && si.DesiredRunning && cgroups.IsPopulated(name);
+
+    /// <summary>
+    /// Record that the sweep put back router forwards the IGD had dropped while the instance kept
+    /// running. Separate from <see cref="OpenPortForwarding"/>'s event because the two are different
+    /// facts — an open accompanies a bring-up, this one says the mapping went missing with nothing on
+    /// this host asking for it — and it reports only <paramref name="restored"/>, the subset that was
+    /// actually missing, never the instance's whole configured set.
+    /// </summary>
+    public void NoteUpnpReasserted(string name, IReadOnlyList<PortMapping> restored) =>
+        EmitSystemEvent("instance-upnp-reasserted", name, restored.ToUfwSpec());
+
     public InstanceState[] List()
     {
         var enabled = new HashSet<string>(store.Load(), StringComparer.Ordinal);

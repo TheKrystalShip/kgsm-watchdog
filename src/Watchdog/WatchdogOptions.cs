@@ -149,6 +149,15 @@ public sealed class WatchdogOptions
     /// </summary>
     public string FirewallSocketPath { get; init; } = "/run/kgsm-firewall/firewall.sock";
 
+    /// <summary>
+    /// How often to compare the router's redirection table against the forwards the running instances
+    /// need, restoring any the IGD dropped on its own. <c>Watchdog__UpnpReconcileSeconds</c>; <c>0</c>
+    /// disables the sweep. A router can accept a mapping, report its lease as infinite, and discard it
+    /// anyway, leaving a running server unreachable with nothing on this host informed — so the interval
+    /// is simply how long that can go unnoticed, not a renewal deadline derived from any lease.
+    /// </summary>
+    public int UpnpReconcileSeconds { get; init; } = 300;
+
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
@@ -184,6 +193,9 @@ public sealed class WatchdogOptions
             ContainerLifecyclePollMs = Floor(s.ContainerLifecyclePollMs ?? defaults.ContainerLifecyclePollMs, WatchdogSettings.Floors.PollMs),
             ConsolePollMs = Floor(s.ConsolePollMs ?? defaults.ConsolePollMs, WatchdogSettings.Floors.PollMs),
             FirewallSocketPath = Or(s.FirewallSocketPath, defaults.FirewallSocketPath),
+            // Floors at zero rather than at a minimum interval: zero is the documented "off" switch, and
+            // an operator who names it means it.
+            UpnpReconcileSeconds = Floor(s.UpnpReconcileSeconds ?? defaults.UpnpReconcileSeconds, WatchdogSettings.Floors.Zero),
         };
     }
 
@@ -318,6 +330,9 @@ public sealed class WatchdogOptions
 
         Section("Host firewall (ports open while an instance runs)");
         Row("Watchdog__FirewallSocketPath", $"[{d.FirewallSocketPath}]", "kgsm-firewall authority control socket; unreachable is logged, never fatal");
+
+        Section("Router port forwarding (UPnP)");
+        Row("Watchdog__UpnpReconcileSeconds", $"[{d.UpnpReconcileSeconds}]", "how often to restore forwards the router dropped under a running instance; 0 disables");
 
         sb.AppendLine();
         sb.AppendLine("CONTROL PLANE (HTTP/1.1 over the unix socket)");

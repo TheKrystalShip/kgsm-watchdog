@@ -19,7 +19,8 @@
     "PlayerPresencePollMs": 1000,
     "ContainerLifecyclePollMs": 1000,
     "ConsolePollMs": 250,
-    "FirewallSocketPath": "/run/kgsm-firewall/firewall.sock"
+    "FirewallSocketPath": "/run/kgsm-firewall/firewall.sock",
+    "UpnpReconcileSeconds": 300
   },
   "Logging": {
     "LogLevel": {

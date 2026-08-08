@@ -29,6 +29,20 @@ public sealed record UpnpListResult(
     IReadOnlyList<UpnpMapping> Mappings);
 
 /// <summary>
+/// The IGD's whole redirection table, read once for a reconcile sweep. <see cref="Reached"/> carries the
+/// same honesty as <see cref="UpnpListResult.State"/>: false means the router could not be asked, which
+/// is NOT the same as an empty table and must never be acted on as "nothing is mapped" — a router outage
+/// would otherwise read as every forward having expired at once.
+/// </summary>
+internal sealed record UpnpTable(bool Reached, IReadOnlyList<UpnpMapping> Mappings);
+
+/// <summary>
+/// A running instance the UPnP reconcile sweep is answerable for, paired with the spawn config the
+/// sweep reads its ports and forwarding gate from.
+/// </summary>
+public sealed record ForwardingCandidate(string Name, Instance Spec);
+
+/// <summary>
 /// Reported state of a supervised instance: the <em>desired</em> run-state and the boot-autostart
 /// <em>enabled</em> flag the daemon holds vs. the <em>actual</em> liveness measured from
 /// <c>cgroup.events</c>, plus the supervision phase and the current restart-failure streak. Never

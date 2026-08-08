@@ -60,6 +60,11 @@
       "id": "firewall",
       "label": "Host firewall",
       "order": 8
+    },
+    {
+      "id": "network",
+      "label": "Router port forwarding",
+      "order": 9
     }
   ],
   "fields": [
@@ -299,6 +304,18 @@
       "type": "path",
       "default": "/run/kgsm-firewall/firewall.sock",
       "risk": "wiring"
+    },
+    {
+      "key": "upnpReconcileSec",
+      "env": "Watchdog__UpnpReconcileSeconds",
+      "label": "Router forward check interval",
+      "description": "How often to check that the router still holds the port forwards your running servers need, and restore any it dropped. A router can accept a forward, call the lease permanent, and discard it anyway — leaving a server running but unreachable from the internet with nothing to announce it. This interval is how long that can go unnoticed. Set to 0 to stop checking.",
+      "group": "network",
+      "type": "int",
+      "default": "300",
+      "min": 0,
+      "unit": "s",
+      "risk": "safe"
     }
   ]
 }

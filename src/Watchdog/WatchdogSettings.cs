@@ -237,4 +237,14 @@ public sealed class WatchdogSettings
     [LeafField("firewallSocket", "Firewall socket", Group = "firewall", Type = LeafType.Path,
         Risk = LeafRisk.Wiring)]
     public string FirewallSocketPath { get; set; } = "/run/kgsm-firewall/firewall.sock";
+
+    /// <summary>How often the UPnP sweep compares the router's table against the running instances'
+    /// forwards. Floor 0, which switches the sweep off.</summary>
+    /// <panel>How often to check that the router still holds the port forwards your running servers
+    /// need, and restore any it dropped. A router can accept a forward, call the lease permanent, and
+    /// discard it anyway — leaving a server running but unreachable from the internet with nothing to
+    /// announce it. This interval is how long that can go unnoticed. Set to 0 to stop checking.</panel>
+    [LeafField("upnpReconcileSec", "Router forward check interval", Group = "network",
+        Min = Floors.Zero, Unit = "s")]
+    public int? UpnpReconcileSeconds { get; set; }
 }

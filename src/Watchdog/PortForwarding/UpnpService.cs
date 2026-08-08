@@ -48,15 +48,25 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
         => ApplyAsync(instance, open: true, portsOverride: null, ct);
 
     /// <summary>
-    /// Open UPnP mappings for an explicit port set instead of the instance's configured ports (the
-    /// on-demand external-control path). Still gated on <c>enable_port_forwarding</c> — an instance that
-    /// has not opted into port-forwarding is not force-forwarded by an external caller (the config is the
-    /// authority); a gated-off open returns <see cref="UpnpOutcome.Skipped"/>. A null/empty override
-    /// falls back to the instance's own ports.
+    /// Open UPnP mappings for an explicit subset of the instance's ports rather than all of them — what
+    /// the reconcile sweep re-asserts when the router is found to have dropped some but not all of a
+    /// running instance's forwards. Still gated on <c>enable_port_forwarding</c>: config is the authority
+    /// on whether an instance wants forwarding at all, so a gated-off instance returns
+    /// <see cref="UpnpOutcome.Skipped"/> here too. A null/empty subset falls back to the instance's own
+    /// ports.
     /// </summary>
     public Task<UpnpOutcome> OpenAsync(
         Instance instance, IReadOnlyList<PortMapping>? portsOverride, CancellationToken ct = default)
         => ApplyAsync(instance, open: true, portsOverride, ct);
+
+    /// <summary>
+    /// Close an explicit subset of the instance's UPnP mappings. Used to undo a re-assert that landed
+    /// just after the instance stopped — the sweep re-checks liveness after the open, and a forward for
+    /// something no longer running is exactly the state the open/close lifetime exists to prevent.
+    /// </summary>
+    public Task<UpnpOutcome> CloseAsync(
+        Instance instance, IReadOnlyList<PortMapping>? portsOverride, CancellationToken ct = default)
+        => ApplyAsync(instance, open: false, portsOverride, ct);
 
     /// <summary>
     /// Close the instance's UPnP mappings (no-op unless <c>enable_port_forwarding</c>). Returns the
@@ -95,18 +105,6 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     }
 
     /// <summary>
-    /// Maps a <see cref="UpnpOutcome"/> to the wire outcome string on <see cref="UpnpActionResult"/>
-    /// (<c>applied</c>/<c>skipped</c>/<c>failed</c>) so the external control surface reports the honest
-    /// outcome without collapsing skipped and failed into a single boolean.
-    /// </summary>
-    public static string OutcomeToWire(UpnpOutcome outcome) => outcome switch
-    {
-        UpnpOutcome.Applied => "applied",
-        UpnpOutcome.Skipped => "skipped",
-        _ => "failed",
-    };
-
-    /// <summary>
     /// List the UPnP mappings the local IGD currently holds for <paramref name="instanceName"/> — the
     /// rows whose description equals the instance name (the ownership tag). Queries the router directly
     /// (<c>upnpc -l</c>): the IGD lease is the source of truth (it outlives a process death), so the
@@ -131,38 +129,72 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     }
 
     /// <summary>
+    /// Read the IGD's <b>whole</b> redirection table in one shot, tagged by owner. The reconcile sweep
+    /// asks about every running instance at once, and <c>upnpc -l</c> already returns the full table, so
+    /// one invocation answers for all of them — spawning it per instance would multiply a ~3s round trip
+    /// by the instance count for no extra information.
+    /// <para>
+    /// Honest the same way <see cref="ListAsync"/> is: an unreachable router yields
+    /// <see cref="UpnpTable.Reached"/> = false, which a caller must treat as "I do not know what is
+    /// mapped" — never as an empty table. Acting on the difference against a table we could not read
+    /// would re-open forwards that are already there, or worse, read a router outage as mass expiry.
+    /// </para>
+    /// </summary>
+    public async Task<UpnpTable> ListAllAsync(CancellationToken ct = default)
+    {
+        UpnpcRun run = await RunUpnpcRawAsync(["-l"], ct).ConfigureAwait(false);
+        if (!run.Launched)
+            logger.LogWarning("UPnP sweep: could not launch upnpc (is miniupnpc installed?)");
+        else if (run.TimedOut)
+            logger.LogWarning("UPnP sweep: upnpc timed out after {Timeout}s", UpnpTimeout.TotalSeconds);
+
+        return ParseTable(run.Launched, run.TimedOut, run.Stdout);
+    }
+
+    /// <summary>
     /// Pure parse of <c>upnpc -l</c> output into the owned-by-instance mappings. Kept static + pure so
-    /// the tolerant, human-format parsing is unit-tested apart from the shell-out. Confirms the output is
-    /// a real listing (carries the "List of UPNP redirections" marker AND no "No IGD" banner) before
-    /// reporting <c>"queried"</c>; anything else is honest <c>"unavailable"</c>.
+    /// the tolerant, human-format parsing is unit-tested apart from the shell-out. Filters
+    /// <see cref="ParseTable"/> down to the rows this instance tagged as its own.
     /// </summary>
     internal static UpnpListResult ParseListOutput(string instanceName, bool launched, bool timedOut, string stdout)
     {
-        if (!launched || timedOut)
+        UpnpTable table = ParseTable(launched, timedOut, stdout);
+        if (!table.Reached)
             return new UpnpListResult(instanceName, "unavailable", []);
+
+        return new UpnpListResult(instanceName, "queried", [.. table.Mappings.Where(
+            m => string.Equals(m.Description, instanceName, StringComparison.Ordinal))]);
+    }
+
+    /// <summary>
+    /// Pure parse of <c>upnpc -l</c> output into every redirection row the IGD reports, with no owner
+    /// filtering. Confirms the output is a real listing (carries upnpc's "Found valid IGD" marker AND no
+    /// "No IGD" banner) before reporting <see cref="UpnpTable.Reached"/>; anything else is an honest
+    /// not-reached, never an empty table that would fabricate the absence of forwards.
+    /// </summary>
+    internal static UpnpTable ParseTable(bool launched, bool timedOut, string stdout)
+    {
+        if (!launched || timedOut)
+            return new UpnpTable(false, []);
 
         // upnpc prints "No IGD UPnP Device found on the network !" AND exits 0 when no router answers —
         // so the exit code is not a reliable signal; the text is. "Found valid IGD" is upnpc's definitive
         // "the router answered" marker (it precedes the redirection table on every -l against a real IGD,
-        // regardless of miniupnpc version). Require it, and the absence of the no-IGD banner, to call it a
-        // query; anything else is honest "unavailable" (never an empty list fabricating "no forwards").
+        // regardless of miniupnpc version). Require it, and the absence of the no-IGD banner.
         bool noIgd = stdout.Contains("No IGD", StringComparison.OrdinalIgnoreCase)
                      || stdout.Contains("No valid UPNP", StringComparison.OrdinalIgnoreCase);
         bool reached = stdout.Contains("Found valid IGD", StringComparison.OrdinalIgnoreCase);
         if (noIgd || !reached)
-            return new UpnpListResult(instanceName, "unavailable", []);
+            return new UpnpTable(false, []);
 
         var mappings = new List<UpnpMapping>();
         foreach (string line in stdout.Split('\n'))
         {
-            if (TryParseMappingRow(line, out UpnpMapping? mapping)
-                && string.Equals(mapping.Description, instanceName, StringComparison.Ordinal))
-            {
+            if (TryParseMappingRow(line, out UpnpMapping? mapping))
                 mappings.Add(mapping);
-            }
         }
 
-        return new UpnpListResult(instanceName, "queried", mappings);
+        return new UpnpTable(true, mappings);
     }
 
     /// <summary>

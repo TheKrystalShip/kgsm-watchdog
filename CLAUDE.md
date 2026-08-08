@@ -118,10 +118,16 @@ anything else as "unavailable, retry". The daemon supervises native-standalone i
   inside the cgroup (containment-correct, not spawn-then-migrate). The daemon holds the stdin FIFO
   (`Instance.SocketFile`) open `O_RDWR` itself — **no `tail` keepalive process**; stdout appends to
   `Instance.LogFile`.
-- **Two roles, both hosted services.** (a) *Native supervision* — the acting role above.
+- **Three roles, all hosted services.** (a) *Native supervision* — the acting role above.
   (b) *Player-presence ingesters* (`PlayerPresenceIngester` for containers, `NativePlayerPresenceIngester`
   for native) — pure file-tailers that re-emit player join/left as kgsm wire events (`origin=system`).
   These never shell docker, never supervise; they're additive and decoupled from supervision.
+  (c) *`UpnpReconciler`* — restores router forwards the IGD dropped under a running instance. Its own
+  timer (`Watchdog__UpnpReconcileSeconds`, default 300, `0` off) rather than a sub-cadence of the 1 Hz
+  supervision loop, because a sweep is a multi-second network round trip and that loop holds the gate;
+  it needs no gate itself, reading the instance table lock-free like `/status` does. **A router that
+  cannot be reached means the sweep does nothing** — an unreadable redirection table is not evidence
+  of an empty one, and the whole design rests on not confusing the two.
 - **Hot-swap entrypoints run before anything binds.** `--version` / `--selfcheck` (in `Program.cs`,
   before the host is built) let a deploy interrogate a freshly-installed binary as a cheap subprocess
   **without** binding the socket, entering the slice, or touching cgroups. `HotSwapCoordinator` +

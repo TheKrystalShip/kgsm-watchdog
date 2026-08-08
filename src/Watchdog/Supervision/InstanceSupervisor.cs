@@ -295,58 +295,11 @@ internal sealed class InstanceSupervisor(
         return new ActionResult(name, true, $"restarted (requester={requester})");
     }
 
-    // ---- on-demand UPnP control (external surface) ------------------------------------------
-    // UPnP is otherwise a pure lifecycle side effect (open-on-start / close-on-stop). These expose it
-    // as a first-class, externally-drivable + queryable surface — capability parity with kgsm-firewall's
-    // ensure-open/remove/list — so a caller (kgsm-lib IWatchdogClient → the assistant / web) can open,
-    // close, or read an instance's router port-forwards on demand. The upnpc shell-out (up to 10s) runs
-    // WITHOUT the supervisor gate: these touch neither desired-state nor cgroups, so they never stall a
-    // lifecycle verb or reconcile (§3.5). A confirmed open/close emits the audit event stamped with the
-    // caller's origin (default "control" at the endpoint) — the SURFACE the request came through, on an
-    // action this daemon performs, so the actor stays the watchdog and only the origin varies.
-
-    /// <summary>
-    /// Open <paramref name="name"/>'s UPnP router mappings on demand — its configured ports, or the
-    /// explicit <paramref name="ports"/> override (external control). Honors the instance's
-    /// <c>enable_port_forwarding</c> gate (config is the authority; a gated-off instance returns
-    /// <c>skipped</c>, never a forced open). Emits <c>instance-upnp-opened</c> stamped with
-    /// <paramref name="origin"/> only on a confirmed mapping — never a fabricated one.
-    /// </summary>
-    public async Task<UpnpActionResult> OpenUpnpAsync(
-        string name, string origin, IReadOnlyList<PortMapping>? ports = null, CancellationToken ct = default)
-    {
-        var instance = instances.GetInstanceInfo(name);
-        if (instance is null)
-            return new UpnpActionResult(name, "failed", "unknown instance (kgsm-lib returned no info)");
-
-        var outcome = await upnp.OpenAsync(instance, ports, ct).ConfigureAwait(false);
-        if (outcome == UpnpOutcome.Applied)
-        {
-            // Render the ports actually forwarded back to the canonical UFW string the kgsm events-emit
-            // positional arg expects (the override when given, else the instance's own ports).
-            string portsSpec = (ports is { Count: > 0 } ? ports : instance.Ports).ToUfwSpec();
-            EmitProvenanceEvent("instance-upnp-opened", ActorWatchdog, origin, name, portsSpec);
-        }
-
-        return new UpnpActionResult(name, UpnpService.OutcomeToWire(outcome), UpnpDetail(outcome, open: true));
-    }
-
-    /// <summary>
-    /// Close <paramref name="name"/>'s UPnP router mappings on demand. Emits <c>instance-upnp-closed</c>
-    /// stamped with <paramref name="origin"/> only on a confirmed removal.
-    /// </summary>
-    public async Task<UpnpActionResult> CloseUpnpAsync(string name, string origin, CancellationToken ct = default)
-    {
-        var instance = instances.GetInstanceInfo(name);
-        if (instance is null)
-            return new UpnpActionResult(name, "failed", "unknown instance (kgsm-lib returned no info)");
-
-        var outcome = await upnp.CloseAsync(instance, ct).ConfigureAwait(false);
-        if (outcome == UpnpOutcome.Applied)
-            EmitProvenanceEvent("instance-upnp-closed", ActorWatchdog, origin, name, instance.Ports.ToUfwSpec());
-
-        return new UpnpActionResult(name, UpnpService.OutcomeToWire(outcome), UpnpDetail(outcome, open: false));
-    }
+    // ---- UPnP read (external surface) -------------------------------------------------------
+    // Opening and closing are pure lifecycle side effects (open-on-start / close-on-stop): an instance's
+    // router forwards last exactly as long as its run, so there is no on-demand open to expose. The read
+    // stays, because "what does the router actually hold for this instance?" is a question a diagnosing
+    // operator genuinely has.
 
     /// <summary>
     /// List the UPnP mappings the local IGD currently holds for <paramref name="name"/> (read-only, no
@@ -356,16 +309,6 @@ internal sealed class InstanceSupervisor(
     /// </summary>
     public Task<UpnpListResult> ListUpnpAsync(string name, CancellationToken ct = default)
         => upnp.ListAsync(name, ct);
-
-    /// <summary>Human-readable detail for a <see cref="UpnpActionResult"/>, matched to the outcome.</summary>
-    private static string UpnpDetail(UpnpOutcome outcome, bool open) => outcome switch
-    {
-        UpnpOutcome.Applied => open ? "router mapping opened" : "router mapping removed",
-        UpnpOutcome.Skipped => open
-            ? "port-forwarding disabled for this instance, or no ports configured — nothing opened"
-            : "no active mapping to remove",
-        _ => "upnpc could not reach the router (no IGD, missing binary, or timeout)",
-    };
 
     // ---- boot-autostart (enable/disable) ----------------------------------------------------
     // The systemctl-style boot axis, orthogonal to start/stop. These mutate ONLY the persisted set

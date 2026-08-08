@@ -29,25 +29,6 @@ public sealed record UpnpListResult(
     IReadOnlyList<UpnpMapping> Mappings);
 
 /// <summary>
-/// Outcome of an on-demand UPnP open/close. <see cref="Outcome"/> is <c>"applied"</c> (the IGD confirmed
-/// the change — the only path that emits an audit event), <c>"skipped"</c> (port-forwarding disabled for
-/// the instance, or it has no ports — nothing changed), or <c>"failed"</c> (<c>upnpc</c> could not
-/// deliver: missing binary, non-zero on open, or timeout). A skipped or failed open is never reported as
-/// an open.
-/// </summary>
-public sealed record UpnpActionResult(
-    string Instance,
-    string Outcome,         // "applied" | "skipped" | "failed"
-    string Detail);
-
-/// <summary>
-/// Optional request body for <c>POST /upnp/{name}/open</c>: an explicit port set to forward instead of
-/// the instance's configured ports (parity with the firewall's <c>ensure-open &lt;instance&gt; &lt;ports&gt;</c>).
-/// Absent or empty → the instance's own configured ports.
-/// </summary>
-public sealed record UpnpOpenRequest(List<PortMapping>? Ports);
-
-/// <summary>
 /// Reported state of a supervised instance: the <em>desired</em> run-state and the boot-autostart
 /// <em>enabled</em> flag the daemon holds vs. the <em>actual</em> liveness measured from
 /// <c>cgroup.events</c>, plus the supervision phase and the current restart-failure streak. Never

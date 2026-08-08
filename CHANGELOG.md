@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`POST /upnp/{name}/open` and `/close`**, and the supervisor methods behind them. Opening and closing
+  are pure lifecycle side effects — the daemon opens an instance's router forwards as it spawns and
+  releases them on a deliberate stop, so a forward lasts exactly as long as the run and there is nothing
+  for a caller to drive by hand. `GET /upnp/{name}` stays: what the router actually holds is a question a
+  diagnosing operator has.
+
+
 ### Fixed — actor and origin are two axes, and a caller-driven event stamps each on its own
 
 Three emitters passed one caller-supplied string as **both** the actor and the origin, which cannot be

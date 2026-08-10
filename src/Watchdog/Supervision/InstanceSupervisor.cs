@@ -45,6 +45,7 @@ internal sealed class InstanceSupervisor(
     IEventManagementService events,
     UpnpService upnp,
     FirewallPortsService firewall,
+    PlayerSessionStore sessions,
     ILogger<InstanceSupervisor> logger) : IDisposable
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
@@ -250,6 +251,11 @@ internal sealed class InstanceSupervisor(
         }
         finally
         {
+            // Every branch above ends with this instance not running, so no session it was tracking
+            // survives — see ForgetPlayerSessions. In the finally so a stop that throws mid-drain
+            // still clears, and AFTER the drain so a disconnect line the game logged on its way down
+            // is read against a map that still holds the session it names.
+            ForgetPlayerSessions(name);
             _gate.Release();
         }
     }
@@ -410,6 +416,8 @@ internal sealed class InstanceSupervisor(
 
             PurgeCgroup(name);   // StopAsync removes it on its live paths; this covers the rest
             store.Remove(name);  // boot-autostart intent must not resurrect a deleted instance
+            sessions.Forget(name); // the stop above emptied the map; drop it, so an uninstalled instance
+                                   // stops appearing in GET /players at all rather than as an empty list
             PersistSupervisionState();
 
             logger.LogInformation("deregistered {Instance} (was supervised: {WasTracked})", name, wasTracked);
@@ -1214,6 +1222,7 @@ internal sealed class InstanceSupervisor(
 
         DisposeCurrent(si);
         PurgeCgroup(si.Name);
+        ForgetPlayerSessions(si.Name);
         si.Phase = SupervisionPhase.Stopped;
         si.LastReason = "stopped (stop request completed after the caller abandoned it)";
         _instances.TryRemove(si.Name, out _);
@@ -1249,6 +1258,10 @@ internal sealed class InstanceSupervisor(
         int? exit = si.Current?.ExitCode;
         DisposeCurrent(si);
         PurgeCgroup(name);
+        // The process is gone, so every player it was serving is disconnected — whatever the policy
+        // below decides about restarting. Cleared here, once, ahead of the crash/failed/stay-down
+        // branches so none of them can leave the map describing a dead process.
+        ForgetPlayerSessions(name);
 
         string exitText = exit is int c ? $"exit {c}" : "exit unknown";
 
@@ -1551,6 +1564,32 @@ internal sealed class InstanceSupervisor(
         if (cgroups.IsPopulated(name))
             cgroups.Kill(name);
         cgroups.Remove(name);
+    }
+
+    /// <summary>
+    /// Drop every player session tracked for an instance whose process has ended.
+    /// </summary>
+    /// <remarks>
+    /// A session map describes connections to a running process; a process that has exited holds
+    /// none. Left standing, the map answers <c>GET /players</c> with players who cannot be connected
+    /// for as long as the instance stays down — and a consumer that reconciles its own roster from
+    /// that snapshot (kgsm-api does, on every restart) writes the phantom into its permanent record.
+    /// The ingesters clear the map on their own when the log rolls to a fresh session, which is the
+    /// NEXT start; the process ending is the earlier and more truthful edge, so it is cleared here,
+    /// at the one place every teardown passes through.
+    /// <para>
+    /// Emits nothing. A stop is one fact, already carried by the lifecycle event; a
+    /// <c>instance-player-left</c> per tracked session would mint leave records the game never
+    /// reported, and consumers reset a server's roster wholesale on that lifecycle event anyway.
+    /// </para>
+    /// </remarks>
+    private void ForgetPlayerSessions(string name)
+    {
+        if (!sessions.HasSessions(name))
+            return;
+
+        sessions.Reset(name);
+        logger.LogDebug("player session map cleared for {Instance} (process ended)", name);
     }
 
     private async Task<bool> WaitForPopulatedAsync(string name, RunningInstance ri, TimeSpan timeout, CancellationToken ct)

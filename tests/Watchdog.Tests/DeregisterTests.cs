@@ -153,6 +153,7 @@ public sealed class DeregisterTests
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
+            new PlayerSessionStore(),
             NullLogger<InstanceSupervisor>.Instance);
     }
 

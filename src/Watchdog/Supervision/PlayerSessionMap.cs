@@ -50,6 +50,10 @@ internal sealed class PlayerSessionMap
     /// </summary>
     public void Reset() => _sessions.Clear();
 
+    /// <summary>How many sessions are tracked right now — an allocation-free alternative to
+    /// <see cref="Snapshot"/> for a caller that only needs to know whether the map is empty.</summary>
+    public int Count => _sessions.Count;
+
     /// <summary>
     /// The contract-frozen precedence: <c>key ?? addr ?? id ?? name</c>, treating a blank/whitespace-only
     /// value as absent. Null only when all four are absent (never happens for a join that passed the

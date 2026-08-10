@@ -164,7 +164,14 @@ internal sealed class RconPlayerPresencePoller(
             // the cgroup is empty (no process). Either way, RCON will return nothing.
             var state = supervisor.Status(name);
             if (state is null || state.Desired != "running" || !state.Populated)
+            {
+                // Not running: drop the last poll's player set. It describes a process that no longer
+                // exists, and carrying it into the next run turns the first poll after a restart into a
+                // burst of "left" events for players who disconnected with the previous session — after
+                // the supervisor already cleared the map those events resolve against.
+                _previousPollState.TryRemove(name, out _);
                 continue;
+            }
 
             int intervalSeconds = cachedInstance.RconPollIntervalSeconds is > 0
                 ? cachedInstance.RconPollIntervalSeconds.Value

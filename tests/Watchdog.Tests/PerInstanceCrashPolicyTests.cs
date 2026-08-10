@@ -222,11 +222,12 @@ public sealed class PerInstanceCrashPolicyTests
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
+            new PlayerSessionStore(),
             NullLogger<InstanceSupervisor>.Instance);
     }
 
     /// <summary>An IInstanceService that returns exactly one configured spec by name.</summary>
-    private sealed class SingleInstance(Instance instance) : IInstanceService
+    internal sealed class SingleInstance(Instance instance) : IInstanceService
     {
         public Instance? GetInstanceInfo(string instanceName) =>
             string.Equals(instanceName, instance.Name, StringComparison.Ordinal) ? instance : null;
@@ -271,7 +272,7 @@ public sealed class PerInstanceCrashPolicyTests
 }
 
     /// <summary>Thread-safe recorder — supervision events are emitted fire-and-forget on the thread pool.</summary>
-    private sealed class RecordingEvents : IEventManagementService
+    internal sealed class RecordingEvents : IEventManagementService
     {
         private readonly object _lock = new();
         private readonly List<string> _emitted = [];

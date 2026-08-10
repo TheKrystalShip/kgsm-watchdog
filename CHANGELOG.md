@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a player session map does not outlive the process it describes
+
+`GET /players` answered with players connected to instances that were not running, for as long as they
+stayed down: the per-instance session map was only ever cleared when the log rolled to a fresh inode,
+which is the *next* start. The consequence was not confined to this daemon — kgsm-api reconciles its
+permanent roster from that snapshot on every startup, so an API restart during a stopped instance's
+down-window copied the phantom sessions into a durable record and reported them, in the Control Panel,
+as players connected to a stopped server.
+
+The map is now dropped at the edge where every session in it genuinely ends — the instance's process
+ending — in `InstanceSupervisor`, the one place every teardown passes through: the `stop` verb (in a
+`finally`, so a stop that throws mid-drain still clears, and after the drain, so a disconnect the game
+logs on its way down still resolves against the session it names), the reconcile pass that concludes a
+process exited (ahead of the crash / gave-up / stay-down branches, so none of them can leave a map
+over a dead process), and the completion of a stop whose caller abandoned it. The log-roll reset stays
+as the second trigger it always was.
+
+Clearing emits nothing. A stop is one fact, already carried by the lifecycle event every consumer
+resets a roster on; an `instance-player-left` per tracked session would be a disconnect record no game
+ever reported.
+
+The RCON poller drops its own last-poll player set for an instance that is not running, too — carried
+into the next run it turned the first poll after a restart into a burst of leaves for players who
+disconnected with the previous session.
+
 ### Added — the router drops forwards, so the daemon puts them back
 
 A UPnP mapping is not durable the way a host firewall rule is. A router can accept one, report its

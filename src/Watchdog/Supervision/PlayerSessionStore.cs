@@ -45,7 +45,9 @@ internal sealed class PlayerSessionStore
     }
 
     /// <summary>
-    /// Clear all sessions for an instance — called when the log rolls to a fresh inode (new server session).
+    /// Clear all sessions for an instance. Called from the two edges that end every session at once:
+    /// the instance's process ending (<c>InstanceSupervisor.ForgetPlayerSessions</c> — a stop, a
+    /// crash, or a clean exit) and the log rolling to a fresh inode (a new server session).
     /// </summary>
     public void Reset(string instanceName)
     {
@@ -55,6 +57,29 @@ internal sealed class PlayerSessionStore
             {
                 map.Reset();
             }
+        }
+    }
+
+    /// <summary>
+    /// Drop an instance's map entirely — called when the instance is deregistered (uninstalled), which
+    /// is the one edge where it is not merely empty but gone. <see cref="Reset"/> leaves the entry
+    /// behind, and an instance that no longer exists reporting an empty player list is a claim about
+    /// something that is not there.
+    /// </summary>
+    public void Forget(string instanceName) => _maps.TryRemove(instanceName, out _);
+
+    /// <summary>
+    /// Whether this instance currently has any tracked session. Lets a caller skip the work — and the
+    /// log line — for the overwhelmingly common case of an instance nobody was connected to.
+    /// </summary>
+    public bool HasSessions(string instanceName)
+    {
+        if (!_maps.TryGetValue(instanceName, out var map))
+            return false;
+
+        lock (map)
+        {
+            return map.Count > 0;
         }
     }
 

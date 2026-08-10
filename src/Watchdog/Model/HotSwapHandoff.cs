@@ -32,6 +32,27 @@ internal sealed class HotSwapHandoff
 
     /// <summary>One entry per live instance whose FIFO fd is being carried across the swap.</summary>
     public List<HotSwapEntry> Instances { get; set; } = new();
+
+    /// <summary>
+    /// Every instance's live player sessions (<c>PlayerSessionStore</c>), keyed by instance name — the
+    /// correlation map that turns independently-matched join and leave log lines into paired presence
+    /// events.
+    /// <para>
+    /// It is here for the same reason the FIFO fds are: it cannot be re-derived. The successor's log tail
+    /// primes at EOF on its first attach, so the join lines that established these sessions are behind it
+    /// and will never be read again. Most games' leave lines carry only a bare correlation token (an
+    /// address, a ZDOID, a userid) and no display name, so a leave arriving against an empty map has
+    /// nothing to resolve and, per the presence contract, is skipped rather than guessed — leaving that
+    /// player reported as connected until the instance next stops.
+    /// </para>
+    /// <para>
+    /// Deliberately a top-level map rather than a field on <see cref="HotSwapEntry"/>: entries exist only
+    /// for instances carrying a live FIFO fd, while sessions are tracked for every instance the ingester
+    /// discovers. Hanging them off the entries would silently drop the map for an adopted, cgroup-only
+    /// instance — one that has already lost its console and can least afford a second loss.
+    /// </para>
+    /// </summary>
+    public Dictionary<string, PlayerSession[]> PlayerSessions { get; set; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>

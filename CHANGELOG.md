@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the player session map survives a hot-swap
+
+`HotSwapHandoff` carries every instance's player sessions across the `execv`, alongside the FIFO fds,
+and for the same reason: the map cannot be re-derived. The successor's log tail primes at EOF, so the
+join lines that established those sessions are behind it permanently.
+
+That matters because a join line carries the player's name and a leave line usually does not — the map
+is what pairs them. Of the games with presence configured, romestead's leave carries only the peer
+address, valheim's and Core Keeper's only an opaque key. A leave landing on an empty map has nothing to
+resolve and, per the presence contract, is skipped rather than guessed, so the player stayed reported as
+connected until the instance next stopped. Games whose leave line carries a name or id (minecraft,
+palworld) were unaffected.
+
+The sessions are a top-level map on the handoff, not a field on `HotSwapEntry`: entries exist only for
+instances carrying a live FIFO fd, while sessions are tracked for every instance the ingester discovers.
+Hanging them off the entries would have dropped the map for an adopted, cgroup-only instance — the one
+that has already lost its console. They are restored before any instance adoption and independently of
+it, so a successor that comes up not-ready still keeps presence correlation. A session carrying no key is
+dropped rather than restored: the key is what a leave resolves against, so an entry without one could
+only ever inflate what `GET /players` reports.
+
+The RCON poller seeds its first poll from the session map instead of starting empty. That dictionary is
+not carried across the swap, and an empty one makes the first poll blind to leaves — a player who
+disconnects before it runs is absent from both sides of the diff, so nothing retires the session the map
+still holds.
+
+**Not persisted to disk.** `desired-state.json` and `supervision-state.json` hold intent and counters,
+which stay true while the daemon is dead. A session map is an observation, and its truth expires the
+moment nobody is watching; a file would assert after a reboot that players were connected to a server
+that has not run in a week. A hot-swap is the one restart that preserves the map's truth across the gap,
+because the games never stopped and the gap is microseconds.
+
 ### Fixed — a player session map does not outlive the process it describes
 
 `GET /players` answered with players connected to instances that were not running, for as long as they

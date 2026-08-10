@@ -61,6 +61,20 @@ internal sealed class PlayerSessionStore
     }
 
     /// <summary>
+    /// Re-seed one instance's map from a hot-swap handoff, replacing whatever it holds. Emits nothing and
+    /// reports no dedup verdict — see <see cref="PlayerSessionMap.Restore"/>.
+    /// </summary>
+    public void Restore(string instanceName, IEnumerable<(string SessionKey, string? Id, string? Name, string? Addr)> sessions)
+    {
+        var map = _maps.GetOrAdd(instanceName, static _ => new PlayerSessionMap());
+        lock (map)
+        {
+            foreach (var s in sessions)
+                map.Restore(s.SessionKey, new PlayerSessionMap.Session(s.Id, s.Name, s.Addr));
+        }
+    }
+
+    /// <summary>
     /// Drop an instance's map entirely — called when the instance is deregistered (uninstalled), which
     /// is the one edge where it is not merely empty but gone. <see cref="Reset"/> leaves the entry
     /// behind, and an instance that no longer exists reporting an empty player list is a claim about

@@ -55,6 +55,13 @@ internal sealed class PlayerSessionMap
     public int Count => _sessions.Count;
 
     /// <summary>
+    /// Put a session back exactly as it was, re-seeding this map from a hot-swap handoff. Distinct from
+    /// <see cref="Join"/>: nothing was observed, so there is no dedup verdict to report and no event to
+    /// emit — this is the predecessor's state being restored, not a player arriving.
+    /// </summary>
+    public void Restore(string sessionKey, Session session) => _sessions[sessionKey] = session;
+
+    /// <summary>
     /// The contract-frozen precedence: <c>key ?? addr ?? id ?? name</c>, treating a blank/whitespace-only
     /// value as absent. Null only when all four are absent (never happens for a join that passed the
     /// matcher's identity guard; can happen for an under-specified leave line — the caller must handle

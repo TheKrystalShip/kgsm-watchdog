@@ -792,11 +792,24 @@ internal sealed class InstanceSupervisor(
                 });
             }
 
-            // 2. Belt-and-suspenders: also flush the Phase-2 disk state, so the counters survive even if the
+            // 2. Carry the player session maps. Every instance the ingester tracks, not just the ones with
+            //    a FIFO fd above — the map is what a leave line resolves against, and the successor's log
+            //    tail starts at EOF, so a map lost here cannot be rebuilt from anything (see
+            //    HotSwapHandoff.PlayerSessions).
+            foreach (var kvp in sessions.GetAllSessionsWithKeys())
+            {
+                if (kvp.Value.Count == 0)
+                    continue;
+
+                handoff.PlayerSessions[kvp.Key] = [.. kvp.Value.Select(
+                    e => new PlayerSession(e.Key, e.Value.Id, e.Value.Name, e.Value.Addr))];
+            }
+
+            // 3. Belt-and-suspenders: also flush the Phase-2 disk state, so the counters survive even if the
             //    swap aborts mid-flight and the successor has to fall back to the normal restore.
             PersistSupervisionState();
 
-            // 3. Encode the blob and build an EXPLICIT envp for execve. VERIFIED 2026-06-25:
+            // 4. Encode the blob and build an EXPLICIT envp for execve. VERIFIED 2026-06-25:
             //    Environment.SetEnvironmentVariable does NOT write through to libc environ on net10, so a
             //    handoff staged that way is invisible to a plain execv. We therefore snapshot the current
             //    environment + the handoff override (ReExec.BuildEnvp) and pass it to execve directly.
@@ -804,7 +817,7 @@ internal sealed class InstanceSupervisor(
             string b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
             var envp = ReExec.BuildEnvp(HotSwapHandoff.EnvVarName, b64);
 
-            // 4. Shed O_CLOEXEC on each FIFO fd so it is inherited across the execv, then release the handle
+            // 5. Shed O_CLOEXEC on each FIFO fd so it is inherited across the execv, then release the handle
             //    WITHOUT closing the fd or deleting the FIFO node.
             foreach (var si in _instances.Values)
             {
@@ -823,15 +836,17 @@ internal sealed class InstanceSupervisor(
             }
 
             logger.LogInformation(
-                "hot-swap: handing off {Count} live instance(s) and execv'ing {Target} in place (same PID {Pid})",
-                handoff.Instances.Count, targetPath, Environment.ProcessId);
+                "hot-swap: handing off {Count} live instance(s) and {Sessions} player session(s), "
+                + "execv'ing {Target} in place (same PID {Pid})",
+                handoff.Instances.Count, handoff.PlayerSessions.Sum(p => p.Value.Length),
+                targetPath, Environment.ProcessId);
 
-            // 5. Flush stdout/stderr — the only managed state the successor cannot recover. execve discards
+            // 6. Flush stdout/stderr — the only managed state the successor cannot recover. execve discards
             //    everything else (threads, GC heap), so nothing else needs committing.
             Console.Out.Flush();
             Console.Error.Flush();
 
-            // 6. The point of no return — on success control never comes back here. execve (NOT execv) with
+            // 7. The point of no return — on success control never comes back here. execve (NOT execv) with
             //    the explicit envp so the successor actually sees the handoff.
             int err = ReExec.ExecWithEnv(targetPath, new[] { targetPath }, envp);
 
@@ -907,7 +922,20 @@ internal sealed class InstanceSupervisor(
             return;
         }
 
-        if (handoff is null || handoff.Instances.Count == 0)
+        if (handoff is null)
+        {
+            Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, null);
+            return;
+        }
+
+        // Restore the player session maps FIRST, and independently of everything below: they are not tied
+        // to the instance table (the handoff carries a map for every instance the ingester tracks, not only
+        // those with a FIFO fd), and they matter even on the paths that adopt nothing — a supervisor that
+        // came up not-ready still tails logs, and a leave line landing on an empty map is a presence event
+        // lost for good.
+        RestorePlayerSessions(handoff);
+
+        if (handoff.Instances.Count == 0)
         {
             Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, null);
             return;
@@ -1564,6 +1592,33 @@ internal sealed class InstanceSupervisor(
         if (cgroups.IsPopulated(name))
             cgroups.Kill(name);
         cgroups.Remove(name);
+    }
+
+    /// <summary>
+    /// Re-seed the player session maps handed across a hot-swap. A session with no key is dropped: the
+    /// key is what a later leave line resolves against, so an entry without one could never be matched
+    /// and would only inflate what <c>GET /players</c> reports.
+    /// </summary>
+    private void RestorePlayerSessions(HotSwapHandoff handoff)
+    {
+        int restored = 0;
+        foreach (var kvp in handoff.PlayerSessions)
+        {
+            var usable = kvp.Value
+                .Where(s => !string.IsNullOrEmpty(s.SessionKey))
+                .Select(s => (SessionKey: s.SessionKey!, s.Id, s.Name, s.Addr))
+                .ToArray();
+
+            if (usable.Length == 0)
+                continue;
+
+            sessions.Restore(kvp.Key, usable);
+            restored += usable.Length;
+        }
+
+        if (restored > 0)
+            logger.LogInformation("hot-swap: restored {Count} player session(s) across {Instances} instance(s)",
+                restored, handoff.PlayerSessions.Count);
     }
 
     /// <summary>

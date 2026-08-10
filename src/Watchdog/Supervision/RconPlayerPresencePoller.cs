@@ -190,9 +190,13 @@ internal sealed class RconPlayerPresencePoller(
     {
         string name = instance.Name;
 
-        // Get previous state for this instance
+        // Get previous state for this instance. With none — the first poll of a run, or the first after a
+        // hot-swap, which discards this dictionary while the session map is carried across — seed it from
+        // the session map rather than starting empty. Starting empty makes the first poll blind to leaves:
+        // a player who disconnects before it runs is absent from both sides of the diff, so nothing retires
+        // the session the map still holds for them.
         _previousPollState.TryGetValue(name, out var previousPlayers);
-        previousPlayers ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        previousPlayers ??= SeedFromSessionMap(name);
 
         try
         {
@@ -259,6 +263,22 @@ internal sealed class RconPlayerPresencePoller(
 
         long elapsed = Environment.TickCount64 - lastPoll;
         return elapsed >= intervalSeconds * 1000L;
+    }
+
+    /// <summary>
+    /// The player set this poller would have recorded, reconstructed from the shared session map. Only
+    /// sessions carrying an id are usable — this poller diffs on the id RCON reports, and a session
+    /// without one could never appear on the other side of that diff.
+    /// </summary>
+    private Dictionary<string, string> SeedFromSessionMap(string instanceName)
+    {
+        var seeded = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (PlayerSessionMap.Session session in sessionStore.GetSessions(instanceName))
+        {
+            if (!string.IsNullOrEmpty(session.Id))
+                seeded[session.Id] = session.Name ?? "";
+        }
+        return seeded;
     }
 
     private void EmitJoined(string instanceName, string? playerId, string? playerName, string sessionKey)

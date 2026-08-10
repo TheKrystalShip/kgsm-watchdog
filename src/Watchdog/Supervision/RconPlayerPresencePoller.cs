@@ -157,25 +157,28 @@ internal sealed class RconPlayerPresencePoller(
                     continue;
                 }
 
-                if (instance.Runtime != InstanceRuntime.Native || instance.RconPort is null || string.IsNullOrEmpty(instance.RconPassword))
+                // The verdict is PlayerDetection's, not this loop's. GET /players reports what this
+                // daemon can observe, and an instance polled here while the endpoint calls it
+                // undetectable would tell a consumer "nobody can tell" about a roster being actively
+                // read. One predicate, so the two cannot say different things.
+                if (!PlayerDetection.FromRcon(instance))
                 {
-                    _instanceCache[name] = null; // no RCON — cache as skip
-                    _metadataCacheTimestamps[name] = now;
-                    continue;
-                }
-
-                // Without a pattern the response cannot be read, so polling it could only produce a
-                // roster that is empty for want of parsing — indistinguishable from nobody being
-                // connected. Skip the instance and say why, rather than report an absence as a fact.
-                if (string.IsNullOrWhiteSpace(instance.RconPlayersCommand)
-                    || !RconPlayerResponseParser.IsValidPattern(instance.RconPlayersRegex))
-                {
-                    WarnOnce(name, string.IsNullOrWhiteSpace(instance.RconPlayersCommand)
-                        ? "RCON is configured for {Instance} but its blueprint names no rcon_players_command, so there is nothing to ask for its player list — RCON presence is off for this instance"
-                        : string.IsNullOrWhiteSpace(instance.RconPlayersRegex)
-                        ? "RCON is configured for {Instance} but its blueprint sets no rcon_players_regex, so its player list cannot be read — RCON presence is off for this instance"
-                        : "RCON is configured for {Instance} but its blueprint's rcon_players_regex does not compile, so its player list cannot be read — RCON presence is off for this instance",
-                        name);
+                    // RCON wired but unreadable is the skip an operator needs to see: without a
+                    // command there is nothing to ask, and without a compiling response pattern the
+                    // reply cannot be parsed — either way the poll could only produce a roster that is
+                    // empty for want of parsing, which is indistinguishable from nobody connected.
+                    // An instance with no RCON at all is not a misconfiguration and says nothing.
+                    if (instance.Runtime == InstanceRuntime.Native
+                        && instance.RconPort is not null
+                        && !string.IsNullOrEmpty(instance.RconPassword))
+                    {
+                        WarnOnce(name, string.IsNullOrWhiteSpace(instance.RconPlayersCommand)
+                            ? "RCON is configured for {Instance} but its blueprint names no rcon_players_command, so there is nothing to ask for its player list — RCON presence is off for this instance"
+                            : string.IsNullOrWhiteSpace(instance.RconPlayersRegex)
+                            ? "RCON is configured for {Instance} but its blueprint sets no rcon_players_regex, so its player list cannot be read — RCON presence is off for this instance"
+                            : "RCON is configured for {Instance} but its blueprint's rcon_players_regex does not compile, so its player list cannot be read — RCON presence is off for this instance",
+                            name);
+                    }
 
                     _instanceCache[name] = null;
                     _metadataCacheTimestamps[name] = now;

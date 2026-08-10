@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `GET /players` answers whether a roster is knowable, not just who is on it
+
+The endpoint listed only instances with tracked sessions, so an absent instance was ambiguous between
+"nobody is online" and "this game cannot report players" — and every consumer that read the first
+meaning of the second stated something this host does not know.
+
+Now **every** instance appears, each carrying its `detection` beside its `players`:
+
+```json
+{"minecraft": {"detection":"log","players":[…]}, "starbound": {"detection":"none","players":[]}}
+```
+
+`log` is matched from the game's output (real transitions), `rcon` is polled and diffed (cannot see
+churn between polls), `none` is not observable, and `unknown` means the instance inventory could not
+be read so the capability could not be established either way. The two travel in one object because a
+consumer must not be able to take the roster without the qualifier.
+
+**`PlayerDetection` is now the single predicate**, and the RCON poller gates on it rather than
+carrying its own copy — an instance polled here while the endpoint called it undetectable would tell a
+consumer "nobody can tell" about a roster being actively read. It is not a rule a consumer could
+re-derive in any case: it accounts for log matching, RCON (port + password + command), and whether
+each pattern actually *compiles*.
+
+Consumers move with kgsm-lib 4.6.0 (`IWatchdogClient.GetAllPlayersAsync` → `GetPlayerPresenceAsync`).
+
 ### Fixed — RCON player polling reaches the game
 
 The poller has been registered and ticking all along, and never once produced an event. `RconClient`

@@ -21,7 +21,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 [JsonSerializable(typeof(WatchdogVersionInfo))] // GET /version — build identity for the hot-swap deploy
 [JsonSerializable(typeof(PlayerSession))] // GET /players — one player session in the live session map
 [JsonSerializable(typeof(PlayerSession[]))] // GET /players — array of sessions per instance
-[JsonSerializable(typeof(Dictionary<string, PlayerSession[]>))] // GET /players — all instances' sessions
+[JsonSerializable(typeof(InstancePresence))] // GET /players — one instance's detection + its sessions
+[JsonSerializable(typeof(Dictionary<string, InstancePresence>))] // GET /players — every instance, keyed by name
 [JsonSerializable(typeof(UpnpMapping))] // GET /upnp/{name} — one IGD redirection row
 [JsonSerializable(typeof(UpnpListResult))] // GET /upnp/{name} — the instance's IGD mappings + honest state
 internal sealed partial class WatchdogJsonContext : JsonSerializerContext;

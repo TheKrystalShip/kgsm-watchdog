@@ -76,6 +76,27 @@ public sealed record PlayerSession(
     string? Addr);
 
 /// <summary>
+/// One instance's player presence: whether this daemon can observe it, and who it currently sees.
+/// </summary>
+/// <remarks>
+/// <b><see cref="Detection"/> is what makes <see cref="Players"/> readable.</b> An empty list under
+/// <c>log</c> or <c>rcon</c> means nobody is connected — a measured fact. An empty list under
+/// <c>none</c> means this game reports nothing, and rendering it as "0 online" states something the
+/// host does not know. The two are one record so a consumer cannot take the list without the
+/// qualifier.
+/// </remarks>
+/// <param name="Detection">
+/// <c>log</c> (matched from the game's output — real transitions), <c>rcon</c> (polled and diffed —
+/// cannot see churn between polls), <c>none</c> (not observable), or <c>unknown</c> (the instance
+/// inventory could not be read, so the capability could not be established either way).
+/// </param>
+/// <param name="Players">The sessions currently tracked. Empty is meaningful only alongside
+/// <paramref name="Detection"/>.</param>
+public sealed record InstancePresence(
+    string Detection,
+    PlayerSession[] Players);
+
+/// <summary>
 /// The running daemon's build identity (Inc 7 Phase 0): the assembly informational version split
 /// into its semantic <c>version</c> and the source-control <c>commit</c> hash (the <c>+&lt;hash&gt;</c>
 /// suffix SourceLink stamps on the informational version). Served by <c>GET /version</c> so the

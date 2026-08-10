@@ -75,6 +75,7 @@ S=/run/kgsm-watchdog/control.sock
 curl --unix-socket $S http://x/health            # readiness: 200 ready / 503 + {ready,detail}; /ready = deprecated alias
 curl --unix-socket $S -X POST http://x/start/my-server
 curl --unix-socket $S http://x/status/my-server  # ...also /list, /stop/{n}, /version
+curl --unix-socket $S http://x/players           # every instance: its detection + who is connected
 ```
 
 `/health` is the unified ecosystem probe — **`200` only when in-slice and able to spawn**; treat
@@ -120,8 +121,14 @@ anything else as "unavailable, retry". The daemon supervises native-standalone i
   `Instance.LogFile`.
 - **Three roles, all hosted services.** (a) *Native supervision* — the acting role above.
   (b) *Player-presence ingesters* (`PlayerPresenceIngester` for containers, `NativePlayerPresenceIngester`
-  for native) — pure file-tailers that re-emit player join/left as kgsm wire events (`origin=system`).
-  These never shell docker, never supervise; they're additive and decoupled from supervision.
+  for native, `RconPlayerPresencePoller` for games that log connects but not disconnects) — pure
+  observers that re-emit player join/left as kgsm wire events (`origin=system`) into the shared
+  `PlayerSessionStore`. These never shell docker, never supervise; they're additive and decoupled from
+  supervision. **Whether an instance is observed at all is `PlayerDetection`'s answer and only its** —
+  the ingesters gate on it and `GET /players` reports it, so the daemon cannot poll a roster it calls
+  unobservable. It is not a predicate a consumer can re-derive: it spans log patterns, RCON
+  (port + password + command) and whether each pattern *compiles*, which is why the endpoint hands the
+  verdict out rather than leaving every surface to guess from the same config.
   (c) *`UpnpReconciler`* — restores router forwards the IGD dropped under a running instance. Its own
   timer (`Watchdog__UpnpReconcileSeconds`, default 300, `0` off) rather than a sub-cadence of the 1 Hz
   supervision loop, because a sweep is a multi-second network round trip and that loop holds the gate;

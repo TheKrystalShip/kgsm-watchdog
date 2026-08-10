@@ -1,5 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
+using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
@@ -139,20 +141,60 @@ internal static class ControlEndpoints
                 WatchdogVersionInfo.FromInformational(VersionInfo.Informational),
                 WatchdogJsonContext.Default.WatchdogVersionInfo));
 
-        // Live player sessions across all instances — the in-memory session map the native ingester
-        // populates. Consumer (kgsm-api) uses this on startup to reconcile roster status without
-        // waiting for events. Returns an empty object (not 404) when no instances have tracked sessions.
-        app.MapGet("/players", (PlayerSessionStore store) =>
+        // Live player presence across all instances: who this daemon currently sees connected, and —
+        // for every instance, including the ones it sees nobody on — whether it could see anybody at
+        // all.
+        //
+        // Both halves, because either alone lies. A bare session list makes an absent instance
+        // ambiguous between "nobody is online" and "this game cannot report players", and every
+        // consumer that renders the first reading of the second states something the host does not
+        // know. The two travel together so a caller cannot read one without the other.
+        //
+        // Detection is PlayerDetection's answer — the same predicate the ingesters gate on, not a
+        // second derivation from the same config. It is re-read per request: a blueprint edit or a
+        // reinstall changes it, and this is a control call at human cadence, not a hot path.
+        app.MapGet("/players", (PlayerSessionStore store, IInstanceService instances) =>
         {
-            var all = store.GetAllSessionsWithKeys();
-            var result = new Dictionary<string, PlayerSession[]>(StringComparer.Ordinal);
-            foreach (var kvp in all)
+            var sessions = store.GetAllSessionsWithKeys();
+            var result = new Dictionary<string, InstancePresence>(StringComparer.Ordinal);
+
+            // Every instance kgsm knows, not only the ones with somebody on them — an instance
+            // missing from this map is the ambiguity the endpoint exists to remove.
+            Dictionary<string, Instance>? inventory = null;
+            try
             {
-                result[kvp.Key] = kvp.Value
-                    .Select(e => new PlayerSession(e.Key, e.Value.Id, e.Value.Name, e.Value.Addr))
-                    .ToArray();
+                inventory = instances.GetAllOrNull();
             }
-            return Results.Json(result, WatchdogJsonContext.Default.DictionaryStringPlayerSessionArray);
+            catch (Exception)
+            {
+                // Left null: reported below as detection "unknown" for whatever sessions are held,
+                // which is the honest answer when the inventory could not be read. Throwing would
+                // lose the sessions too.
+            }
+
+            foreach (var (name, instance) in inventory ?? [])
+            {
+                var players = sessions.TryGetValue(name, out var tracked)
+                    ? tracked.Select(e => new PlayerSession(e.Key, e.Value.Id, e.Value.Name, e.Value.Addr)).ToArray()
+                    : [];
+
+                result[name] = new InstancePresence(PlayerDetection.For(instance).ToString().ToLowerInvariant(), players);
+            }
+
+            // A tracked instance the inventory did not carry — uninstalled mid-flight, or the whole
+            // inventory unreadable. Its sessions are real and are reported; what cannot be honestly
+            // claimed is the detection, so it is named "unknown" rather than guessed at.
+            foreach (var (name, tracked) in sessions)
+            {
+                if (result.ContainsKey(name))
+                    continue;
+
+                result[name] = new InstancePresence(
+                    "unknown",
+                    [.. tracked.Select(e => new PlayerSession(e.Key, e.Value.Id, e.Value.Name, e.Value.Addr))]);
+            }
+
+            return Results.Json(result, WatchdogJsonContext.Default.DictionaryStringInstancePresence);
         });
 
         // Read an instance's router port-forwards. Read-only by design: the daemon opens them as it

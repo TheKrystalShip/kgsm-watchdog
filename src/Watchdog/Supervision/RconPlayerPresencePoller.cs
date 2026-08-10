@@ -57,10 +57,13 @@ internal sealed class RconPlayerPresencePoller(
     private const int MetadataCacheSeconds = 60;
 
     /// <summary>
-    /// Per-instance tracking of the last poll's player set. Keyed by instance name.
-    /// Each value is a dictionary of playerId → playerName from the previous successful poll.
+    /// Per-instance tracking of the last poll's player set. Keyed by instance name; each value holds
+    /// the previous successful poll's entries, keyed the way an entry identifies itself between polls
+    /// (<see cref="RconPlayerResponseParser.PlayerEntry.Key"/>). The whole entry is kept rather than
+    /// the key alone, so a leave reports the id the server actually stated and does not present the
+    /// key as one when the game's list carries only names.
     /// </summary>
-    private readonly ConcurrentDictionary<string, Dictionary<string, string>> _previousPollState = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Dictionary<string, RconPlayerResponseParser.PlayerEntry>> _previousPollState = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Per-instance last-poll timestamp (Environment.TickCount64, milliseconds).
@@ -78,6 +81,17 @@ internal sealed class RconPlayerPresencePoller(
     /// Per-instance timestamp of when the metadata was last refreshed.
     /// </summary>
     private readonly ConcurrentDictionary<string, long> _metadataCacheTimestamps = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per-instance signature of the most recent poll failure, held so a persistent one is logged at
+    /// warning once and at debug thereafter. Absent means the last poll succeeded.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _lastFailureSignature = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Instances already complained about for a blueprint-level problem, so it is said once.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _warned = new(StringComparer.Ordinal);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -150,6 +164,24 @@ internal sealed class RconPlayerPresencePoller(
                     continue;
                 }
 
+                // Without a pattern the response cannot be read, so polling it could only produce a
+                // roster that is empty for want of parsing — indistinguishable from nobody being
+                // connected. Skip the instance and say why, rather than report an absence as a fact.
+                if (string.IsNullOrWhiteSpace(instance.RconPlayersCommand)
+                    || !RconPlayerResponseParser.IsValidPattern(instance.RconPlayersRegex))
+                {
+                    WarnOnce(name, string.IsNullOrWhiteSpace(instance.RconPlayersCommand)
+                        ? "RCON is configured for {Instance} but its blueprint names no rcon_players_command, so there is nothing to ask for its player list — RCON presence is off for this instance"
+                        : string.IsNullOrWhiteSpace(instance.RconPlayersRegex)
+                        ? "RCON is configured for {Instance} but its blueprint sets no rcon_players_regex, so its player list cannot be read — RCON presence is off for this instance"
+                        : "RCON is configured for {Instance} but its blueprint's rcon_players_regex does not compile, so its player list cannot be read — RCON presence is off for this instance",
+                        name);
+
+                    _instanceCache[name] = null;
+                    _metadataCacheTimestamps[name] = now;
+                    continue;
+                }
+
                 _instanceCache[name] = instance;
                 _metadataCacheTimestamps[name] = now;
                 cachedInstance = instance;
@@ -170,6 +202,10 @@ internal sealed class RconPlayerPresencePoller(
                 // burst of "left" events for players who disconnected with the previous session — after
                 // the supervisor already cleared the map those events resolve against.
                 _previousPollState.TryRemove(name, out _);
+
+                // A fresh run deserves a fresh warning: whatever RCON was refusing last time is a
+                // property of a process that no longer exists.
+                _lastFailureSignature.TryRemove(name, out _);
                 continue;
             }
 
@@ -206,17 +242,17 @@ internal sealed class RconPlayerPresencePoller(
             string response = await rcon.ExecuteCommandAsync(instance.RconPlayersCommand, cancellationToken).ConfigureAwait(false);
             await rcon.DisconnectAsync().ConfigureAwait(false);
 
-            var currentPlayers = RconPlayerResponseParser.Parse(response);
-            var currentDict = new Dictionary<string, string>(StringComparer.Ordinal);
+            var currentPlayers = RconPlayerResponseParser.Parse(response, instance.RconPlayersRegex);
+            var currentDict = new Dictionary<string, RconPlayerResponseParser.PlayerEntry>(StringComparer.Ordinal);
             foreach (var player in currentPlayers)
-                currentDict[player.Id] = player.Name;
+                currentDict[player.Key] = player;
 
             // Detect joins: players in current poll but not in previous poll
             foreach (var player in currentPlayers)
             {
-                if (!previousPlayers.ContainsKey(player.Id))
+                if (!previousPlayers.ContainsKey(player.Key))
                 {
-                    string sessionKey = PlayerSessionMap.ComputeSessionKey(null, null, player.Id, player.Name) ?? player.Id;
+                    string sessionKey = PlayerSessionMap.ComputeSessionKey(null, null, player.Id, player.Name) ?? player.Key;
                     if (sessionStore.Join(name, sessionKey, player.Id, player.Name, null))
                     {
                         EmitJoined(name, player.Id, player.Name, sessionKey);
@@ -229,22 +265,23 @@ internal sealed class RconPlayerPresencePoller(
             {
                 if (!currentDict.ContainsKey(prev.Key))
                 {
-                    string sessionKey = PlayerSessionMap.ComputeSessionKey(null, null, prev.Key, prev.Value) ?? prev.Key;
-                    var resolved = sessionStore.Leave(name, sessionKey, prev.Key, prev.Value, null);
+                    RconPlayerResponseParser.PlayerEntry gone = prev.Value;
+                    string sessionKey = PlayerSessionMap.ComputeSessionKey(null, null, gone.Id, gone.Name) ?? prev.Key;
+                    var resolved = sessionStore.Leave(name, sessionKey, gone.Id, gone.Name, null);
                     if (resolved is { } r)
                     {
-                        EmitLeft(name, r.Id ?? prev.Key, r.Name ?? prev.Value, sessionKey, null);
+                        EmitLeft(name, r.Id ?? gone.Id, r.Name ?? gone.Name, sessionKey, null);
                     }
                 }
             }
 
             // Update state
             _previousPollState[name] = currentDict;
-            _lastPollTimestamps[name] = Environment.TickCount64;
+            ReportPollRecovered(name);
         }
         catch (RconException ex)
         {
-            logger.LogWarning(ex, "RCON poll failed for {Instance} on port {Port}", name, port);
+            ReportPollFailure(name, ex, "RCON poll failed for {Instance} on port {Port}", name, port);
         }
         catch (OperationCanceledException)
         {
@@ -252,8 +289,51 @@ internal sealed class RconPlayerPresencePoller(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Unexpected error during RCON poll for {Instance}", name);
+            ReportPollFailure(name, ex, "Unexpected error during RCON poll for {Instance}", name);
         }
+        finally
+        {
+            // Stamped on every outcome, not just success. Left unstamped, a failing instance never
+            // satisfies ShouldPoll's interval and is retried on each 1 Hz tick instead of on its
+            // configured cadence — so the one instance least likely to answer is polled the hardest.
+            _lastPollTimestamps[name] = Environment.TickCount64;
+        }
+    }
+
+    /// <summary>
+    /// Log a failed poll once per outage rather than once per attempt. A misconfigured or unreachable
+    /// RCON does not resolve itself between polls, so repeating the same warning with its stack trace
+    /// every interval buries the journal without adding an observation; the recovery is logged too, so
+    /// the quiet stretch between them stays bounded by something visible.
+    /// </summary>
+    private void ReportPollFailure(string instanceName, Exception ex, string message, params object?[] args)
+    {
+        string signature = $"{ex.GetType().Name}: {ex.Message}";
+        bool firstOfThisOutage = !_lastFailureSignature.TryGetValue(instanceName, out string? previous)
+            || !string.Equals(previous, signature, StringComparison.Ordinal);
+        _lastFailureSignature[instanceName] = signature;
+
+        if (firstOfThisOutage)
+            logger.LogWarning(ex, message, args);
+        else
+            logger.LogDebug(ex, message, args);
+    }
+
+    /// <summary>
+    /// Log a per-instance configuration complaint the first time it is seen. The condition is a
+    /// property of the blueprint, so it holds on every pass until someone edits it — repeating it at
+    /// the poll cadence would say nothing new.
+    /// </summary>
+    private void WarnOnce(string instanceName, string message, params object?[] args)
+    {
+        if (_warned.TryAdd(instanceName, message))
+            logger.LogWarning(message, args);
+    }
+
+    private void ReportPollRecovered(string instanceName)
+    {
+        if (_lastFailureSignature.TryRemove(instanceName, out _))
+            logger.LogInformation("RCON poll recovered for {Instance}", instanceName);
     }
 
     private bool ShouldPoll(string instanceName, int intervalSeconds)
@@ -270,13 +350,21 @@ internal sealed class RconPlayerPresencePoller(
     /// sessions carrying an id are usable — this poller diffs on the id RCON reports, and a session
     /// without one could never appear on the other side of that diff.
     /// </summary>
-    private Dictionary<string, string> SeedFromSessionMap(string instanceName)
+    private Dictionary<string, RconPlayerResponseParser.PlayerEntry> SeedFromSessionMap(string instanceName)
     {
-        var seeded = new Dictionary<string, string>(StringComparer.Ordinal);
+        var seeded = new Dictionary<string, RconPlayerResponseParser.PlayerEntry>(StringComparer.Ordinal);
         foreach (PlayerSessionMap.Session session in sessionStore.GetSessions(instanceName))
         {
-            if (!string.IsNullOrEmpty(session.Id))
-                seeded[session.Id] = session.Name ?? "";
+            // Keyed the way a parsed entry is keyed, so a session seeded here and the same player
+            // read back from RCON land on one entry rather than two.
+            string? key = !string.IsNullOrEmpty(session.Id) ? session.Id : session.Name;
+            if (string.IsNullOrEmpty(key))
+                continue;
+
+            // The name stays whatever the session holds, including nothing. Substituting the key for
+            // an absent one presents an id as a display name, and the leave this seeds would announce
+            // a player whose name is a number nobody chose.
+            seeded[key] = new RconPlayerResponseParser.PlayerEntry(session.Id, session.Name);
         }
         return seeded;
     }

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — RCON player polling reaches the game
+
+The poller has been registered and ticking all along, and never once produced an event. `RconClient`
+sent its authentication as packet type 0; Source RCON's `SERVERDATA_AUTH` is type 3. Servers answer
+with an id of -1, which the client reports as a rejected password — so the one instance on the host
+with RCON configured logged 28,796 authentication failures against a password that was correct on both
+sides. The fix and its siblings (response termination, read deadlines, split-response reassembly) are
+in kgsm-lib 4.5.1, now covered by tests that drive a real socket, because a protocol defect is only
+observable on the wire.
+
+A failing poll now stamps its own timestamp. Left unstamped, it never satisfied the interval check and
+was retried on every 1 Hz tick instead of the configured cadence, so the instance least likely to
+answer was polled the hardest — the source of those 28,796 lines, each with a stack trace. A repeated
+identical failure is logged once at warning and at debug thereafter, and the recovery is logged too.
+
+It does not report players for a stopped server and never did: the poller skips any instance the
+supervisor does not hold as running, so draining a roster at shutdown remains the supervisor's job.
+
+### Changed — the roster's shape is blueprint data, not daemon knowledge
+
+`RconPlayerResponseParser` applies the pattern an instance's blueprint supplies
+(`rcon_players_regex`, kgsm-lib 4.5.2) and holds no format of its own. Rosters are worded per game —
+Project Zomboid prints a header and one `-Name` line per player and states no id anywhere, while a
+columnar roster gives an id and a name — and both are the same operation against a different pattern.
+Adding an RCON game is a blueprint edit; it needs no build and no deploy of this daemon.
+
+An entry carries only what the server stated: `PlayerEntry.Id` is absent for a game whose roster is
+names-only, rather than filled in from the name so every entry has the same shape. An instance whose
+blueprint supplies no usable pattern is skipped with one warning naming it, because polling it could
+only yield a roster that is empty for want of parsing — indistinguishable from nobody being connected.
+
 ### Added — the player session map survives a hot-swap
 
 `HotSwapHandoff` carries every instance's player sessions across the `execv`, alongside the FIFO fds,

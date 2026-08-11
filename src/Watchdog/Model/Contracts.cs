@@ -135,3 +135,43 @@ public sealed record WatchdogVersionInfo(
             : new WatchdogVersionInfo(informational[..plus], informational[(plus + 1)..]);
     }
 }
+
+/// <summary>
+/// One run of a native instance's console — a single stretch of stdout between a spawn and the exit
+/// that followed it. <see cref="SpawnEngine"/> rotates the log on every fresh spawn, so a run's
+/// output is one file: the live <c>Instance.LogFile</c> for the run in progress, a rotated sibling in
+/// the instance's logs directory for every run before it.
+/// <para>
+/// <b><see cref="Index"/> is the handle.</b> 0 is the current run, 1 the one before it, and so on —
+/// newest first. It is the only address a client gets; the file path stays inside the daemon so a
+/// consumer cannot be tempted to read around the instance boundary.
+/// </para>
+/// <para>
+/// <b>Ordering and <see cref="EndedAt"/> come from each file's last-write time, never its name.</b>
+/// The last write IS the last line the run printed, which makes it the measured end of the run,
+/// while a name is only ever a label — and a log rotated by an older build carries a name stamped
+/// with the rotation moment instead, which for an instance that sat stopped is days off. Reading the
+/// filesystem rather than the label is what keeps those files ordered correctly.
+/// </para>
+/// </summary>
+/// <param name="Index">Newest-first position; 0 is the most recent run.</param>
+/// <param name="Current">
+/// Whether this run is IN PROGRESS — a process alive in the instance's cgroup, writing this file
+/// right now. Holding the live log is not enough: an instance that stopped, or that crashed with no
+/// restart behind it, keeps its last log at that path until the next spawn rotates it, and that run
+/// is over. At most one run is current, and a stopped instance has none.
+/// </param>
+/// <param name="EndedAt">
+/// When the run's output stopped, UTC. Null only while <see cref="Current"/> — a run in progress has
+/// no end, and a timestamp there would claim otherwise. Every finished run has one, including the
+/// unrotated last run of a stopped instance, which is what lets a caller correlate a crash against
+/// the run that ended at it even when nothing restarted afterwards.
+/// </param>
+/// <param name="LastOutputAt">When the run last printed, UTC. Always measured, for every run.</param>
+/// <param name="SizeBytes">The run's console size on disk.</param>
+public sealed record ConsoleRun(
+    int Index,
+    bool Current,
+    DateTime? EndedAt,
+    DateTime LastOutputAt,
+    long SizeBytes);

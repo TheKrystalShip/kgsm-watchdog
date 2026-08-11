@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — a console has runs, and they are addressable
+
+The log rotates on every fresh spawn, so a crash and the restart that followed it leave the cause in
+one file and a clean boot in another. `GET /console/{name}?tail=N` could only ever read the live one,
+which made it blind to a crash precisely when the daemon had healed it — the case where nothing else
+is left to look at.
+
+`GET /console/{name}/runs` lists which stretches of console exist, newest first, and when each ended.
+`?run=I` reads one of them; it defaults to 0, so the existing call is unchanged. A caller correlating
+an event against output asks which run ended when and reads that one, never having to know rotation
+exists or guess a path — the file stays inside the daemon and the index is the only handle.
+
+Each response is **one run**. Splicing two into a single body would read as continuous text and invite
+a caller to narrate a stack trace and the boot after it as one timeline, from two different processes.
+
+Ordering and `endedAt` come from each file's last-write time, never its name. The last write is the
+last line a run printed, which makes it the measured end; a name is only a label, and a log rotated by
+an older build is labelled with the rotation moment — days off for an instance that sat stopped.
+
+`current` means a process is alive in the instance's cgroup writing that file right now, not merely
+that the file is the live path. A stopped instance — or one that crashed with nothing restarting it —
+keeps its last log there until the next spawn rotates it, and that run is over: it reports
+`current: false` with a real `endedAt`, which is what lets the crashed run be found by its end time
+even when no restart followed.
+
 ### Fixed — a rotated log is named for when the run ended
 
 `SpawnEngine.RotateLogFile` stamps the rotated filename from the log's last write — the last line the

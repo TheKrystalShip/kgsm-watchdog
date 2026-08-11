@@ -25,4 +25,6 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 [JsonSerializable(typeof(Dictionary<string, InstancePresence>))] // GET /players — every instance, keyed by name
 [JsonSerializable(typeof(UpnpMapping))] // GET /upnp/{name} — one IGD redirection row
 [JsonSerializable(typeof(UpnpListResult))] // GET /upnp/{name} — the instance's IGD mappings + honest state
+[JsonSerializable(typeof(ConsoleRun))] // GET /console/{name}/runs — one run of an instance's console
+[JsonSerializable(typeof(ConsoleRun[]))] // GET /console/{name}/runs — the run list, newest first
 internal sealed partial class WatchdogJsonContext : JsonSerializerContext;

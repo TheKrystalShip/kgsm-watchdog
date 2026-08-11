@@ -220,13 +220,18 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
     /// <c>LastReadResetSession</c> cleanly on the very next read (an in-place truncate only helps via
     /// its weaker same-inode "shrink" safety net).
     /// <para>
-    /// <b>Why this matters (Increment 9 divergence, tracked in PLAN.md):</b> before this fix,
-    /// <see cref="Spawn"/> appended to the same log path forever. <c>NativeReadinessMatcher.MatchesExistingContent</c>
-    /// does a one-shot WHOLE-FILE scan on every fresh-spawn start edge to catch a late attach — on the
-    /// 2nd+ start of an instance that scan re-read the PREVIOUS run's already-logged ready line and
-    /// fired <c>instance-ready</c> immediately, collapsing the honest "Starting" window. Rotating the
-    /// log on every fresh spawn means the whole-file scan (and the player-presence tail) can only ever
-    /// see the CURRENT run's content.
+    /// <b>Why this happens at spawn.</b> <c>NativeReadinessMatcher.MatchesExistingContent</c> does a
+    /// one-shot WHOLE-FILE scan on every fresh-spawn start edge to catch a late attach. Rotating the
+    /// log immediately before each spawn is what guarantees that scan (and the player-presence tail)
+    /// can only ever see the CURRENT run's content — without it, the scan matches the PREVIOUS run's
+    /// already-logged ready line and fires <c>instance-ready</c> at once, collapsing the honest
+    /// "Starting" window. The guarantee has to hold at the moment of the spawn, which is why it is
+    /// asserted here rather than at the preceding exit (an exit has no hook on a crash, a SIGKILL, or
+    /// a host power loss).
+    /// </para>
+    /// <para>
+    /// <b>The rotated name is the run's END time</b>, read from the file's last write rather than the
+    /// clock at rotation — the two differ by however long the instance stayed stopped.
     /// </para>
     /// <para>
     /// Best-effort and non-fatal: absent/empty file (first-ever spawn, or an already-rotated-clean
@@ -253,7 +258,12 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
             string dir = !string.IsNullOrEmpty(logsDir) ? logsDir : (info.DirectoryName ?? string.Empty);
             string stem = Path.GetFileNameWithoutExtension(logPath);
             string ext = Path.GetExtension(logPath); // includes the leading '.', or "" if none
-            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
+
+            // The name is the run's END time, taken from the file's last write — the last line the
+            // process printed. The rotation moment is a different quantity: an instance stopped on
+            // Monday and started on Friday rotates on Friday, and naming that run "Friday" misplaces
+            // it by four days for anything correlating a run against a timestamp.
+            string timestamp = info.LastWriteTimeUtc.ToString("yyyy-MM-ddTHH:mm:ss");
             string rotated = Path.Combine(dir, $"{stem}.{timestamp}{ext}");
 
             if (File.Exists(rotated))

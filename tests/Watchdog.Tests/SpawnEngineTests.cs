@@ -7,8 +7,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// <summary>
 /// Covers the pure, security-relevant helpers in the spawn path: the envsubst-equivalent the daemon
 /// runs over <c>executable_arguments</c> before the launcher word-splits them, and
-/// <see cref="SpawnEngine.RotateLogFile"/> — the fresh-spawn log rotation fix (PLAN.md Increment 9
-/// follow-up) that keeps <c>NativeReadinessMatcher.MatchesExistingContent</c>'s whole-file late-attach
+/// <see cref="SpawnEngine.RotateLogFile"/> — the fresh-spawn log rotation that keeps
+/// <c>NativeReadinessMatcher.MatchesExistingContent</c>'s whole-file late-attach
 /// scan from resurrecting a prior run's stale ready line on an instance's 2nd+ start. (The fork itself
 /// needs a real instance + cgroup and is exercised live, not in the unit suite — see
 /// <see cref="NativePlayerPresenceIngesterTests"/> for the end-to-end readiness-across-rotation
@@ -122,7 +122,27 @@ public sealed class SpawnEngineTests : IDisposable
         Assert.Null(SpawnEngine.ValidateSpawnable(inst));
     }
 
-    // ---- RotateLogFile (fresh-spawn log rotation — Increment 9 follow-up) ---------------------
+    // ---- RotateLogFile (fresh-spawn log rotation) ---------------------------------------------
+
+    [Fact]
+    public void RotateLogFile_names_the_rotated_file_for_when_the_run_ENDED()
+    {
+        string logsDir = Path.Combine(_tempDir, "logs");
+        Directory.CreateDirectory(logsDir);
+
+        string log = Path.Combine(_tempDir, "romestead.log");
+        File.WriteAllText(log, "Unhandled exception. System.NullReferenceException\n");
+
+        // The run ended days before this rotation — an instance stopped Monday, started Friday. The
+        // name must say when the server last printed, not when the next spawn happened to rotate it.
+        var ended = new DateTime(2026, 7, 1, 21, 26, 10, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(log, ended);
+
+        NewEngine().RotateLogFile(log, logsDir);
+
+        string rotated = Assert.Single(Directory.GetFiles(logsDir, "romestead.*.log"));
+        Assert.Equal("romestead.2026-07-01T21:26:10.log", Path.GetFileName(rotated));
+    }
 
     [Fact]
     public void RotateLogFile_moves_a_nonempty_prior_run_log_to_logs_dir()

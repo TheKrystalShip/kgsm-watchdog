@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a rotated log is named for when the run ended
+
+`SpawnEngine.RotateLogFile` stamps the rotated filename from the log's last write — the last line the
+server printed — instead of the clock at the moment of rotation. The two are the same quantity only
+when a restart is immediate; every stopped interval separates them. An instance stopped on the 1st
+and started on the 5th produced `romestead.2026-07-05T11:47:49.log` for a run whose final line was
+written on the 1st at 21:26:10, misplacing that run by three and a half days for anything correlating
+a run against a timestamp.
+
+Rotation still happens at spawn, which is what guarantees `NativeReadinessMatcher`'s whole-file
+late-attach scan can only ever see the current run's content — an exit has no hook on a crash, a
+SIGKILL or a host power loss, so the guarantee is asserted where it has to hold.
+
 ### Fixed — a port two instances share belongs to both of them
 
 A router forward is one row per (port, protocol) however many instances declare it, and `upnpc`

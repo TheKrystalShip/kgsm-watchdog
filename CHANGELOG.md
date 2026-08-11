@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a port two instances share belongs to both of them
+
+A router forward is one row per (port, protocol) however many instances declare it, and `upnpc`
+addresses it by port with no owner attached. Two servers sharing an external port — Steam's
+`27015/udp` across a Palworld and a Stationeers instance, say — therefore share one row, and both
+halves of the UPnP lifetime were reading that row as belonging to exactly one of them.
+
+**A stop released ports a sibling was still running on.** `upnpc -f <port> <proto>` deletes by port,
+so the first instance to stop deleted the shared row and took the other off the air from outside,
+until the sweep noticed and put it back. Retention now decides what a close may delete: the ports
+another desired-running instance still wants stay mapped, and the last instance standing is the one
+that releases them. The predicate is desired-running rather than "cgroup is populated", so a sibling
+mid-crash-restart keeps its forward — a dead process does not drop a router lease and the respawn
+still needs it. Every close site asks (`InstanceSupervisor`'s stop, the sweep's mid-re-assert undo,
+and the container lifecycle ingester), and `CloseAsync` has no overload that omits the question, so a
+new one cannot inherit the bug by forgetting to ask. The `instance-upnp-closed` event reports what was
+actually released rather than the instance's declared set, and a close with nothing left to release is
+`Skipped`, not a removal that never happened.
+
+**The sweep read a sibling's tag as its own forward being dropped.** `upnpc -r` on a port the IGD
+already holds overwrites the description, so whichever instance started last owned the tag — and
+matching on the tag alone made the sweep report a forward that was present and correct as *"the router
+dropped 1 forward(s) … while it was running"*, re-open it, hand the tag back, and warn again on the
+next sweep for as long as both instances ran. Each pass emitted a fabricated `instance-upnp-reasserted`
+event. A row now satisfies a configured port when it *is* the mapping the daemon would open — same
+port and protocol, pointing at this host on the port it forwards — with this host's LAN address read
+off the same `upnpc -l` listing the sweep already fetches. The tag still counts on its own, a row
+pointing at another host or translating to a different internal port still reads as missing, and a
+listing that reported no local address falls back to matching on the tag.
+
 ### Changed — `GET /players` answers whether a roster is knowable, not just who is on it
 
 The endpoint listed only instances with tracked sessions, so an absent instance was ambiguous between

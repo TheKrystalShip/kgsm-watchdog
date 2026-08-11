@@ -14,6 +14,10 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// </summary>
 public sealed class UpnpServiceTests
 {
+    /// <summary>Nothing else claims these ports — the close is free to release its whole declared set.</summary>
+    private static readonly IReadOnlySet<(int Port, string Protocol)> NoClaims =
+        new HashSet<(int, string)>();
+
     [Fact]
     public void BuildUpnpcArgs_open_mirrors_upnpc_dash_e_dash_r()
     {
@@ -75,7 +79,59 @@ public sealed class UpnpServiceTests
         };
 
         Assert.Equal(UpnpOutcome.Skipped, await svc.OpenAsync(instance));
-        Assert.Equal(UpnpOutcome.Skipped, await svc.CloseAsync(instance));
+        Assert.Equal(UpnpOutcome.Skipped, await svc.CloseAsync(instance, NoClaims));
+    }
+
+    // ---- a close never deletes a port something else is still running on --------------------------
+
+    [Fact]
+    public void Excluding_drops_the_ports_another_instance_still_claims()
+    {
+        // Ketchup declares 8211 and 27015; a sibling on 27015 is still running. Only 8211 is Ketchup's
+        // to release — deleting 27015 would take the sibling off the air, because `upnpc -f` addresses
+        // a mapping by port alone and the IGD holds one row for both of them.
+        List<(int Port, string Protocol)> ports = [(8211, "udp"), (27015, "udp")];
+        var retain = new HashSet<(int, string)> { (27015, "udp") };
+
+        Assert.Equal([(8211, "udp")], PortSets.Excluding(ports, retain));
+    }
+
+    [Fact]
+    public void Excluding_matches_a_claim_whatever_case_the_protocol_arrives_in()
+    {
+        List<(int Port, string Protocol)> ports = [(27015, "UDP")];
+        var retain = new HashSet<(int, string)> { (27015, "udp") };
+
+        Assert.Empty(PortSets.Excluding(ports, retain));
+    }
+
+    [Fact]
+    public void Excluding_keeps_a_port_claimed_on_the_other_protocol()
+    {
+        // Protocol is part of a port's identity: a sibling holding 21025/tcp says nothing about 21025/udp.
+        List<(int Port, string Protocol)> ports = [(21025, "udp")];
+        var retain = new HashSet<(int, string)> { (21025, "tcp") };
+
+        Assert.Equal([(21025, "udp")], PortSets.Excluding(ports, retain));
+    }
+
+    [Fact]
+    public async Task CloseAsync_skips_without_touching_the_router_when_every_port_is_still_claimed()
+    {
+        // Nothing left to release means nothing changed on the router, so this is Skipped and NOT
+        // Applied — an "upnp closed" event here would record a removal that never happened. It also
+        // returns before upnpc is ever spawned, which is what keeps this test off a live IGD.
+        var svc = new UpnpService(NullLogger<UpnpService>.Instance);
+        var instance = new Instance
+        {
+            Name = "stationeers",
+            EnablePortForwarding = true,
+            Ports = [new PortMapping { Start = 27015, End = 27015, Protocol = "udp" }],
+        };
+
+        var retain = new HashSet<(int, string)> { (27015, "udp") };
+
+        Assert.Equal(UpnpOutcome.Skipped, await svc.CloseAsync(instance, retain));
     }
 
     [Fact]

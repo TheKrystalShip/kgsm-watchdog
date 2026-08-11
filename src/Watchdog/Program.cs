@@ -146,6 +146,11 @@ builder.Services.AddKgsmFirewallClient(options.FirewallSocketPath);
 builder.Services.AddSingleton<FirewallPortsService>();
 builder.Services.AddSingleton<InstanceSupervisor>();
 
+// The supervisor holds desired-state, so it is what can answer which forwarded ports are still claimed
+// when one instance releases its own. Exposed as the narrow read-only query rather than the whole
+// supervisor, so the container lifecycle ingester can ask without becoming a client of supervision.
+builder.Services.AddSingleton<IForwardedPortClaims>(sp => sp.GetRequiredService<InstanceSupervisor>());
+
 // Inc 7 Phase 3+4 — the self-re-exec hot-swap (Option 3): on SIGHUP (systemctl reload) the daemon
 // execv's the freshly-deployed binary IN PLACE (same PID), carrying each live game's stdin-FIFO fd open
 // across the exec, so the game never sees stdin EOF. The coordinator runs the --selfcheck safety gate +

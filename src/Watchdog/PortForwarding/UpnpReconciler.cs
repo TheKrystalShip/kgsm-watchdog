@@ -20,8 +20,13 @@ namespace TheKrystalShip.KGSM.Watchdog.PortForwarding;
 /// to negotiate one. What holds instead is the same rule the supervisor already applies to cgroups —
 /// measure what is actually there, compare it to what should be, and close the difference. That covers
 /// every cause uniformly, including the ones with no signal attached: a silent drop, a router reboot,
-/// and a sibling instance whose stop deleted a shared external port out from under this one
-/// (<c>upnpc -f</c> deletes by port, with no owner check).
+/// table pressure.
+/// </para>
+/// <para>
+/// A forward two instances share is <b>not</b> one of those causes. They share one router row, and which
+/// of them the row is tagged for says nothing about whether it is doing its job — so the diff compares
+/// the row's target rather than its label, and a stop leaves a port its siblings still want mapped
+/// (<see cref="IForwardedPortClaims"/>) instead of deleting it for this sweep to notice and repair.
 /// </para>
 /// <para>
 /// The sweep is deliberately cheap and deliberately timid. It costs nothing while no forwarding
@@ -103,7 +108,8 @@ internal sealed class UpnpReconciler(
 
     private async Task ReassertAsync(ForwardingCandidate candidate, UpnpTable table, CancellationToken ct)
     {
-        List<PortMapping> missing = MissingPorts(candidate.Spec.Ports, table.Mappings, candidate.Name);
+        List<PortMapping> missing =
+            MissingPorts(candidate.Spec.Ports, table.Mappings, candidate.Name, table.LocalAddress);
         if (missing.Count == 0)
             return;
 
@@ -129,7 +135,13 @@ internal sealed class UpnpReconciler(
             logger.LogInformation(
                 "UPnP reconcile: {Instance} stopped mid-re-assert; releasing the forwards just restored",
                 candidate.Name);
-            await upnp.CloseAsync(candidate.Spec, missing, CancellationToken.None).ConfigureAwait(false);
+
+            // Releasing is still an ownerless delete, so it asks the same question a stop does: a port
+            // another instance is running on is not this one's to take down, even when this one only
+            // restored it a moment ago.
+            await upnp.CloseAsync(
+                candidate.Spec, missing, supervisor.ForwardedPortsHeldByOthers(candidate.Name),
+                CancellationToken.None).ConfigureAwait(false);
             return;
         }
 
@@ -140,11 +152,24 @@ internal sealed class UpnpReconciler(
     /// Which of an instance's configured ports the router is not currently forwarding for it. Pure, so
     /// the diff that decides whether to touch the router at all is unit-tested apart from the shell-out.
     /// <para>
-    /// A row counts as this instance's only when its description matches the ownership tag the watchdog
-    /// writes on open (<c>upnpc -e &lt;name&gt;</c>). A mapping on the same external port owned by
-    /// something else — another host on the LAN, a different instance, a hand-made rule — is deliberately
-    /// NOT counted as ours: re-opening would silently steal the port from its owner, and this daemon only
-    /// ever asserts mappings it can claim.
+    /// A row satisfies a configured port when it <em>is</em> the mapping this daemon would open for it:
+    /// same external port and protocol, pointing at this host (<paramref name="localAddress"/>, as the
+    /// IGD reported it) on the port it forwards. That is the honest test, because the description is a
+    /// label and the forward is the fact. Two instances sharing an external port share one identical
+    /// router row, and whichever opened it last owns the tag — matching on the tag alone would read that
+    /// as the other one's forward having been dropped and re-open a mapping that is already correct,
+    /// every sweep, for as long as both run.
+    /// </para>
+    /// <para>
+    /// A row on the same external port pointing <em>somewhere else</em> — another host on the LAN, a
+    /// different internal port, a hand-made rule — is not this mapping and still reads as missing. The
+    /// tag is honoured as well, so a row this instance opened counts as its own even if the router
+    /// rewrote the target.
+    /// </para>
+    /// <para>
+    /// With no <paramref name="localAddress"/> the target cannot be checked and matching falls back to
+    /// the tag alone: a listing that did not say where this host is cannot be used to conclude a row
+    /// points at it.
     /// </para>
     /// <para>
     /// The result is re-collapsed into <see cref="PortMapping"/> ranges so what gets reported is the
@@ -153,44 +178,21 @@ internal sealed class UpnpReconciler(
     /// </para>
     /// </summary>
     internal static List<PortMapping> MissingPorts(
-        IReadOnlyList<PortMapping> configured, IReadOnlyList<UpnpMapping> table, string instanceName)
+        IReadOnlyList<PortMapping> configured, IReadOnlyList<UpnpMapping> table, string instanceName,
+        string? localAddress = null)
     {
-        var held = new HashSet<(int Port, string Protocol)>(
-            table
-                .Where(m => string.Equals(m.Description, instanceName, StringComparison.Ordinal))
-                .Select(m => (m.ExternalPort, m.Protocol.ToLowerInvariant())));
-
-        List<(int Port, string Protocol)> gaps =
-            [.. configured.Expand().Where(p => !held.Contains((p.Port, p.Protocol.ToLowerInvariant())))];
-
-        return Collapse(gaps);
-    }
-
-    /// <summary>
-    /// Re-collapse expanded (port, protocol) pairs into contiguous <see cref="PortMapping"/> ranges,
-    /// grouped by protocol — the inverse of <c>Expand()</c>, so a gap spanning a whole configured range
-    /// is reported as that range rather than as N single ports.
-    /// </summary>
-    private static List<PortMapping> Collapse(List<(int Port, string Protocol)> ports)
-    {
-        var result = new List<PortMapping>();
-        foreach (var group in ports.GroupBy(p => p.Protocol, StringComparer.OrdinalIgnoreCase))
+        var held = new HashSet<(int Port, string Protocol)>();
+        foreach (UpnpMapping m in table)
         {
-            int[] sorted = [.. group.Select(p => p.Port).Distinct().Order()];
-            for (int i = 0; i < sorted.Length;)
-            {
-                int start = sorted[i];
-                int end = start;
-                while (i + 1 < sorted.Length && sorted[i + 1] == end + 1)
-                {
-                    end = sorted[++i];
-                }
+            bool tagged = string.Equals(m.Description, instanceName, StringComparison.Ordinal);
+            bool pointsHere = localAddress is { Length: > 0 }
+                              && m.InternalPort == m.ExternalPort
+                              && string.Equals(m.InternalClient, localAddress, StringComparison.OrdinalIgnoreCase);
 
-                i++;
-                result.Add(new PortMapping { Start = start, End = end, Protocol = group.Key });
-            }
+            if (tagged || pointsHere)
+                held.Add((m.ExternalPort, m.Protocol.ToLowerInvariant()));
         }
 
-        return result;
+        return PortSets.Collapse(configured.Expand().Where(p => !held.Contains((p.Port, p.Protocol.ToLowerInvariant()))));
     }
 }

@@ -45,7 +45,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     /// <see cref="UpnpOutcome"/> so the caller emits an audit event only on a confirmed mapping.
     /// </summary>
     public Task<UpnpOutcome> OpenAsync(Instance instance, CancellationToken ct = default)
-        => ApplyAsync(instance, open: true, portsOverride: null, ct);
+        => ApplyAsync(instance, open: true, portsOverride: null, retain: null, ct);
 
     /// <summary>
     /// Open UPnP mappings for an explicit subset of the instance's ports rather than all of them — what
@@ -57,7 +57,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     /// </summary>
     public Task<UpnpOutcome> OpenAsync(
         Instance instance, IReadOnlyList<PortMapping>? portsOverride, CancellationToken ct = default)
-        => ApplyAsync(instance, open: true, portsOverride, ct);
+        => ApplyAsync(instance, open: true, portsOverride, retain: null, ct);
 
     /// <summary>
     /// Close an explicit subset of the instance's UPnP mappings. Used to undo a re-assert that landed
@@ -65,18 +65,28 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     /// something no longer running is exactly the state the open/close lifetime exists to prevent.
     /// </summary>
     public Task<UpnpOutcome> CloseAsync(
-        Instance instance, IReadOnlyList<PortMapping>? portsOverride, CancellationToken ct = default)
-        => ApplyAsync(instance, open: false, portsOverride, ct);
+        Instance instance, IReadOnlyList<PortMapping>? portsOverride,
+        IReadOnlySet<(int Port, string Protocol)> retain, CancellationToken ct = default)
+        => ApplyAsync(instance, open: false, portsOverride, retain, ct);
 
     /// <summary>
     /// Close the instance's UPnP mappings (no-op unless <c>enable_port_forwarding</c>). Returns the
     /// <see cref="UpnpOutcome"/> so the caller emits an audit event only on a confirmed removal.
+    /// <para>
+    /// <paramref name="retain"/> is the set of ports some other instance still wants forwarded, and it
+    /// is not optional — see <see cref="IForwardedPortClaims"/> for why an ownerless
+    /// <c>upnpc -f</c> makes every close a potential sibling outage. Pass an empty set to state that
+    /// nothing else claims these ports; there is deliberately no overload that omits it, so a new close
+    /// site cannot inherit the bug by forgetting to ask.
+    /// </para>
     /// </summary>
-    public Task<UpnpOutcome> CloseAsync(Instance instance, CancellationToken ct = default)
-        => ApplyAsync(instance, open: false, portsOverride: null, ct);
+    public Task<UpnpOutcome> CloseAsync(
+        Instance instance, IReadOnlySet<(int Port, string Protocol)> retain, CancellationToken ct = default)
+        => ApplyAsync(instance, open: false, portsOverride: null, retain, ct);
 
     private async Task<UpnpOutcome> ApplyAsync(
-        Instance instance, bool open, IReadOnlyList<PortMapping>? portsOverride, CancellationToken ct)
+        Instance instance, bool open, IReadOnlyList<PortMapping>? portsOverride,
+        IReadOnlySet<(int Port, string Protocol)>? retain, CancellationToken ct)
     {
         string action = open ? "open" : "close";
 
@@ -98,6 +108,33 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
             logger.LogInformation(
                 "UPnP {Action} skipped for {Instance}: no ports configured", action, instance.Name);
             return UpnpOutcome.Skipped;
+        }
+
+        // A close deletes by external port with no owner attached, so a port some other instance still
+        // wants forwarded is not this instance's to release — the IGD holds one row per (port, protocol)
+        // however many instances declare it, and the tag on that row only records who opened it last.
+        // Subtracting the retained set is what makes the last instance standing the one that releases
+        // the port, instead of the first one to stop taking its siblings off the air.
+        if (!open && retain is { Count: > 0 })
+        {
+            List<(int Port, string Protocol)> releasing = PortSets.Excluding(ports, retain);
+
+            if (releasing.Count != ports.Count)
+            {
+                logger.LogInformation(
+                    "UPnP close for {Instance}: {Kept} port(s) stay mapped for another running instance ({Ports})",
+                    instance.Name,
+                    ports.Count - releasing.Count,
+                    string.Join("|", ports.Where(p => retain.Holds(p.Port, p.Protocol))
+                        .Select(p => $"{p.Port}/{p.Protocol}")));
+            }
+
+            // Every port is still claimed elsewhere — there is nothing this instance may delete, and
+            // nothing changed on the router, so this is a Skipped (no close event to emit).
+            if (releasing.Count == 0)
+                return UpnpOutcome.Skipped;
+
+            ports = releasing;
         }
 
         return await RunUpnpcAsync(BuildUpnpcArgs(open, instance.Name, ports), open, instance.Name, ct)
@@ -171,6 +208,12 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     /// filtering. Confirms the output is a real listing (carries upnpc's "Found valid IGD" marker AND no
     /// "No IGD" banner) before reporting <see cref="UpnpTable.Reached"/>; anything else is an honest
     /// not-reached, never an empty table that would fabricate the absence of forwards.
+    /// <para>
+    /// Also lifts this host's LAN address off the same listing (upnpc's "Local LAN ip address" line), so
+    /// a row's target can be checked against the address the router itself resolved us to. Reading it
+    /// here costs nothing — it is on the output already fetched — and it is measured rather than inferred
+    /// from a local interface, which is the whole reason a mapping's target can be trusted.
+    /// </para>
     /// </summary>
     internal static UpnpTable ParseTable(bool launched, bool timedOut, string stdout)
     {
@@ -188,13 +231,36 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
             return new UpnpTable(false, []);
 
         var mappings = new List<UpnpMapping>();
+        string? localAddress = null;
         foreach (string line in stdout.Split('\n'))
         {
             if (TryParseMappingRow(line, out UpnpMapping? mapping))
                 mappings.Add(mapping);
+            else
+                localAddress ??= TryParseLocalAddress(line);
         }
 
-        return new UpnpTable(true, mappings);
+        return new UpnpTable(true, mappings, localAddress);
+    }
+
+    /// <summary>
+    /// Lift this host's LAN address out of upnpc's <c>Local LAN ip address : 192.168.1.128</c> line.
+    /// Returns null for any other line, so the caller keeps the first one it finds and reports null when
+    /// the listing carried none.
+    /// </summary>
+    internal static string? TryParseLocalAddress(string line)
+    {
+        const string Marker = "Local LAN ip address";
+        int start = line.IndexOf(Marker, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+            return null;
+
+        int colon = line.IndexOf(':', start + Marker.Length);
+        if (colon < 0)
+            return null;
+
+        string value = line[(colon + 1)..].Trim();
+        return value.Length == 0 ? null : value;
     }
 
     /// <summary>

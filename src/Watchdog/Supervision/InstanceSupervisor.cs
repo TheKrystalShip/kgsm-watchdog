@@ -46,7 +46,7 @@ internal sealed class InstanceSupervisor(
     UpnpService upnp,
     FirewallPortsService firewall,
     PlayerSessionStore sessions,
-    ILogger<InstanceSupervisor> logger) : IDisposable
+    ILogger<InstanceSupervisor> logger) : IDisposable, IForwardedPortClaims
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -1138,6 +1138,24 @@ internal sealed class InstanceSupervisor(
                          && cgroups.IsPopulated(si.Name))
             .Select(si => new ForwardingCandidate(si.Name, si.Spec))];
 
+    /// <inheritdoc />
+    public IReadOnlySet<(int Port, string Protocol)> ForwardedPortsHeldByOthers(string excluding)
+    {
+        var held = new HashSet<(int Port, string Protocol)>();
+        foreach (SupervisedInstance si in _instances.Values)
+        {
+            if (string.Equals(si.Name, excluding, StringComparison.Ordinal))
+                continue;
+            if (!si.DesiredRunning || !si.Spec.EnablePortForwarding)
+                continue;
+
+            foreach (var (port, protocol) in si.Spec.Ports.Expand())
+                held.Add((port, protocol.ToLowerInvariant()));
+        }
+
+        return held;
+    }
+
     /// <summary>
     /// Whether an instance is still running <em>right now</em> — the sweep's re-check after a re-assert.
     /// A stop can land while upnpc is mid-call, and a forward left behind for something that is no longer
@@ -1392,8 +1410,14 @@ internal sealed class InstanceSupervisor(
     /// off-thread, emit-only-on-applied, swallow-and-log — live in one place rather than being restated by
     /// every side effect that hangs off these edges.
     /// </para>
+    /// <para>
+    /// <paramref name="appliedPorts"/> overrides the ports the event reports for a side effect that acts
+    /// on less than the instance declares — the event must name what actually changed, and the declared
+    /// set is only the right answer when the whole of it was applied.
+    /// </para>
     /// </summary>
-    private void FireAndForget(string what, Instance spec, Func<Task<bool>> apply, string appliedEvent)
+    private void FireAndForget(
+        string what, Instance spec, Func<Task<bool>> apply, string appliedEvent, string? appliedPorts = null)
         => _ = Task.Run(async () =>
         {
             try
@@ -1401,7 +1425,7 @@ internal sealed class InstanceSupervisor(
                 // The watchdog is the actor that drove the change, so it stamps system/system and renders
                 // the ports back to the canonical UFW string the kgsm events-emit positional arg expects.
                 if (await apply().ConfigureAwait(false))
-                    EmitSystemEvent(appliedEvent, spec.Name, spec.Ports.ToUfwSpec());
+                    EmitSystemEvent(appliedEvent, spec.Name, appliedPorts ?? spec.Ports.ToUfwSpec());
             }
             catch (Exception ex) { logger.LogWarning(ex, "{What} task faulted for {Instance}", what, spec.Name); }
         });
@@ -1419,11 +1443,30 @@ internal sealed class InstanceSupervisor(
     /// <summary>
     /// Best-effort UPnP close on a deliberate stop. Same posture as <see cref="OpenPortForwarding"/>;
     /// a confirmed removal emits the close event.
+    /// <para>
+    /// Only the ports no other instance still wants are released — a router forward is one row per
+    /// (port, protocol) whoever declares it, so a stop that deleted its whole declared set would take a
+    /// still-running sibling off the air (<see cref="IForwardedPortClaims"/>).
+    /// </para>
     /// </summary>
     private void ClosePortForwarding(Instance spec)
-        => FireAndForget("UPnP close", spec,
-            async () => await upnp.CloseAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied,
-            "instance-upnp-closed");
+    {
+        // Read at the stop edge rather than inside the task: this instance's own intent is already
+        // cleared by the time we get here, so what comes back is exactly what OTHER instances claim.
+        IReadOnlySet<(int Port, string Protocol)> retain = ForwardedPortsHeldByOthers(spec.Name);
+
+        // The event names what was actually released. A shared port that stays mapped for a sibling was
+        // not closed, and reporting it as closed would put a transition that never happened into the
+        // audit trail. Nothing retained means the declared set IS the released set, reported in its
+        // original range form.
+        string released = retain.Count == 0
+            ? spec.Ports.ToUfwSpec()
+            : PortSets.Collapse(spec.Ports.Expand().Where(p => !retain.Holds(p.Port, p.Protocol))).ToUfwSpec();
+
+        FireAndForget("UPnP close", spec,
+            async () => await upnp.CloseAsync(spec, retain).ConfigureAwait(false) == UpnpOutcome.Applied,
+            "instance-upnp-closed", released);
+    }
 
     /// <summary>
     /// Best-effort host-firewall open on a fresh bring-up, the host-side peer of

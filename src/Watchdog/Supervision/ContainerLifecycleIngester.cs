@@ -45,6 +45,7 @@ internal sealed class ContainerLifecycleIngester(
     WatchdogOptions options,
     IInstanceService instances,
     UpnpService upnp,
+    IForwardedPortClaims claims,
     ILogger<ContainerLifecycleIngester> logger) : BackgroundService
 {
     // One live tail per discovered channel path, keyed by absolute path — mirrors
@@ -200,7 +201,12 @@ internal sealed class ContainerLifecycleIngester(
             }
             else // TypeStopping
             {
-                UpnpOutcome outcome = await upnp.CloseAsync(instance, ct).ConfigureAwait(false);
+                // A container's stop deletes router rows by port like any other, so it asks the same
+                // question a native stop does before releasing anything — a port a supervised instance
+                // is still running on is not this container's to take down.
+                UpnpOutcome outcome = await upnp
+                    .CloseAsync(instance, claims.ForwardedPortsHeldByOthers(instanceName), ct)
+                    .ConfigureAwait(false);
                 logger.LogInformation(
                     "container lifecycle {Type} for {Instance}: UPnP close -> {Outcome}",
                     result.Type, instanceName, outcome);

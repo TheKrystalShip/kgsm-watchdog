@@ -186,4 +186,83 @@ public sealed class UpnpReconcilerTests
         Assert.False(UpnpService.ParseTable(launched: false, timedOut: false, "").Reached);
         Assert.False(UpnpService.ParseTable(launched: true, timedOut: true, "").Reached);
     }
+
+    [Fact]
+    public void ParseTable_lifts_this_hosts_lan_address_off_the_listing()
+    {
+        var table = UpnpService.ParseTable(launched: true, timedOut: false, TwoOwnersList);
+
+        Assert.Equal("192.168.1.128", table.LocalAddress);
+    }
+
+    [Fact]
+    public void ParseTable_reports_no_local_address_when_the_listing_carried_none()
+    {
+        // Nothing may be inferred from its absence — the caller falls back to matching on the tag.
+        string noLocalLine = TwoOwnersList.Replace("Local LAN ip address : 192.168.1.128\n", "");
+
+        Assert.Null(UpnpService.ParseTable(launched: true, timedOut: false, noLocalLine).LocalAddress);
+    }
+
+    // ---- a port two instances share ---------------------------------------------------------------
+
+    [Fact]
+    public void A_shared_port_a_sibling_opened_last_is_not_missing_because_the_forward_is_ours_too()
+    {
+        // Two instances declaring the same external port share ONE router row: `upnpc -r` on a port the
+        // IGD already holds overwrites the description rather than adding a second row, so whichever
+        // started last owns the tag. The row still forwards this port to this host, which is the whole
+        // of what either instance needs — reading the tag as ownership would report a forward that is
+        // present and correct as dropped, and re-open it on every sweep for as long as both run.
+        List<PortMapping> configured = [new() { Start = 27015, End = 27015, Protocol = "udp" }];
+        List<UpnpMapping> table = [Row(27015, "udp", "stationeers")];
+
+        Assert.Empty(UpnpReconciler.MissingPorts(configured, table, "Ketchup", "192.168.1.128"));
+    }
+
+    [Fact]
+    public void A_shared_port_row_pointing_at_another_host_is_still_missing()
+    {
+        // The target is what makes a row ours, so a mapping sending this port to a different machine on
+        // the LAN is not this instance's forward however it is labelled — it reads as missing, and the
+        // re-open that follows claims a port this instance is configured for.
+        List<PortMapping> configured = [new() { Start = 27015, End = 27015, Protocol = "udp" }];
+        List<UpnpMapping> table = [new(27015, "udp", 27015, "192.168.1.55", "some-other-box")];
+
+        Assert.Single(UpnpReconciler.MissingPorts(configured, table, "Ketchup", "192.168.1.128"));
+    }
+
+    [Fact]
+    public void A_row_landing_on_a_different_internal_port_is_still_missing()
+    {
+        // This host, but not this mapping: the daemon opens external==internal, so a row translating the
+        // port is somebody else's rule and does not deliver traffic where the instance is listening.
+        List<PortMapping> configured = [new() { Start = 27015, End = 27015, Protocol = "udp" }];
+        List<UpnpMapping> table = [new(27015, "udp", 27020, "192.168.1.128", "stationeers")];
+
+        Assert.Single(UpnpReconciler.MissingPorts(configured, table, "Ketchup", "192.168.1.128"));
+    }
+
+    [Fact]
+    public void Without_a_local_address_a_siblings_row_falls_back_to_reading_as_missing()
+    {
+        // A listing that never said where this host is cannot be used to conclude a row points at it.
+        // Falling back to the tag keeps the sweep conservative: it re-opens a forward that may already
+        // be correct, which is harmless, rather than skipping one that is genuinely gone.
+        List<PortMapping> configured = [new() { Start = 27015, End = 27015, Protocol = "udp" }];
+        List<UpnpMapping> table = [Row(27015, "udp", "stationeers")];
+
+        Assert.Single(UpnpReconciler.MissingPorts(configured, table, "Ketchup", localAddress: null));
+    }
+
+    [Fact]
+    public void An_instances_own_tag_still_counts_even_if_the_router_rewrote_the_target()
+    {
+        // The tag remains sufficient on its own — a row this instance opened is its own forward, and a
+        // router that moved the target has not made it someone else's.
+        List<PortMapping> configured = [new() { Start = 8211, End = 8211, Protocol = "udp" }];
+        List<UpnpMapping> table = [new(8211, "udp", 8211, "192.168.1.55", "Ketchup")];
+
+        Assert.Empty(UpnpReconciler.MissingPorts(configured, table, "Ketchup", "192.168.1.128"));
+    }
 }

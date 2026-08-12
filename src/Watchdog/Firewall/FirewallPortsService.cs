@@ -35,8 +35,9 @@ internal enum FirewallPortsOutcome { Skipped, Applied, Failed }
 /// <b>Best-effort, and louder than UPnP.</b> Like UPnP, a failure never fails a start — a firewall
 /// authority that is down must not keep a game server off the air. Unlike UPnP, a failed <em>open</em>
 /// leaves the server unreachable to everyone rather than only to off-LAN players, so a failure is logged
-/// at warning with the instance named, and the absent <c>instance-ports-opened</c> event is what tells
-/// the Control Panel the ports were never confirmed open.
+/// at warning with the instance named. The Control Panel learns the ports were never confirmed open by
+/// there being no <c>instance_ports_opened</c> line in kgsm-firewall's journal — an authority that
+/// changed nothing records nothing.
 /// </para>
 /// <para>
 /// AOT-safe: the client serializes through the Firewall.Contracts source-generated context, so there is
@@ -46,10 +47,16 @@ internal enum FirewallPortsOutcome { Skipped, Applied, Failed }
 internal sealed class FirewallPortsService(IFirewallService firewall, ILogger<FirewallPortsService> logger)
 {
     /// <summary>
-    /// Open the instance's host-firewall rule (no-op unless <c>enable_firewall_management</c>). Returns
-    /// the <see cref="FirewallPortsOutcome"/> so the caller emits an audit event only on a confirmed rule.
+    /// Open the instance's host-firewall rule (no-op unless <c>enable_firewall_management</c>).
     /// </summary>
-    public async Task<FirewallPortsOutcome> OpenAsync(Instance instance, CancellationToken ct = default)
+    /// <remarks>
+    /// The outcome is returned for logging and for the caller to reason about, NOT so it can record the
+    /// edge: kgsm-firewall performs the change and writes its own <c>instance_ports_opened</c> line.
+    /// <paramref name="actor"/> and <paramref name="origin"/> ride along so that record can say who
+    /// asked — the authority repeats the claim and cannot check it, which is why it must come from here.
+    /// </remarks>
+    public async Task<FirewallPortsOutcome> OpenAsync(
+        Instance instance, string? actor = null, string? origin = null, CancellationToken ct = default)
     {
         // Per-instance gate, the mirror of UPnP's enable_port_forwarding check. Disabled is the operator
         // saying "do not manage this instance's firewall", which a bring-up must not override.
@@ -67,7 +74,7 @@ internal sealed class FirewallPortsService(IFirewallService firewall, ILogger<Fi
 
         return await InvokeAsync(
             "open", instance.Name,
-            () => firewall.EnsureOpenAsync(instance.Name, instance.Ports, ct)).ConfigureAwait(false);
+            () => firewall.EnsureOpenAsync(instance.Name, instance.Ports, actor, origin, ct)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -75,14 +82,15 @@ internal sealed class FirewallPortsService(IFirewallService firewall, ILogger<Fi
     /// <c>enable_firewall_management</c>). No port check: removal is addressed by the instance's
     /// ownership tag, so it cleans up correctly even for an instance whose declared ports have changed.
     /// </summary>
-    public async Task<FirewallPortsOutcome> CloseAsync(Instance instance, CancellationToken ct = default)
+    public async Task<FirewallPortsOutcome> CloseAsync(
+        Instance instance, string? actor = null, string? origin = null, CancellationToken ct = default)
     {
         if (!instance.EnableFirewallManagement)
             return FirewallPortsOutcome.Skipped;
 
         return await InvokeAsync(
             "close", instance.Name,
-            () => firewall.RemoveAsync(instance.Name, ct)).ConfigureAwait(false);
+            () => firewall.RemoveAsync(instance.Name, actor, origin, ct)).ConfigureAwait(false);
     }
 
     /// <summary>

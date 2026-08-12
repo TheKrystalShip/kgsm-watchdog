@@ -1451,6 +1451,23 @@ internal sealed class InstanceSupervisor(
         });
 
     /// <summary>
+    /// Runs a best-effort side operation that ANOTHER component records, off the supervision path.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart to <see cref="FireAndForget"/>, and the distinction is the whole of "emitter =
+    /// author": that one is for an edge this daemon both performs and records, this one for an edge it
+    /// merely asks another authority to perform. The outcome is deliberately unused — whether the
+    /// firewall changed is the firewall's to report, and reading it here to decide whether to write a
+    /// line is exactly the second author being removed.
+    /// </remarks>
+    private void AskAndForget(string what, Instance spec, Func<Task> ask)
+        => _ = Task.Run(async () =>
+        {
+            try { await ask().ConfigureAwait(false); }
+            catch (Exception ex) { logger.LogWarning(ex, "{What} task faulted for {Instance}", what, spec.Name); }
+        });
+
+    /// <summary>
     /// Best-effort UPnP open on a fresh bring-up (a manual <c>start</c> or a boot respawn of a dead
     /// instance — NOT a crash-restart, where the router lease is deliberately held). The service
     /// self-gates on <c>enable_port_forwarding</c> and time-boxes upnpc.
@@ -1495,18 +1512,23 @@ internal sealed class InstanceSupervisor(
     /// needs it, so only a fresh bring-up opens and only an intended stop closes. The service self-gates
     /// on <c>enable_firewall_management</c>.
     /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Records nothing.</b> kgsm-firewall performs the change and writes the
+    /// <c>instance_ports_opened</c> line to its own journal — this daemon asked, which is not the same
+    /// as having done it. Journaling here as well would put one firewall edge in the trail twice, under
+    /// two different authors.
+    /// </remarks>
     private void OpenFirewallPorts(Instance spec)
-        => FireAndForget("firewall open", spec,
-            async () => await firewall.OpenAsync(spec).ConfigureAwait(false) == FirewallPortsOutcome.Applied,
-            "instance-ports-opened");
+        => AskAndForget("firewall open", spec,
+            () => firewall.OpenAsync(spec, WatchdogJournal.ActorWatchdog, OriginSystem));
 
     /// <summary>
     /// Best-effort host-firewall close on a deliberate stop, releasing the ports the instance held.
     /// </summary>
+    /// <remarks>⚠ Records nothing, for the same reason as <see cref="OpenFirewallPorts"/>.</remarks>
     private void CloseFirewallPorts(Instance spec)
-        => FireAndForget("firewall close", spec,
-            async () => await firewall.CloseAsync(spec).ConfigureAwait(false) == FirewallPortsOutcome.Applied,
-            "instance-ports-closed");
+        => AskAndForget("firewall close", spec,
+            () => firewall.CloseAsync(spec, WatchdogJournal.ActorWatchdog, OriginSystem));
 
     // This daemon's own identity is WatchdogJournal's to state; only the origin prefix for a
     // requester-attributed actor is needed here.

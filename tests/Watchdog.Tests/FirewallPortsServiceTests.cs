@@ -10,12 +10,15 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// <summary>
 /// Covers the host-firewall side effect the supervisor hangs off a bring-up and a deliberate stop: the
 /// per-instance gate, the no-ports skip, and the mapping from the authority's reply onto the three-token
-/// outcome the supervisor uses to decide whether an audit event is honest.
+/// outcome the supervisor logs and reasons about.
 /// <para>
-/// The distinction under test throughout is <b>Applied vs. everything else</b>. Only a confirmed rule
-/// change may produce an <c>instance-ports-opened</c>/<c>-closed</c> event; a staged-but-unenforced rule,
-/// a backend that cannot do it, and an authority that cannot be reached must all fail to produce one,
-/// because each of them means the ports are not measurably open.
+/// The distinction under test throughout is <b>Applied vs. everything else</b>, because it is what
+/// separates "the ports are measurably open" from a staged-but-unenforced rule, a backend that cannot do
+/// it, and an authority that could not be reached.
+/// </para>
+/// <para>
+/// ⚠ Nothing here records an event. kgsm-firewall performs the change and writes
+/// <c>instance_ports_opened</c> to its own journal; this daemon asks, and asking is not doing.
 /// </para>
 /// </summary>
 public sealed class FirewallPortsServiceTests
@@ -171,25 +174,29 @@ public sealed class FirewallPortsServiceTests
     /// </summary>
     internal sealed class FakeFirewall : IFirewallService
     {
-        internal sealed record Call(string Verb, string Instance, string[] Ports);
+        internal sealed record Call(string Verb, string Instance, string[] Ports, string? Actor, string? Origin);
 
         public List<Call> Calls { get; } = [];
         public FirewallActionResult Next { get; set; } = new() { Ok = true, Outcome = FirewallOutcome.Applied };
         public FirewallException? Throw { get; set; }
 
         public Task<FirewallActionResult> EnsureOpenAsync(
-            string instanceName, IReadOnlyList<PortMapping> ports, CancellationToken cancellationToken = default)
+            string instanceName, IReadOnlyList<PortMapping> ports, string? actor = null,
+            string? origin = null, CancellationToken cancellationToken = default)
         {
             if (Throw is not null) throw Throw;
             Calls.Add(new Call("ensure-open", instanceName,
-                [.. ports.Select(p => p.Start == p.End ? $"{p.Start}/{p.Protocol}" : $"{p.Start}:{p.End}/{p.Protocol}")]));
+                [.. ports.Select(p => p.Start == p.End ? $"{p.Start}/{p.Protocol}" : $"{p.Start}:{p.End}/{p.Protocol}")],
+                actor, origin));
             return Task.FromResult(Next);
         }
 
-        public Task<FirewallActionResult> RemoveAsync(string instanceName, CancellationToken cancellationToken = default)
+        public Task<FirewallActionResult> RemoveAsync(
+            string instanceName, string? actor = null, string? origin = null,
+            CancellationToken cancellationToken = default)
         {
             if (Throw is not null) throw Throw;
-            Calls.Add(new Call("remove", instanceName, []));
+            Calls.Add(new Call("remove", instanceName, [], actor, origin));
             return Task.FromResult(Next);
         }
 

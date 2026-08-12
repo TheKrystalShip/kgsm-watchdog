@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — this daemon no longer records firewall edges
+
+`OpenFirewallPorts`/`CloseFirewallPorts` ask kgsm-firewall and record nothing. The authority performs the
+change and writes `instance_ports_opened`/`instance_ports_closed` to its own journal — this daemon asked,
+which is not the same as having done it, and journaling here as well put one firewall edge in the trail
+twice under two different authors.
+
+The new `AskAndForget` is the counterpart to `FireAndForget`, and the distinction is the whole of
+"emitter = author": one is for an edge this daemon both performs and records (UPnP, which it genuinely
+drives), the other for an edge it merely asks another authority to perform. The firewall call's outcome is
+deliberately unused now — whether the firewall changed is the firewall's to report.
+
+`FirewallPortsService` forwards `actor`/`origin` (kgsm-lib 4.23.0) so the authority's record can say who
+asked; this daemon's own supervisory bring-up passes `system:watchdog`.
+
 ### Changed — this daemon records what this daemon did
 
 The watchdog writes its own event journal instead of spawning `kgsm.sh` to write each event down.

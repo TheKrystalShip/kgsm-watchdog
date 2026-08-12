@@ -150,7 +150,7 @@ public sealed class DeregisterTests
             TestState.Desired(options),
             TestState.Supervision(options),
             TestState.RunHistory(options),
-            new RecordingEvents(),
+            new RecordingJournal(),
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
@@ -159,21 +159,6 @@ public sealed class DeregisterTests
     }
 
     /// <summary>A no-op event sink — these tests assert supervisor state, not emitted events.</summary>
-    private sealed class RecordingEvents : IEventManagementService
-    {
-        public KgsmResult EmitWithProvenance(string eventType, string? actor, string? origin, params string[] parameters) => new(0);
-        public KgsmResult Emit(string eventType, params string[] parameters) => new(0);
-        public KgsmResult GetStatus() => new(0);
-        public KgsmResult TestTransport(string transport) => new(0);
-        public KgsmResult EnableSocket() => new(0);
-        public KgsmResult DisableSocket() => new(0);
-        public KgsmResult TestSocket() => new(0);
-        public KgsmResult GetSocketStatus() => new(0);
-        public KgsmResult EnableWebhook() => new(0);
-        public KgsmResult DisableWebhook() => new(0);
-        public KgsmResult TestWebhook() => new(0);
-        public KgsmResult GetWebhookStatus() => new(0);
-    }
 
     /// <summary>An IInstanceService that returns exactly one configured spec by name.</summary>
     private sealed class SingleInstance(Instance instance) : IInstanceService

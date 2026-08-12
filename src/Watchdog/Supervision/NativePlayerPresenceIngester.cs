@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
@@ -70,7 +71,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 internal sealed class NativePlayerPresenceIngester(
     WatchdogOptions options,
     IInstanceService instances,
-    IEventManagementService events,
+    WatchdogJournal journal,
     PlayerSessionStore sessionStore,
     CgroupManager cgroups,
     ILogger<NativePlayerPresenceIngester> logger) : BackgroundService
@@ -438,7 +439,7 @@ internal sealed class NativePlayerPresenceIngester(
         => Emit(
             PlayerPresenceParser.EventPlayerJoined, instanceName, sessionKey,
             $"id={Display(playerId)} name={Display(playerName)} addr={Display(playerAddr)}",
-            [instanceName, playerId ?? string.Empty, playerName ?? string.Empty, playerAddr ?? string.Empty, sessionKey]);
+            playerId, playerName, playerAddr, reason: null);
 
     /// <summary>
     /// Emit <c>instance-player-left</c> per contract §1: <c>instanceName, playerId, playerName,
@@ -449,7 +450,7 @@ internal sealed class NativePlayerPresenceIngester(
         => Emit(
             PlayerPresenceParser.EventPlayerLeft, instanceName, sessionKey,
             $"id={Display(playerId)} name={Display(playerName)} addr={Display(playerAddr)} reason={Display(reason)}",
-            [instanceName, playerId ?? string.Empty, playerName ?? string.Empty, playerAddr ?? string.Empty, sessionKey, reason ?? string.Empty]);
+            playerId, playerName, playerAddr, reason ?? string.Empty);
 
     private static string Display(string? value) => string.IsNullOrEmpty(value) ? "<none>" : value;
 
@@ -462,17 +463,7 @@ internal sealed class NativePlayerPresenceIngester(
     /// player-presence emit today).
     /// </summary>
     private void EmitReady(string instanceName)
-    {
-        try
-        {
-            events.EmitWithProvenance(EventReady, actor: "system:watchdog", origin: "system", [instanceName]);
-            logger.LogInformation("emitted {Event} for {Instance}", EventReady, instanceName);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "failed to emit {Event} for {Instance} (event dropped)", EventReady, instanceName);
-        }
-    }
+        => journal.Instance(EventReady, instanceName);
 
     /// <summary>
     /// Emit one presence event through kgsm-lib, stamped <c>actor="system" / origin="system"</c> — an
@@ -484,21 +475,15 @@ internal sealed class NativePlayerPresenceIngester(
     /// is pre-built by <see cref="EmitJoined"/>/<see cref="EmitLeft"/> so each event carries exactly its
     /// contract arity. Best-effort: a failed emit is logged and swallowed, never crashes the ingester.
     /// </summary>
-    private void Emit(string eventName, string instanceName, string sessionKey, string detail, string[] parameters)
+    private void Emit(
+        string eventName, string instanceName, string sessionKey, string detail,
+        string? playerId, string? playerName, string? playerAddr, string? reason)
     {
-        try
-        {
-            events.EmitWithProvenance(eventName, actor: "system:watchdog", origin: "system", parameters);
+        journal.Player(eventName, instanceName, playerId, playerName, playerAddr, sessionKey, reason);
 
-            logger.LogInformation(
-                "emitted {Event} for {Instance} (session={SessionKey} {Detail})",
-                eventName, instanceName, sessionKey, detail);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex,
-                "failed to emit {Event} for {Instance} (event dropped)", eventName, instanceName);
-        }
+        logger.LogInformation(
+            "recorded {Event} for {Instance} (session={SessionKey} {Detail})",
+            eventName, instanceName, sessionKey, detail);
     }
 
     /// <summary>

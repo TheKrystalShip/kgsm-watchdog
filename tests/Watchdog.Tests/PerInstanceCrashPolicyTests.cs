@@ -39,7 +39,7 @@ public sealed class PerInstanceCrashPolicyTests
     [Fact]
     public void CrashRestart_false_stops_without_a_retry_and_emits_crashed()
     {
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var spec = SpecFor("no-recover", crashRestart: false);
         var supervisor = NewSupervisor(events, spec);
 
@@ -56,7 +56,7 @@ public sealed class PerInstanceCrashPolicyTests
     [Fact]
     public void CrashMaxRestarts_grants_a_retry_below_the_override_ceiling()
     {
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var spec = SpecFor("cap-one", crashMaxRestarts: 1);
         var supervisor = NewSupervisor(events, spec);
 
@@ -73,7 +73,7 @@ public sealed class PerInstanceCrashPolicyTests
     [Fact]
     public void CrashMaxRestarts_override_gives_up_at_a_lower_ceiling_than_the_global()
     {
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var spec = SpecFor("cap-one", crashMaxRestarts: 1);
         var supervisor = NewSupervisor(events, spec);
 
@@ -91,7 +91,7 @@ public sealed class PerInstanceCrashPolicyTests
     [Fact]
     public void No_crash_config_falls_back_to_the_global_ceiling()
     {
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var spec = SpecFor("defaults"); // CrashRestart null → auto-restart on; CrashMaxRestarts null → global 5
         var supervisor = NewSupervisor(events, spec);
 
@@ -114,7 +114,7 @@ public sealed class PerInstanceCrashPolicyTests
     [Fact]
     public void Stop_intent_completes_the_teardown_instead_of_restarting()
     {
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var spec = SpecFor("stopping");
         var supervisor = NewSupervisor(events, spec);
 
@@ -130,7 +130,7 @@ public sealed class PerInstanceCrashPolicyTests
     [Fact]
     public void Stop_intent_does_not_consume_a_retry_slot_or_give_up()
     {
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var spec = SpecFor("stopping-mid-streak");
         var supervisor = NewSupervisor(events, spec);
 
@@ -199,7 +199,7 @@ public sealed class PerInstanceCrashPolicyTests
         CrashMaxRestarts = crashMaxRestarts,
     };
 
-    private static InstanceSupervisor NewSupervisor(RecordingEvents events, Instance spec)
+    private static InstanceSupervisor NewSupervisor(RecordingJournal events, Instance spec)
     {
         var options = new WatchdogOptions
         {
@@ -274,32 +274,4 @@ public sealed class PerInstanceCrashPolicyTests
 }
 
     /// <summary>Thread-safe recorder — supervision events are emitted fire-and-forget on the thread pool.</summary>
-    internal sealed class RecordingEvents : IEventManagementService
-    {
-        private readonly object _lock = new();
-        private readonly List<string> _emitted = [];
-
-        public KgsmResult EmitWithProvenance(string eventType, string? actor, string? origin, params string[] parameters)
-        {
-            lock (_lock) _emitted.Add(eventType);
-            return new KgsmResult(0);
-        }
-
-        public string[] Snapshot() { lock (_lock) return _emitted.ToArray(); }
-
-        public bool WaitFor(string eventType, int timeoutMs = 2000)
-            => SpinWait.SpinUntil(() => Snapshot().Contains(eventType), TimeSpan.FromMilliseconds(timeoutMs));
-
-        public KgsmResult Emit(string eventType, params string[] parameters) => new(0);
-        public KgsmResult GetStatus() => new(0);
-        public KgsmResult TestTransport(string transport) => new(0);
-        public KgsmResult EnableSocket() => new(0);
-        public KgsmResult DisableSocket() => new(0);
-        public KgsmResult TestSocket() => new(0);
-        public KgsmResult GetSocketStatus() => new(0);
-        public KgsmResult EnableWebhook() => new(0);
-        public KgsmResult DisableWebhook() => new(0);
-        public KgsmResult TestWebhook() => new(0);
-        public KgsmResult GetWebhookStatus() => new(0);
-    }
 }

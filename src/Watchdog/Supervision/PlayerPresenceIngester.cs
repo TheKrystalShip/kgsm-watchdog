@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Watchdog.Events;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -24,14 +25,14 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <c>statx</c> each tick anyway, and a poll handles "channel absent → appears later" and "a new
 /// instance dir shows up" for free, with no inotify/AOT edge cases. Each line is parsed by the pure
 /// <see cref="PlayerPresenceParser"/> and, on a valid join/left, emitted through kgsm-lib's string-based
-/// <see cref="IEventManagementService.EmitWithProvenance"/> as <c>actor="system" / origin="system"</c> —
+/// <see cref="WatchdogJournal"/> as <c>actor="system:watchdog" / origin="system"</c> —
 /// an autonomous observation no human drove (see <see cref="Emit"/> for why <c>"system"</c> not null). A
 /// dropped line (malformed / unknown type / both-null id+name) is logged, never emitted.
 /// </para>
 /// </summary>
 internal sealed class PlayerPresenceIngester(
     WatchdogOptions options,
-    IEventManagementService events,
+    WatchdogJournal journal,
     ILogger<PlayerPresenceIngester> logger) : BackgroundService
 {
     // One live tail per discovered channel path, keyed by absolute path. Survives across ticks so the
@@ -181,25 +182,18 @@ internal sealed class PlayerPresenceIngester(
     /// </summary>
     private void Emit(string eventName, string instanceName, string? playerId, string? playerName)
     {
-        try
-        {
-            events.EmitWithProvenance(
-                eventName,
-                actor: "system:watchdog",
-                origin: "system",
-                instanceName, playerId ?? string.Empty, playerName ?? string.Empty);
+        // No address and no session key: the in-image shim reports neither, and the container path never
+        // carried them. Passed through as they were rather than invented — an empty session key is what
+        // this path has always recorded, and filling one in would be a correlation token nothing issued.
+        journal.Player(
+            eventName, instanceName, playerId, playerName,
+            playerAddr: null, sessionKey: string.Empty, reason: null);
 
-            logger.LogInformation(
-                "emitted {Event} for {Instance} (id={Id} name={Name})",
-                eventName, instanceName,
-                string.IsNullOrEmpty(playerId) ? "<none>" : playerId,
-                string.IsNullOrEmpty(playerName) ? "<none>" : playerName);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex,
-                "failed to emit {Event} for {Instance} (event dropped)", eventName, instanceName);
-        }
+        logger.LogInformation(
+            "recorded {Event} for {Instance} (id={Id} name={Name})",
+            eventName, instanceName,
+            string.IsNullOrEmpty(playerId) ? "<none>" : playerId,
+            string.IsNullOrEmpty(playerName) ? "<none>" : playerName);
     }
 
     /// <summary>

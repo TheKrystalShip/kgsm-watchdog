@@ -1,3 +1,4 @@
+using TheKrystalShip.KGSM.Watchdog.Events;
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
@@ -89,7 +90,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
     [Fact]
     public void Explicit_instances_dir_option_wins()
     {
-        var ingester = NewIngester(new WatchdogOptions { InstancesDir = "/custom/instances" }, new RecordingEvents());
+        var ingester = NewIngester(new WatchdogOptions { InstancesDir = "/custom/instances" }, new RecordingJournal());
         Assert.Equal("/custom/instances", ingester.ResolveInstancesDir());
     }
 
@@ -103,7 +104,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
             Environment.SetEnvironmentVariable("HOME", "/home/kgsm");
             Environment.SetEnvironmentVariable("XDG_DATA_HOME", null);
 
-            var ingester = NewIngester(new WatchdogOptions(), new RecordingEvents());
+            var ingester = NewIngester(new WatchdogOptions(), new RecordingJournal());
             Assert.Equal("/home/kgsm/.local/share/kgsm/instances", ingester.ResolveInstancesDir());
         }
         finally
@@ -123,7 +124,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
             Environment.SetEnvironmentVariable("HOME", "/home/kgsm");
             Environment.SetEnvironmentVariable("XDG_DATA_HOME", "/xdg/data");
 
-            var ingester = NewIngester(new WatchdogOptions(), new RecordingEvents());
+            var ingester = NewIngester(new WatchdogOptions(), new RecordingJournal());
             Assert.Equal("/xdg/data/kgsm/instances", ingester.ResolveInstancesDir());
         }
         finally
@@ -142,7 +143,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
             """{"type":"player_joined","id":"steam-1","name":"Alice","ts":"2026-06-19T12:00:00Z"}""" + "\n" +
             """{"type":"player_left","id":null,"name":"Bob","ts":"2026-06-19T12:01:00Z"}""" + "\n");
 
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, rec);
 
         ingester.IngestOnce(_root);
@@ -150,17 +151,24 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
         Assert.Equal(2, rec.Calls.Count);
 
         var join = rec.Calls[0];
-        Assert.Equal("instance-player-joined", join.EventType);
+        Assert.Equal("instance_player_joined", join.Type);
         Assert.Equal("system:watchdog", join.Actor);   // autonomous: actor=system:watchdog, NOT null (null → OS-user fallback on the wire)
         Assert.Equal("system", join.Origin);
-        Assert.Equal(new[] { "factorio-test", "steam-1", "Alice" }, join.Parameters);
+        Assert.Equal("factorio-test", join.String("InstanceName"));
+        Assert.Equal("steam-1", join.String("PlayerId"));
+        Assert.Equal("Alice", join.String("PlayerName"));
+        // The container shim reports neither an address nor a session key, and neither is invented.
+        Assert.True(join.IsNull("PlayerAddr"));
+        Assert.Equal(string.Empty, join.String("SessionKey"));
 
         var left = rec.Calls[1];
-        Assert.Equal("instance-player-left", left.EventType);
+        Assert.Equal("instance_player_left", left.Type);
         Assert.Equal("system:watchdog", left.Actor);
         Assert.Equal("system", left.Origin);
         // null id → empty positional arg, name preserved, instance first.
-        Assert.Equal(new[] { "factorio-test", "", "Bob" }, left.Parameters);
+        Assert.Equal("factorio-test", left.String("InstanceName"));
+        Assert.True(left.IsNull("PlayerId"));
+        Assert.Equal("Bob", left.String("PlayerName"));
     }
 
     [Fact]
@@ -169,7 +177,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
         MakeChannel("factorio", "factorio-test",
             """{"type":"player_joined","id":null,"name":null,"ts":"2026-06-19T12:00:00Z"}""" + "\n");
 
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, rec);
 
         ingester.IngestOnce(_root);
@@ -183,7 +191,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
         string channel = MakeChannel("factorio", "factorio-test",
             """{"type":"player_joined","id":"a","name":"A","ts":"t"}""" + "\n");
 
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, rec);
 
         ingester.IngestOnce(_root);
@@ -193,13 +201,13 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count); // only the new line emitted on pass 2 (no redelivery)
-        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
+        Assert.Equal("instance_player_left", rec.Calls[1].Type);
     }
 
     // ---- helpers ------------------------------------------------------------------------------
 
-    private PlayerPresenceIngester NewIngester(WatchdogOptions options, IEventManagementService events)
-        => new(options, events, NullLogger<PlayerPresenceIngester>.Instance);
+    private PlayerPresenceIngester NewIngester(WatchdogOptions options, WatchdogJournal journal)
+        => new(options, journal, NullLogger<PlayerPresenceIngester>.Instance);
 
     private string MakeInstanceDir(string blueprint, string instance)
     {
@@ -219,29 +227,4 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
     }
 
     /// <summary>A fake event service that records every <see cref="IEventManagementService.EmitWithProvenance"/> call.</summary>
-    private sealed class RecordingEvents : IEventManagementService
-    {
-        public readonly record struct Call(string EventType, string? Actor, string? Origin, string[] Parameters);
-
-        public List<Call> Calls { get; } = [];
-
-        public KgsmResult EmitWithProvenance(string eventType, string? actor, string? origin, params string[] parameters)
-        {
-            Calls.Add(new Call(eventType, actor, origin, parameters));
-            return new KgsmResult(0);
-        }
-
-        // Unused by the ingester.
-        public KgsmResult Emit(string eventType, params string[] parameters) => new(0);
-        public KgsmResult GetStatus() => new(0);
-        public KgsmResult TestTransport(string transport) => new(0);
-        public KgsmResult EnableSocket() => new(0);
-        public KgsmResult DisableSocket() => new(0);
-        public KgsmResult TestSocket() => new(0);
-        public KgsmResult GetSocketStatus() => new(0);
-        public KgsmResult EnableWebhook() => new(0);
-        public KgsmResult DisableWebhook() => new(0);
-        public KgsmResult TestWebhook() => new(0);
-        public KgsmResult GetWebhookStatus() => new(0);
-    }
 }

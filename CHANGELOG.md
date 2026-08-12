@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — this daemon records what this daemon did
+
+The watchdog writes its own event journal instead of spawning `kgsm.sh` to write each event down.
+Everything it emits is something it established itself — it spawned the process, it opened the port, it
+saw the readiness line — so the line naming kgsm as the author named the wrong one, and the write cost a
+bash bootstrap, a sourced library and a `jq` call **per event**, three times over on a single server
+start. Authority: `../event-journal-federation-plan.md` (Phase 4).
+
+- **`WatchdogJournal`** holds every payload shape in one place, so the four emitting components cannot
+  drift into describing the same event two ways. Its journal is `<state directory>/events`, beside the
+  other state files, created by the writer inside a directory systemd's `StateDirectory=` already gives
+  this daemon — no provisioning and no privilege. The producer id is that directory's own name, which is
+  what a reader scans for, so the writer and every reader agree on the location without either being
+  told.
+- **Writes are inline, not off-thread.** The old path hopped to the thread pool because an engine spawn
+  is slow enough to stall the reconcile tick — and that hop meant two events emitted back to back could
+  land out of order. An append is one write to a file this daemon owns, so doing it in place is both
+  fast enough and strictly better: the journal's order becomes the order things happened.
+- **The ports events stop round-tripping through a UFW string.** They carried
+  `IReadOnlyList<PortMapping>` rendered down to a UFW spec so kgsm could parse it back into structured
+  JSON; they are now written structured from the mappings the daemon already holds, removing the only
+  place the two spellings could disagree.
+- **Absent player fields are real JSON nulls.** A positional string emit cannot carry a null
+  mid-arguments, so an unknown id or address travelled as an empty string and kgsm mapped empty back to
+  null at the far end. The honest-null rule no longer depends on a conversion happening two components
+  away. The container path still records no address and no session key — passed through as they were,
+  never invented.
+- `IEventManagementService` is gone from this daemon. The tests record through the **real**
+  `WatchdogJournal` over an in-memory writer, so they assert the JSON a consumer will actually
+  deserialize rather than a list of call arguments.
+
+⚠ kgsm's own `instance-ready` watchers (`watcher.logs.sh`, `watcher.ports.sh`) emit the same event from
+the engine's journal when `enable_watcher=true`. It defaults to **false**, so the watchdog's readiness
+matcher is normally the only emitter — but turning it on now yields two rows for one fact, in two
+journals.
+
 ### Added — the run ledger: how each run ended
 
 A console's runs could be listed and read one at a time, but nothing said which of them held a crash.

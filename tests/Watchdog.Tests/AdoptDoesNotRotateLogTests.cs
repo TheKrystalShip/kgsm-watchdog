@@ -52,7 +52,7 @@ public sealed class AdoptDoesNotRotateLogTests : IDisposable
             LogFile = log,
             SocketFile = Path.Combine(_tempDir, "never-exists.fifo"), // ReopenFifo fails -> cgroup-only adopt
         };
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var supervisor = NewSupervisor(events, spec);
 
         var handoff = new HotSwapHandoff
@@ -101,7 +101,7 @@ public sealed class AdoptDoesNotRotateLogTests : IDisposable
             LogFile = log,
             SocketFile = Path.Combine(_tempDir, "never-exists.fifo"),
         };
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var supervisor = NewSupervisor(events, spec, out var cgroups);
 
         // The instance's cgroup is already populated (it outlived the restart) but NOT in the
@@ -126,10 +126,10 @@ public sealed class AdoptDoesNotRotateLogTests : IDisposable
         File.WriteAllText(Path.Combine(dir, "cgroup.events"), $"populated {(populated ? 1 : 0)}\nfrozen 0\n");
     }
 
-    private InstanceSupervisor NewSupervisor(RecordingEvents events, Instance spec)
+    private InstanceSupervisor NewSupervisor(RecordingJournal events, Instance spec)
         => NewSupervisor(events, spec, out _);
 
-    private InstanceSupervisor NewSupervisor(RecordingEvents events, Instance spec, out CgroupManager cgroups)
+    private InstanceSupervisor NewSupervisor(RecordingJournal events, Instance spec, out CgroupManager cgroups)
     {
         var options = new WatchdogOptions
         {
@@ -204,19 +204,4 @@ public sealed class AdoptDoesNotRotateLogTests : IDisposable
 }
 
     /// <summary>Records EmitWithProvenance calls; not asserted on here, just needs to exist.</summary>
-    private sealed class RecordingEvents : IEventManagementService
-    {
-        public KgsmResult EmitWithProvenance(string eventType, string? actor, string? origin, params string[] parameters) => new(0);
-        public KgsmResult Emit(string eventType, params string[] parameters) => new(0);
-        public KgsmResult GetStatus() => new(0);
-        public KgsmResult TestTransport(string transport) => new(0);
-        public KgsmResult EnableSocket() => new(0);
-        public KgsmResult DisableSocket() => new(0);
-        public KgsmResult TestSocket() => new(0);
-        public KgsmResult GetSocketStatus() => new(0);
-        public KgsmResult EnableWebhook() => new(0);
-        public KgsmResult DisableWebhook() => new(0);
-        public KgsmResult TestWebhook() => new(0);
-        public KgsmResult GetWebhookStatus() => new(0);
-    }
 }

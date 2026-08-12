@@ -1,3 +1,4 @@
+using TheKrystalShip.KGSM.Watchdog.Events;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -82,8 +83,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         var fake = new FakeInstanceService();
         fake.Add(Native("factorio-test", log, Joined, Left));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
 
         // Pass 1: primes at EOF → the stale join is skipped, nothing emitted.
         ingester.IngestOnce(_root);
@@ -95,26 +96,35 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         Assert.Single(rec.Calls);
         var join = rec.Calls[0];
-        Assert.Equal("instance-player-joined", join.EventType);
+        Assert.Equal("instance_player_joined", join.Type);
         Assert.Equal("system:watchdog", join.Actor);
         Assert.Equal("system", join.Origin);
-        // instance, id, name, addr, sessionKey (5 positional params, contract §1) — no addr in this
-        // pattern, so sessionKey falls back to id (key ?? addr ?? id ?? name).
-        Assert.Equal(
-            new[] { "factorio-test", "76561198000000000", "Alice", "", "76561198000000000" },
-            join.Parameters);
+        Assert.Equal("factorio-test", join.String("InstanceName"));
+        Assert.Equal("76561198000000000", join.String("PlayerId"));
+        Assert.Equal("Alice", join.String("PlayerName"));
+        // This pattern captures no address, so the field is a real JSON null — not the empty string the
+        // positional-args path had to send for kgsm to map back to null at the far end.
+        Assert.True(join.IsNull("PlayerAddr"));
+        // sessionKey falls back to id (key ?? addr ?? id ?? name).
+        Assert.Equal("76561198000000000", join.String("SessionKey"));
+        // A join has no reason, so the field is absent rather than null.
+        Assert.False(join.Data.TryGetProperty("Reason", out _));
 
         // ...then a leave; the tail cursor resumes, so only the new line emits.
         File.AppendAllText(log, "2026-06-20 12:05:00 [LEAVE] Alice (76561198000000000) left the game\n");
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
-        // instance, id, name, addr, sessionKey, reason (6 positional params) — resolved via the session
-        // map (the join's captures), reason empty (this pattern has no reason group).
-        Assert.Equal(
-            new[] { "factorio-test", "76561198000000000", "Alice", "", "76561198000000000", "" },
-            rec.Calls[1].Parameters);
+        var left = rec.Calls[1];
+        Assert.Equal("instance_player_left", left.Type);
+        // Identity resolved via the session map (the join's captures); this pattern has no reason group,
+        // so the leave carries the field as an explicit null.
+        Assert.Equal("factorio-test", left.String("InstanceName"));
+        Assert.Equal("76561198000000000", left.String("PlayerId"));
+        Assert.Equal("Alice", left.String("PlayerName"));
+        Assert.True(left.IsNull("PlayerAddr"));
+        Assert.Equal("76561198000000000", left.String("SessionKey"));
+        Assert.True(left.IsNull("Reason"));
     }
 
     [Fact]
@@ -131,8 +141,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             PlayerLeftRegex = Left,
         });
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
 
         ingester.IngestOnce(_root);
         File.AppendAllText(log, "[JOIN] Nope (1) joined\n");
@@ -153,8 +163,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         var fake = new FakeInstanceService();
         fake.Add(Native("tw-1", log, joined: "", left: "")); // presence disabled (honest unknown)
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
 
         ingester.IngestOnce(_root);
         File.AppendAllText(log, "[JOIN] Nope (1) joined\n");
@@ -175,7 +185,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         var cgroups = NewCgroups();
         SetPopulated("tw-2", populated: true); // even if it WERE running, a skipped instance is never built
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         ingester.IngestOnce(_root);
@@ -192,8 +202,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         var fake = new FakeInstanceService();
         fake.Add(Native("factorio-test", log, joined: "a player connected", left: ""));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
 
         ingester.IngestOnce(_root);
         File.AppendAllText(log, "a player connected\n");
@@ -213,29 +223,32 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             joined: @"Client (?<name>.+?) \((?<id>\d+)\) is ready",
             left: @"Client disconnected: \d+ \| (?<name>.+?)\s+connectTime:.*ClientId: (?<id>\d+)"));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root); // primes at EOF
 
         File.AppendAllText(log, "16:23:51: Client Heisen (76561198144397568) is ready\n");
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
-        Assert.Equal(
-            new[] { "stationeers-test", "76561198144397568", "Heisen", "", "76561198144397568" },
-            rec.Calls[0].Parameters);
+        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("stationeers-test", rec.Calls[0].String("InstanceName"));
+        Assert.Equal("76561198144397568", rec.Calls[0].String("PlayerId"));
+        Assert.Equal("Heisen", rec.Calls[0].String("PlayerName"));
+        Assert.True(rec.Calls[0].IsNull("PlayerAddr"));
+        Assert.Equal("76561198144397568", rec.Calls[0].String("SessionKey"));
 
         File.AppendAllText(log,
             "16:24:23: Client disconnected: 684548920970441496 | Heisen      connectTime: 58.9s, ClientId: 76561198144397568\n");
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
+        Assert.Equal("instance_player_left", rec.Calls[1].Type);
         // Resolved via the map (self-identifying here, so it matches what the leave line itself carries).
-        Assert.Equal(
-            new[] { "stationeers-test", "76561198144397568", "Heisen", "", "76561198144397568", "" },
-            rec.Calls[1].Parameters);
+        Assert.Equal("stationeers-test", rec.Calls[1].String("InstanceName"));
+        Assert.Equal("76561198144397568", rec.Calls[1].String("PlayerId"));
+        Assert.Equal("Heisen", rec.Calls[1].String("PlayerName"));
+        Assert.True(rec.Calls[1].IsNull("PlayerAddr"));
     }
 
     [Fact]
@@ -247,8 +260,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             joined: @"Character '(?<name>[^']+)' \(Peer \d+ - (?<addr>[\d.]+:\d+)\) logged in",
             left: @"Peer (?<addr>[\d.]+:\d+) disconnected"));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root);
 
         // Two players behind the same NAT gateway (co-NAT) — same IP, distinct ports.
@@ -258,31 +271,33 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal(
-            new[] { "romestead-test", "", "Aelia", "86.191.216.57:58845", "86.191.216.57:58845" },
-            rec.Calls[0].Parameters);
-        Assert.Equal(
-            new[] { "romestead-test", "", "Brutus", "86.191.216.57:53376", "86.191.216.57:53376" },
-            rec.Calls[1].Parameters);
+        // No id in this pattern — a real JSON null, with the address standing in as the session key.
+        Assert.True(rec.Calls[0].IsNull("PlayerId"));
+        Assert.Equal("Aelia", rec.Calls[0].String("PlayerName"));
+        Assert.Equal("86.191.216.57:58845", rec.Calls[0].String("PlayerAddr"));
+        Assert.Equal("86.191.216.57:58845", rec.Calls[0].String("SessionKey"));
+        Assert.True(rec.Calls[1].IsNull("PlayerId"));
+        Assert.Equal("Brutus", rec.Calls[1].String("PlayerName"));
+        Assert.Equal("86.191.216.57:53376", rec.Calls[1].String("PlayerAddr"));
 
         // Aelia's bare-addr leave must resolve her name — and must not disturb Brutus's session.
         File.AppendAllText(log, "Peer 86.191.216.57:58845 disconnected - RemoteConnectionClose\n");
         ingester.IngestOnce(_root);
 
         Assert.Equal(3, rec.Calls.Count);
-        Assert.Equal("instance-player-left", rec.Calls[2].EventType);
-        Assert.Equal(
-            new[] { "romestead-test", "", "Aelia", "86.191.216.57:58845", "86.191.216.57:58845", "" },
-            rec.Calls[2].Parameters);
+        Assert.Equal("instance_player_left", rec.Calls[2].Type);
+        Assert.Equal("romestead-test", rec.Calls[2].String("InstanceName"));
+        Assert.True(rec.Calls[2].IsNull("PlayerId"));
+        Assert.Equal("Aelia", rec.Calls[2].String("PlayerName"));
+        Assert.Equal("86.191.216.57:58845", rec.Calls[2].String("SessionKey"));
 
         // Brutus's own leave still resolves independently — the co-NAT sessions never collided.
         File.AppendAllText(log, "Peer 86.191.216.57:53376 disconnected - RemoteConnectionClose\n");
         ingester.IngestOnce(_root);
 
         Assert.Equal(4, rec.Calls.Count);
-        Assert.Equal(
-            new[] { "romestead-test", "", "Brutus", "86.191.216.57:53376", "86.191.216.57:53376", "" },
-            rec.Calls[3].Parameters);
+        Assert.Equal("Brutus", rec.Calls[3].String("PlayerName"));
+        Assert.Equal("86.191.216.57:53376", rec.Calls[3].String("SessionKey"));
     }
 
     [Fact]
@@ -294,8 +309,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             joined: @"Got character ZDOID from (?<name>.+?) : (?<key>\d+):\d+",
             left: @"Destroying abandoned non persistent zdo \d+:\d+ owner (?<key>\d+)"));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root);
 
         // Every real Valheim line appears twice: a Console-wrapped form and a bare form.
@@ -305,8 +320,12 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls); // the doubled line dedups to exactly one join
-        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
-        Assert.Equal(new[] { "valheim-test", "", "Test", "", "651023867" }, rec.Calls[0].Parameters);
+        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("valheim-test", rec.Calls[0].String("InstanceName"));
+        Assert.True(rec.Calls[0].IsNull("PlayerId"));
+        Assert.Equal("Test", rec.Calls[0].String("PlayerName"));
+        Assert.True(rec.Calls[0].IsNull("PlayerAddr"));
+        Assert.Equal("651023867", rec.Calls[0].String("SessionKey"));
 
         // The cleanup burst re-logs the same disconnect up to 6x.
         for (int i = 0; i < 6; i++)
@@ -314,8 +333,13 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count); // exactly one left; the other 5 deduped via evict
-        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
-        Assert.Equal(new[] { "valheim-test", "", "Test", "", "651023867", "" }, rec.Calls[1].Parameters);
+        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("valheim-test", rec.Calls[1].String("InstanceName"));
+        Assert.True(rec.Calls[1].IsNull("PlayerId"));
+        Assert.Equal("Test", rec.Calls[1].String("PlayerName"));
+        Assert.True(rec.Calls[1].IsNull("PlayerAddr"));
+        Assert.Equal("651023867", rec.Calls[1].String("SessionKey"));
+        Assert.True(rec.Calls[1].IsNull("Reason"));
     }
 
     [Fact]
@@ -327,22 +351,31 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             joined: @"\[userid:(?<key>\d+)\] player (?<name>.+?) connected",
             left: @"Disconnected from userid:(?<key>\d+) with reason (?<reason>\S+)"));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root);
 
         File.AppendAllText(log, "[userid:3801603394] player Woltah connected islocalplayer=False\n");
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal(new[] { "corekeeper-test", "", "Woltah", "", "3801603394" }, rec.Calls[0].Parameters);
+        Assert.Equal("corekeeper-test", rec.Calls[0].String("InstanceName"));
+        Assert.True(rec.Calls[0].IsNull("PlayerId"));
+        Assert.Equal("Woltah", rec.Calls[0].String("PlayerName"));
+        Assert.True(rec.Calls[0].IsNull("PlayerAddr"));
+        Assert.Equal("3801603394", rec.Calls[0].String("SessionKey"));
 
         File.AppendAllText(log, "Disconnected from userid:3801603394 with reason App_Min\n");
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
-        Assert.Equal(new[] { "corekeeper-test", "", "Woltah", "", "3801603394", "App_Min" }, rec.Calls[1].Parameters);
+        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("corekeeper-test", rec.Calls[1].String("InstanceName"));
+        Assert.True(rec.Calls[1].IsNull("PlayerId"));
+        Assert.Equal("Woltah", rec.Calls[1].String("PlayerName"));
+        Assert.True(rec.Calls[1].IsNull("PlayerAddr"));
+        Assert.Equal("3801603394", rec.Calls[1].String("SessionKey"));
+        Assert.Equal("App_Min", rec.Calls[1].String("Reason"));
     }
 
     [Fact]
@@ -357,8 +390,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             joined: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16}))\[/(?<addr>.+)\] logged in with entity id ",
             left: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16})) lost connection: (?<reason>.*)"));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root);
 
         File.AppendAllText(log,
@@ -369,10 +402,12 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         // The UUID line and the chat broadcast are not the pair — exactly one join.
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
-        Assert.Equal(
-            new[] { "minecraft-test", "", "Flysenberg", "192.168.1.127:55072", "Flysenberg" },
-            rec.Calls[0].Parameters);
+        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("minecraft-test", rec.Calls[0].String("InstanceName"));
+        Assert.True(rec.Calls[0].IsNull("PlayerId"));
+        Assert.Equal("Flysenberg", rec.Calls[0].String("PlayerName"));
+        Assert.Equal("192.168.1.127:55072", rec.Calls[0].String("PlayerAddr"));
+        Assert.Equal("Flysenberg", rec.Calls[0].String("SessionKey"));
 
         File.AppendAllText(log,
             "[19:32:18] [Server thread/INFO]: Flysenberg lost connection: Disconnected\n" +
@@ -381,10 +416,13 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         // The leave carries no address of its own — the map supplies the one captured at join.
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance-player-left", rec.Calls[1].EventType);
-        Assert.Equal(
-            new[] { "minecraft-test", "", "Flysenberg", "192.168.1.127:55072", "Flysenberg", "Disconnected" },
-            rec.Calls[1].Parameters);
+        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("minecraft-test", rec.Calls[1].String("InstanceName"));
+        Assert.True(rec.Calls[1].IsNull("PlayerId"));
+        Assert.Equal("Flysenberg", rec.Calls[1].String("PlayerName"));
+        Assert.Equal("192.168.1.127:55072", rec.Calls[1].String("PlayerAddr"));
+        Assert.Equal("Flysenberg", rec.Calls[1].String("SessionKey"));
+        Assert.Equal("Disconnected", rec.Calls[1].String("Reason"));
     }
 
     [Fact]
@@ -399,8 +437,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             joined: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16}))\[/(?<addr>.+)\] logged in with entity id ",
             left: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16})) lost connection: (?<reason>.*)"));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root);
 
         File.AppendAllText(log,
@@ -422,8 +460,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
             joined: @"\[userid:(?<key>\d+)\] player (?<name>.+?) connected",
             left: @"Disconnected from userid:(?<key>\d+) with reason (?<reason>\S+)"));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root); // primes at EOF of the (empty) file
 
         File.AppendAllText(log, "[userid:3801603394] player Woltah connected islocalplayer=False\n");
@@ -456,7 +494,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         fake.Add(Native("factorio-immediate", log, joined: "", left: "", ready: ""));
 
         var cgroups = NewCgroups();
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         // Not populated yet — no start edge, no ready.
@@ -469,10 +507,10 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+        Assert.Equal("instance_ready", rec.Calls[0].Type);
         Assert.Equal("system:watchdog", rec.Calls[0].Actor);
         Assert.Equal("system", rec.Calls[0].Origin);
-        Assert.Equal(new[] { "factorio-immediate" }, rec.Calls[0].Parameters);
+        Assert.Equal("factorio-immediate", rec.Calls[0].String("InstanceName"));
 
         // Steady-state ticks while still populated must NOT re-fire.
         ingester.IngestOnce(_root);
@@ -488,7 +526,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         fake.Add(Native("factorio-ready", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
 
         var cgroups = NewCgroups();
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         // Start edge: populated, but the ready line hasn't been logged yet — no emit.
@@ -500,8 +538,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         File.AppendAllText(log, "1234.567 Hosting game at IP ADDR:34197\n");
         ingester.IngestOnce(_root);
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-ready", rec.Calls[0].EventType);
-        Assert.Equal(new[] { "factorio-ready" }, rec.Calls[0].Parameters);
+        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("factorio-ready", rec.Calls[0].String("InstanceName"));
 
         // Further lines (even matching ones, e.g. a save-then-relog message) must not re-fire within
         // the same run.
@@ -517,7 +555,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count); // re-armed — a second instance-ready for the new run
-        Assert.Equal("instance-ready", rec.Calls[1].EventType);
+        Assert.Equal("instance_ready", rec.Calls[1].Type);
     }
 
     [Fact]
@@ -531,7 +569,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         fake.Add(Native("mc-ready", log, joined: "", left: "", ready: @"Done \([\d.]+s\)! For help"));
 
         var cgroups = NewCgroups();
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         SetPopulated("mc-ready", populated: true);
@@ -540,8 +578,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-ready", rec.Calls[0].EventType);
-        Assert.Equal(new[] { "mc-ready" }, rec.Calls[0].Parameters);
+        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("mc-ready", rec.Calls[0].String("InstanceName"));
     }
 
     [Fact]
@@ -557,14 +595,14 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         var cgroups = NewCgroups();
         SetPopulated("factorio-late", populated: true); // already running before the ingester ever looked
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         ingester.IngestOnce(_root); // first-ever tick: start edge (null -> true) + whole-file scan
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-ready", rec.Calls[0].EventType);
-        Assert.Equal(new[] { "factorio-late" }, rec.Calls[0].Parameters);
+        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("factorio-late", rec.Calls[0].String("InstanceName"));
 
         // Steady state — no re-fire, and the tail itself still primes at EOF (no replayed presence lines
         // to worry about here since there are no player patterns in this test).
@@ -586,7 +624,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         var cgroups = NewCgroups();
         SetPopulated("factorio-badregex", populated: true);
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         ingester.IngestOnce(_root);
@@ -594,7 +632,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls); // presence still fires...
-        Assert.Equal("instance-player-joined", rec.Calls[0].EventType); // ...but never instance-ready
+        Assert.Equal("instance_player_joined", rec.Calls[0].Type); // ...but never instance-ready
     }
 
     [Fact]
@@ -613,7 +651,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         fake.Add(Native("factorio-rotate", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
 
         var cgroups = NewCgroups();
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         // Run 1: this instance is observed already populated with its ready line already logged (the
@@ -621,7 +659,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         SetPopulated("factorio-rotate", populated: true);
         ingester.IngestOnce(_root);
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+        Assert.Equal("instance_ready", rec.Calls[0].Type);
 
         // Run 1 ends: the cgroup drains.
         SetPopulated("factorio-rotate", populated: false);
@@ -647,7 +685,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance-ready", rec.Calls[1].EventType);
+        Assert.Equal("instance_ready", rec.Calls[1].Type);
     }
 
     [Fact]
@@ -660,8 +698,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         var fake = new FakeInstanceService();
         fake.Add(Native("factorio-rotate-presence", log, Joined, Left));
 
-        var rec = new RecordingEvents();
-        var ingester = NewIngester(rec, fake);
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
         ingester.IngestOnce(_root); // primes at EOF — run 1's stale join is skipped, as today
 
         string logsDir = Path.Combine(Path.GetDirectoryName(log) ?? "", "..", "logs");
@@ -674,14 +712,14 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-player-joined", rec.Calls[0].EventType);
-        Assert.Equal("FreshFromRun2", rec.Calls[0].Parameters[2]);
+        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("FreshFromRun2", rec.Calls[0].String("PlayerName"));
     }
 
     // ---- helpers ------------------------------------------------------------------------------
 
-    private NativePlayerPresenceIngester NewIngester(IEventManagementService events, IInstanceService instances, CgroupManager? cgroups = null)
-        => new(new WatchdogOptions { InstancesDir = _root }, instances, events, new PlayerSessionStore(), cgroups ?? NewCgroups(), NullLogger<NativePlayerPresenceIngester>.Instance);
+    private NativePlayerPresenceIngester NewIngester(WatchdogJournal journal, IInstanceService instances, CgroupManager? cgroups = null)
+        => new(new WatchdogOptions { InstancesDir = _root }, instances, journal, new PlayerSessionStore(), cgroups ?? NewCgroups(), NullLogger<NativePlayerPresenceIngester>.Instance);
 
     [Fact]
     public void A_config_read_before_the_install_finished_is_re_read_on_the_first_run()
@@ -699,7 +737,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         fake.Add(Native("factorio-fresh", log: "", joined: "", left: "", ready: ""));
 
         var cgroups = NewCgroups();
-        var rec = new RecordingEvents();
+        var rec = new RecordingJournal();
         var ingester = NewIngester(rec, fake, cgroups);
 
         ingester.IngestOnce(_root);          // watch built from the half-written config
@@ -718,7 +756,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance-ready", rec.Calls[0].EventType);
+        Assert.Equal("instance_ready", rec.Calls[0].Type);
     }
 
     private static Instance Native(string name, string log, string joined, string left, string ready = "") => new()
@@ -792,27 +830,4 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 }
 
     /// <summary>Records every <see cref="IEventManagementService.EmitWithProvenance"/> call (mirrors the container ingester test's fake).</summary>
-    private sealed class RecordingEvents : IEventManagementService
-    {
-        public readonly record struct Call(string EventType, string? Actor, string? Origin, string[] Parameters);
-        public List<Call> Calls { get; } = [];
-
-        public KgsmResult EmitWithProvenance(string eventType, string? actor, string? origin, params string[] parameters)
-        {
-            Calls.Add(new Call(eventType, actor, origin, parameters));
-            return new KgsmResult(0);
-        }
-
-        public KgsmResult Emit(string eventType, params string[] parameters) => new(0);
-        public KgsmResult GetStatus() => new(0);
-        public KgsmResult TestTransport(string transport) => new(0);
-        public KgsmResult EnableSocket() => new(0);
-        public KgsmResult DisableSocket() => new(0);
-        public KgsmResult TestSocket() => new(0);
-        public KgsmResult GetSocketStatus() => new(0);
-        public KgsmResult EnableWebhook() => new(0);
-        public KgsmResult DisableWebhook() => new(0);
-        public KgsmResult TestWebhook() => new(0);
-        public KgsmResult GetWebhookStatus() => new(0);
-    }
 }

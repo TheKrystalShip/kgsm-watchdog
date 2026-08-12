@@ -29,7 +29,7 @@ public sealed class HotSwapCoordinatorTests
     [Fact]
     public async Task Failing_selfcheck_aborts_without_attempting_a_swap()
     {
-        var events = new RecordingEvents();
+        var events = new RecordingJournal();
         var supervisor = NewSupervisor(events);
 
         bool swapAttempted = false;
@@ -47,7 +47,7 @@ public sealed class HotSwapCoordinatorTests
     [Fact]
     public async Task Timed_out_selfcheck_sentinel_also_aborts()
     {
-        var supervisor = NewSupervisor(new RecordingEvents());
+        var supervisor = NewSupervisor(new RecordingJournal());
         bool swapAttempted = false;
         var coordinator = new HotSwapCoordinator(
             supervisor,
@@ -63,7 +63,7 @@ public sealed class HotSwapCoordinatorTests
     [Fact]
     public async Task Passing_selfcheck_proceeds_to_the_swap_step()
     {
-        var supervisor = NewSupervisor(new RecordingEvents());
+        var supervisor = NewSupervisor(new RecordingJournal());
         string? swappedTarget = null;
         var coordinator = new HotSwapCoordinator(
             supervisor,
@@ -79,7 +79,7 @@ public sealed class HotSwapCoordinatorTests
     [Fact]
     public async Task A_throwing_selfcheck_is_treated_as_a_failure_and_aborts()
     {
-        var supervisor = NewSupervisor(new RecordingEvents());
+        var supervisor = NewSupervisor(new RecordingJournal());
         bool swapAttempted = false;
         var coordinator = new HotSwapCoordinator(
             supervisor,
@@ -96,7 +96,7 @@ public sealed class HotSwapCoordinatorTests
     [Fact]
     public async Task A_concurrent_swap_in_progress_is_collapsed_to_one()
     {
-        var supervisor = NewSupervisor(new RecordingEvents());
+        var supervisor = NewSupervisor(new RecordingJournal());
 
         int swapCalls = 0;
         var gate = new ManualResetEventSlim(false);
@@ -133,7 +133,7 @@ public sealed class HotSwapCoordinatorTests
         Environment.SetEnvironmentVariable(Model.HotSwapHandoff.EnvVarName, null);
         try
         {
-            var supervisor = NewSupervisor(new RecordingEvents());
+            var supervisor = NewSupervisor(new RecordingJournal());
             supervisor.AdoptFromHandoff();                  // must not throw — a plain (non-swap) start
             Assert.Empty(supervisor.List());                // nothing adopted
         }
@@ -147,7 +147,7 @@ public sealed class HotSwapCoordinatorTests
         Environment.SetEnvironmentVariable(Model.HotSwapHandoff.EnvVarName, "!!! not base64 !!!");
         try
         {
-            var supervisor = NewSupervisor(new RecordingEvents());
+            var supervisor = NewSupervisor(new RecordingJournal());
             supervisor.AdoptFromHandoff();                  // must not throw
             Assert.Empty(supervisor.List());                // nothing adopted from a bad blob
             // ALWAYS cleared, so a later plain restart can never re-read the bad blob.
@@ -158,7 +158,7 @@ public sealed class HotSwapCoordinatorTests
 
     // ---- minimal real InstanceSupervisor (the coordinator takes the concrete type) -------------------
 
-    private static InstanceSupervisor NewSupervisor(RecordingEvents events)
+    private static InstanceSupervisor NewSupervisor(RecordingJournal events)
     {
         var options = new WatchdogOptions
         {
@@ -231,24 +231,4 @@ public sealed class HotSwapCoordinatorTests
 }
 
     /// <summary>Records EmitWithProvenance calls (the abort path emits a system event through here).</summary>
-    private sealed class RecordingEvents : IEventManagementService
-    {
-        public List<string> Emitted { get; } = [];
-        public KgsmResult EmitWithProvenance(string eventType, string? actor, string? origin, params string[] parameters)
-        {
-            Emitted.Add(eventType);
-            return new KgsmResult(0);
-        }
-        public KgsmResult Emit(string eventType, params string[] parameters) => new(0);
-        public KgsmResult GetStatus() => new(0);
-        public KgsmResult TestTransport(string transport) => new(0);
-        public KgsmResult EnableSocket() => new(0);
-        public KgsmResult DisableSocket() => new(0);
-        public KgsmResult TestSocket() => new(0);
-        public KgsmResult GetSocketStatus() => new(0);
-        public KgsmResult EnableWebhook() => new(0);
-        public KgsmResult DisableWebhook() => new(0);
-        public KgsmResult TestWebhook() => new(0);
-        public KgsmResult GetWebhookStatus() => new(0);
-    }
 }

@@ -4,6 +4,7 @@ using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
+using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.Interop;
 using TheKrystalShip.KGSM.Watchdog.Model;
@@ -43,7 +44,7 @@ internal sealed class InstanceSupervisor(
     DesiredStateStore store,
     SupervisionStateStore supervisionStore,
     RunHistoryStore runHistory,
-    IEventManagementService events,
+    WatchdogJournal journal,
     UpnpService upnp,
     FirewallPortsService firewall,
     PlayerSessionStore sessions,
@@ -304,7 +305,7 @@ internal sealed class InstanceSupervisor(
         // rather than as the watchdog's own crash recovery. Fire-and-forget, same posture as
         // EmitSystemEvent: a slow kgsm.sh spawn must not stall the caller, and a dropped event is the
         // honest no-backfill boundary the consumer already accepts.
-        EmitProvenanceEvent(EventRestarted, ProvenanceActor(requester), OriginSystem, name);
+        journal.Instance(EventRestarted, name, ProvenanceActor(requester));
 
         logger.LogInformation("restarted {Instance} (requester={Requester})", name, requester);
         return new ActionResult(name, true, $"restarted (requester={requester})");
@@ -651,7 +652,7 @@ internal sealed class InstanceSupervisor(
             // so the action is auditable downstream. NOT a crash recovery (there is no firing alert to
             // heal at a clean boot), so kgsm-api records the row but does not bridge it as a
             // resolution.actionId. The ADOPTED-live path (AdoptLive) stays silent — no state change.
-            EmitSystemEvent(EventStarted, name);
+            journal.Instance(EventStarted, name);
             return true;
         }
 
@@ -1183,7 +1184,7 @@ internal sealed class InstanceSupervisor(
     /// actually missing, never the instance's whole configured set.
     /// </summary>
     public void NoteUpnpReasserted(string name, IReadOnlyList<PortMapping> restored) =>
-        EmitSystemEvent("instance-upnp-reasserted", name, restored.ToUfwSpec());
+        journal.Ports("instance-upnp-reasserted", name, restored);
 
     public InstanceState[] List()
     {
@@ -1339,7 +1340,7 @@ internal sealed class InstanceSupervisor(
             logger.LogInformation("{Instance} exited ({Exit}); not restarting (crash_restart=false policy)", name, exitText);
             PersistSupervisionState();
             RecordRunEnd(si, RunRecord.Crashed, exit);
-            EmitSupervisionEvent(EventCrashed, name, exit, 0);
+            journal.Supervision(EventCrashed, name, exit, 0);
             return;
         }
 
@@ -1363,7 +1364,7 @@ internal sealed class InstanceSupervisor(
                 name, si.Restart.ConsecutiveFailures, exitText, effectivePolicy.MaxRetries);
             PersistSupervisionState(); // gave up (→Failed) — persist the latch so an OOM doesn't fake recovery
             RecordRunEnd(si, RunRecord.GaveUp, exit);
-            EmitSupervisionEvent(EventFailed, name, exit, si.Restart.ConsecutiveFailures);
+            journal.Supervision(EventFailed, name, exit, si.Restart.ConsecutiveFailures);
             return;
         }
 
@@ -1376,7 +1377,7 @@ internal sealed class InstanceSupervisor(
         // Recorded BEFORE the restart: the next spawn rotates this console away, and the ledger row is
         // what lets a consumer find it afterwards.
         RecordRunEnd(si, RunRecord.Crashed, exit);
-        EmitSupervisionEvent(EventCrashed, name, exit, si.Restart.ConsecutiveFailures);
+        journal.Supervision(EventCrashed, name, exit, si.Restart.ConsecutiveFailures);
     }
 
     private void ReconcileRestartPending(SupervisedInstance si, DateTime now)
@@ -1392,7 +1393,7 @@ internal sealed class InstanceSupervisor(
             // so the action is auditable downstream (kgsm-api maps it to server.restart and bridges the
             // alert's resolution.actionId). Emitted per successful attempt, symmetric with the per-crash
             // instance-crashed above; a respawn that immediately re-dies just re-fires the crash next tick.
-            EmitSystemEvent(EventRestarted, si.Name);
+            journal.Instance(EventRestarted, si.Name);
             return;
         }
 
@@ -1405,7 +1406,7 @@ internal sealed class InstanceSupervisor(
             logger.LogWarning("{Instance} restart failed and gave up after {Max} retries: {Reason}", si.Name, policy.MaxRetries, reason);
             PersistSupervisionState(); // gave up (→Failed) after a failed respawn — persist the latch
             // The respawn never produced a process, so there is no exit code to report (honest unknown).
-            EmitSupervisionEvent(EventFailed, si.Name, null, si.Restart.ConsecutiveFailures);
+            journal.Supervision(EventFailed, si.Name, null, si.Restart.ConsecutiveFailures);
             return;
         }
         si.NextRestartAt = now + delay.Value;
@@ -1435,15 +1436,16 @@ internal sealed class InstanceSupervisor(
     /// </para>
     /// </summary>
     private void FireAndForget(
-        string what, Instance spec, Func<Task<bool>> apply, string appliedEvent, string? appliedPorts = null)
+        string what, Instance spec, Func<Task<bool>> apply, string appliedEvent,
+        IReadOnlyList<PortMapping>? appliedPorts = null)
         => _ = Task.Run(async () =>
         {
             try
             {
-                // The watchdog is the actor that drove the change, so it stamps system/system and renders
-                // the ports back to the canonical UFW string the kgsm events-emit positional arg expects.
+                // The watchdog drove the change, so it records it — structured, straight from the
+                // mappings it already holds.
                 if (await apply().ConfigureAwait(false))
-                    EmitSystemEvent(appliedEvent, spec.Name, appliedPorts ?? spec.Ports.ToUfwSpec());
+                    journal.Ports(appliedEvent, spec.Name, appliedPorts ?? spec.Ports);
             }
             catch (Exception ex) { logger.LogWarning(ex, "{What} task faulted for {Instance}", what, spec.Name); }
         });
@@ -1477,9 +1479,9 @@ internal sealed class InstanceSupervisor(
         // not closed, and reporting it as closed would put a transition that never happened into the
         // audit trail. Nothing retained means the declared set IS the released set, reported in its
         // original range form.
-        string released = retain.Count == 0
-            ? spec.Ports.ToUfwSpec()
-            : PortSets.Collapse(spec.Ports.Expand().Where(p => !retain.Holds(p.Port, p.Protocol))).ToUfwSpec();
+        IReadOnlyList<PortMapping> released = retain.Count == 0
+            ? spec.Ports
+            : [.. PortSets.Collapse(spec.Ports.Expand().Where(p => !retain.Holds(p.Port, p.Protocol)))];
 
         FireAndForget("UPnP close", spec,
             async () => await upnp.CloseAsync(spec, retain).ConfigureAwait(false) == UpnpOutcome.Applied,
@@ -1506,34 +1508,8 @@ internal sealed class InstanceSupervisor(
             async () => await firewall.CloseAsync(spec).ConfigureAwait(false) == FirewallPortsOutcome.Applied,
             "instance-ports-closed");
 
-    /// <summary>
-    /// Fire-and-forget emit of an autonomous supervision crash event (crash / give-up) through kgsm-lib.
-    /// Carries the leader exit code (the literal <c>"unknown"</c> when unreadable — never a fabricated
-    /// code) and the consecutive restart-attempt count, then delegates to <see cref="EmitSystemEvent"/>.
-    /// </summary>
-    private void EmitSupervisionEvent(string dashEventName, string instanceName, int? exit, int restarts)
-    {
-        string exitCode = exit is int code ? code.ToString() : "unknown";
-        EmitSystemEvent(dashEventName, instanceName, exitCode, restarts.ToString());
-    }
-
-    /// <summary>
-    /// Fire-and-forget emit of an autonomous supervisor event through kgsm-lib, stamped
-    /// <c>actor=system</c> / <c>origin=system</c> — an engine action no human drove. Off-loaded to the
-    /// thread pool so a slow <c>kgsm.sh</c> spawn never stalls the reconcile tick (which holds the
-    /// supervisor gate), and best-effort: a failed emit is logged and swallowed — a dropped event is the
-    /// same honest "no backfill" boundary the downstream consumer already accepts, never crashing
-    /// supervision. <paramref name="extraData"/> is the event's remaining positional args after the
-    /// instance name (e.g. exit code + restart count for crash/failed; none for restarted).
-    /// </summary>
-    private void EmitSystemEvent(string dashEventName, string instanceName, params string[] extraData)
-        => EmitProvenanceEvent(dashEventName, ActorWatchdog, OriginSystem, instanceName, extraData);
-
-    // This daemon's own identity, and the origin of an action no human surface drove. `provider:name` is
-    // the actor convention every consumer parses: a bare name is read as an OS user (kgsm-api's
-    // ParseActor treats an unprefixed actor as a human on the local host), so an autonomous emitter must
-    // name its identity source.
-    private const string ActorWatchdog = "system:watchdog";
+    // This daemon's own identity is WatchdogJournal's to state; only the origin prefix for a
+    // requester-attributed actor is needed here.
     private const string OriginSystem = "system";
 
     /// <summary>
@@ -1544,34 +1520,9 @@ internal sealed class InstanceSupervisor(
     /// host. A blank requester is this daemon — the honest fallback, never an invented name.
     /// </summary>
     private static string ProvenanceActor(string requester) =>
-        string.IsNullOrWhiteSpace(requester) ? ActorWatchdog
+        string.IsNullOrWhiteSpace(requester) ? WatchdogJournal.ActorWatchdog
             : requester.Contains(':') ? requester
             : $"{OriginSystem}:{requester}";
-
-    /// <summary>
-    /// Fire-and-forget emit of an event through kgsm-lib with explicit provenance, so a caller-driven
-    /// action (e.g. an on-demand UPnP open from the control surface) is attributed to that caller rather
-    /// than to <c>system</c>. Same off-the-gate, best-effort posture as <see cref="EmitSystemEvent"/> (a
-    /// dropped event is the honest no-backfill boundary the consumer already accepts). <paramref name="extraData"/>
-    /// is the event's positional args after the instance name.
-    /// </summary>
-    private void EmitProvenanceEvent(
-        string dashEventName, string actor, string origin, string instanceName, params string[] extraData)
-    {
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                events.EmitWithProvenance(
-                    dashEventName, actor, origin, [instanceName, .. extraData]);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Failed to emit {Event} for {Instance} (event dropped)", dashEventName, instanceName);
-            }
-        });
-    }
 
     /// <summary>
     /// Snapshot every supervised instance's restart bookkeeping (streak, give-up latch, phase, timing,

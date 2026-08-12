@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Exceptions;
@@ -45,7 +46,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </remarks>
 internal sealed class RconPlayerPresencePoller(
     IInstanceService instances,
-    IEventManagementService events,
+    WatchdogJournal journal,
     PlayerSessionStore sessionStore,
     InstanceSupervisor supervisor,
     ILogger<RconPlayerPresencePoller> logger) : BackgroundService
@@ -374,42 +375,23 @@ internal sealed class RconPlayerPresencePoller(
 
     private void EmitJoined(string instanceName, string? playerId, string? playerName, string sessionKey)
     {
-        try
-        {
-            events.EmitWithProvenance(
-                EventJoined,
-                actor: "system:watchdog",
-                origin: "system",
-                [instanceName, playerId ?? string.Empty, playerName ?? string.Empty, string.Empty, sessionKey]);
+        // RCON reports who is connected, never from where — the address stays null rather than blank.
+        journal.Player(EventJoined, instanceName, playerId, playerName, playerAddr: null, sessionKey, reason: null);
 
-            logger.LogInformation(
-                "emitted {Event} for {Instance} (session={SessionKey} id={Id} name={Name})",
-                EventJoined, instanceName, sessionKey, playerId ?? "<none>", playerName ?? "<none>");
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "failed to emit {Event} for {Instance} (event dropped)", EventJoined, instanceName);
-        }
+        logger.LogInformation(
+            "recorded {Event} for {Instance} (session={SessionKey} id={Id} name={Name})",
+            EventJoined, instanceName, sessionKey, playerId ?? "<none>", playerName ?? "<none>");
     }
 
     private void EmitLeft(string instanceName, string? playerId, string? playerName, string sessionKey, string? reason)
     {
-        try
-        {
-            events.EmitWithProvenance(
-                EventLeft,
-                actor: "system:watchdog",
-                origin: "system",
-                [instanceName, playerId ?? string.Empty, playerName ?? string.Empty, string.Empty, sessionKey, reason ?? string.Empty]);
+        journal.Player(
+            EventLeft, instanceName, playerId, playerName,
+            playerAddr: null, sessionKey, reason ?? string.Empty);
 
-            logger.LogInformation(
-                "emitted {Event} for {Instance} (session={SessionKey} id={Id} name={Name})",
-                EventLeft, instanceName, sessionKey, playerId ?? "<none>", playerName ?? "<none>");
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "failed to emit {Event} for {Instance} (event dropped)", EventLeft, instanceName);
-        }
+        logger.LogInformation(
+            "recorded {Event} for {Instance} (session={SessionKey} id={Id} name={Name})",
+            EventLeft, instanceName, sessionKey, playerId ?? "<none>", playerName ?? "<none>");
     }
 
     private string ResolveInstancesDir()

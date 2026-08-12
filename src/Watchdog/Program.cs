@@ -1,5 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using TheKrystalShip.KGSM.Extensions;
+using TheKrystalShip.KGSM.Core.Interfaces;
+
+using TheKrystalShip.KGSM.Services;
+using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
@@ -135,6 +139,25 @@ builder.Services.AddSingleton<SpawnEngine>();
 // StateDirectory=kgsm-watchdog) > the XDG data home. Carries state over from a home-directory layout
 // on first use, which the autostart set depends on to survive the move.
 builder.Services.AddSingleton<StatePathResolver>();
+// This daemon's own event journal, in its state directory beside the other three state files. It
+// records what the watchdog itself did — the process it spawned, the port it opened, the readiness line
+// it saw — instead of spawning kgsm.sh to write each one down, which cost a bash bootstrap, a sourced
+// library and a jq call per event. The producer id is the state directory's own name, which is what a
+// reader scans for, so the writer and every reader agree on the location without either being told.
+builder.Services.AddSingleton<IEventJournalWriter>(sp =>
+{
+    string stateDirectory = sp.GetRequiredService<StatePathResolver>().StateDirectory;
+
+    return new EventJournalWriter(
+        new TheKrystalShip.KGSM.Core.Models.EventJournalWriterOptions
+        {
+            Producer = "kgsm-watchdog",
+            Directory = Path.Combine(stateDirectory, "events"),
+            ProducerVersion = VersionInfo.Informational,
+        },
+        sp.GetRequiredService<ILogger<EventJournalWriter>>());
+});
+builder.Services.AddSingleton<WatchdogJournal>();
 builder.Services.AddSingleton<DesiredStateStore>();
 // Inc 7 Phase 2 — companion supervision-state.json: persists restart counters / give-up latch so they
 // survive ANY daemon death (OOM/SIGKILL), not just a planned hot-swap. Injected into InstanceSupervisor.

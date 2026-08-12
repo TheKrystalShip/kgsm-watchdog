@@ -91,7 +91,7 @@ public sealed class PlayerSessionTeardownTests
         // Dropping the map is bookkeeping, not an observation. A leave per tracked session would be a
         // disconnect record no game ever reported — and the crash event this teardown DOES emit is
         // already what tells a consumer to reset the whole roster.
-        var events = new PerInstanceCrashPolicyTests.RecordingEvents();
+        var events = new RecordingJournal();
         var sessions = new PlayerSessionStore();
         var spec = SpecFor("wd-sessions-silent");
         var supervisor = NewSupervisor(spec, sessions, events);
@@ -196,7 +196,7 @@ public sealed class PlayerSessionTeardownTests
     };
 
     private static InstanceSupervisor NewSupervisor(
-        Instance spec, PlayerSessionStore sessions, PerInstanceCrashPolicyTests.RecordingEvents? events = null)
+        Instance spec, PlayerSessionStore sessions, RecordingJournal? events = null)
     {
         var options = new WatchdogOptions
         {
@@ -216,7 +216,7 @@ public sealed class PlayerSessionTeardownTests
             TestState.Desired(options),
             TestState.Supervision(options),
             TestState.RunHistory(options),
-            events ?? new PerInstanceCrashPolicyTests.RecordingEvents(),
+            events ?? new RecordingJournal(),
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),

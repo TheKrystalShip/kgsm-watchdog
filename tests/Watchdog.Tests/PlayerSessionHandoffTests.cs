@@ -175,7 +175,7 @@ public sealed class PlayerSessionHandoffTests
             TestState.Desired(options),
             TestState.Supervision(options),
             TestState.RunHistory(options),
-            new PerInstanceCrashPolicyTests.RecordingEvents(),
+            new RecordingJournal(),
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),

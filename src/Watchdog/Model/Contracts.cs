@@ -169,9 +169,25 @@ public sealed record WatchdogVersionInfo(
 /// </param>
 /// <param name="LastOutputAt">When the run last printed, UTC. Always measured, for every run.</param>
 /// <param name="SizeBytes">The run's console size on disk.</param>
+/// <param name="Outcome">
+/// How the run ended, from the supervisor's own ledger: <c>crashed</c>, <c>gave-up</c>,
+/// <c>exited</c>, <c>stopped</c>, <c>running</c> for the run in progress, or <c>unknown</c>.
+/// <para>
+/// <b><c>unknown</c> is not a clean ending.</b> It is what a run reports when the ledger holds no row
+/// for it — a run that predates the ledger, one whose console the supervisor could not read, or one
+/// that ended while the daemon itself was down. A consumer must present it as an absence of
+/// knowledge; reading it as "nothing went wrong" invents the very fact the ledger exists to measure.
+/// </para>
+/// </param>
+/// <param name="ExitCode">
+/// The exit code the supervisor read from the run's leader, where it could. Null whenever it could
+/// not be read, and for the run in progress, which has not exited.
+/// </param>
 public sealed record ConsoleRun(
     int Index,
     bool Current,
     DateTime? EndedAt,
     DateTime LastOutputAt,
-    long SizeBytes);
+    long SizeBytes,
+    string Outcome,
+    int? ExitCode);

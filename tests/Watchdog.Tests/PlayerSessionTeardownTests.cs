@@ -213,8 +213,9 @@ public sealed class PlayerSessionTeardownTests
             cgroups,
             new BackoffPolicy(),
             state,
-            new DesiredStateStore(options, NullLogger<DesiredStateStore>.Instance),
-            new SupervisionStateStore(options, NullLogger<SupervisionStateStore>.Instance),
+            TestState.Desired(options),
+            TestState.Supervision(options),
+            TestState.RunHistory(options),
             events ?? new PerInstanceCrashPolicyTests.RecordingEvents(),
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(

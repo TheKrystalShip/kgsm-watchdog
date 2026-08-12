@@ -82,7 +82,8 @@ internal static class ConsoleEndpoints
         // The run index: what stretches of console exist and when each one ended. A caller correlating
         // an event against output (which run was live when this crashed?) reads this, matches on
         // EndedAt, and asks for that Index — it never has to reason about rotation or guess a path.
-        app.MapGet("/console/{name}/runs", (string name, IInstanceService instances, InstanceSupervisor sup) =>
+        app.MapGet("/console/{name}/runs", (
+            string name, IInstanceService instances, InstanceSupervisor sup, RunHistoryStore history) =>
         {
             Instance? instance = ResolveNativeInstance(instances, name);
             if (instance is null)
@@ -93,20 +94,26 @@ internal static class ConsoleEndpoints
             // no restart behind it — keeps its last log at that path until the next spawn rotates it,
             // and that run is over.
             bool inProgress = sup.IsRunning(name);
+            IReadOnlyList<RunRecord> ledger = history.RunsFor(name);
 
             ConsoleRun[] runs = EnumerateRuns(instance)
                 .Select((r, i) =>
                 {
                     bool current = r.Current && inProgress;
+                    DateTime lastOutput = r.File.LastWriteTimeUtc;
+                    RunRecord? record = current ? null : MatchLedger(ledger, lastOutput);
+
                     return new ConsoleRun(
                         Index: i,
                         Current: current,
                         // A run in progress has not ended; every other run has, and its last write is
                         // when it stopped printing. The same instant is therefore reported under two
                         // different names — an ending only where one was actually observed.
-                        EndedAt: current ? null : r.File.LastWriteTimeUtc,
-                        LastOutputAt: r.File.LastWriteTimeUtc,
-                        SizeBytes: r.File.Length);
+                        EndedAt: current ? null : lastOutput,
+                        LastOutputAt: lastOutput,
+                        SizeBytes: r.File.Length,
+                        Outcome: current ? RunningOutcome : record?.Outcome ?? UnknownOutcome,
+                        ExitCode: record?.ExitCode);
                 })
                 .ToArray();
 
@@ -182,6 +189,50 @@ internal static class ConsoleEndpoints
 
     /// <summary>Index 0: the run in progress, whenever the instance has produced any output at all.</summary>
     private const int CurrentRun = 0;
+
+    /// <summary>The run in progress has not ended, so it has no ending to report.</summary>
+    private const string RunningOutcome = "running";
+
+    /// <summary>
+    /// No ledger row joins to this run — it predates the ledger, its console could not be read when it
+    /// ended, or the daemon was down at the time. An absence of knowledge, never a clean ending.
+    /// </summary>
+    private const string UnknownOutcome = "unknown";
+
+    /// <summary>
+    /// How far a ledger row's end time may sit from a console file's last write and still describe it.
+    /// <para>
+    /// Both values originate from the same <c>stat</c> — the supervisor reads the file's mtime when it
+    /// concludes the run, and rotation moves the file with <c>rename(2)</c>, which leaves mtime alone —
+    /// so an exact match is the expected case. The tolerance covers filesystems that store a coarser
+    /// timestamp than the one .NET hands back, and nothing more: it is far below the gap between two
+    /// runs even in a crash loop, so it can never let one run's row describe another's console.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan LedgerJoinTolerance = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// The ledger row describing the run that stopped printing at <paramref name="endedAt"/>, or null
+    /// when none does. Nearest wins, so an instance that crash-looped through several runs a second
+    /// apart still resolves each console to its own row.
+    /// </summary>
+    internal static RunRecord? MatchLedger(IReadOnlyList<RunRecord> ledger, DateTime endedAt)
+    {
+        RunRecord? best = null;
+        TimeSpan closest = TimeSpan.MaxValue;
+
+        foreach (RunRecord row in ledger)
+        {
+            TimeSpan gap = (row.EndedAt - endedAt).Duration();
+            if (gap > LedgerJoinTolerance || gap >= closest)
+                continue;
+
+            best = row;
+            closest = gap;
+        }
+
+        return best;
+    }
 
     /// <summary>One run's backing file, and whether it is the live one.</summary>
     internal readonly record struct RunFile(FileInfo File, bool Current);

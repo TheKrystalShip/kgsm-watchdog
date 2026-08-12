@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the run ledger: how each run ended
+
+A console's runs could be listed and read one at a time, but nothing said which of them held a crash.
+A consumer could only compare a run's end time against a crash event and hope the nearest one was it
+— a guess that cannot tell a crash from a deliberate stop, and that picks the wrong file whenever a
+server was restarted near the moment another one died.
+
+The supervisor is the only thing on the host that watches a process exit and classifies it against
+operator intent, so it now records that verdict. `run-history.json` holds a bounded ring of runs per
+instance: how each ended (`crashed` / `gave-up` / `exited` / `stopped`), the exit code where one could
+be read, when the run started, and the supervisor's own reason line. `GET /console/{name}/runs` gains
+`outcome` and `exitCode` on every run.
+
+A row joins to its console file on **the file's own mtime**, read at the moment the run is concluded.
+That is the last line the process printed, not the moment the supervisor noticed an empty cgroup, and
+`rename(2)` leaves it untouched — so the row still identifies its file after rotation has moved it
+into the instance's logs directory. Nothing is written into the game's own directory: a log stays a
+byte-faithful capture of stdout, and anything scanning it (readiness, presence, a blueprint's own
+regexes) still sees only what the game wrote.
+
+A run with no row reports `unknown`, which is an absence of knowledge and never a clean ending — what
+every run rotated before the ledger existed reports.
+
+### Changed — state lives in `/var/lib/kgsm-watchdog`
+
+The unit declares `StateDirectory=kgsm-watchdog` + `StateDirectoryMode=0750`, and the three state
+files resolve from `$STATE_DIRECTORY`. systemd creates the directory before `ExecStart` and chowns it
+to `User=`, so it costs no privilege — the same declaration `kgsm-api` and `kgsm-monitor` use. It is
+also independent of `User=`, which `setup.sh` templates per host, and of whether that account has a
+home directory at all. `Watchdog__StateFile` still outranks it; a daemon run outside systemd still
+falls back to the XDG data home.
+
+⚠ **This needs a `--cold` deploy** — `StateDirectory=` is a unit-level directive and a hot-swap
+cannot apply it. State written under the home directory is carried over on first use of the systemd
+directory (copied, then removed), because `desired-state.json` is the only record of which instances
+return after a reboot and leaving it behind would start nothing at the next boot without erroring.
+
 ### Added — a console has runs, and they are addressable
 
 The log rotates on every fresh spawn, so a crash and the restart that followed it leave the cause in

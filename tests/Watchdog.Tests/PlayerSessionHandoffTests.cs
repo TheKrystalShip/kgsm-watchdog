@@ -172,8 +172,9 @@ public sealed class PlayerSessionHandoffTests
             cgroups,
             new BackoffPolicy(),
             state,
-            new DesiredStateStore(options, NullLogger<DesiredStateStore>.Instance),
-            new SupervisionStateStore(options, NullLogger<SupervisionStateStore>.Instance),
+            TestState.Desired(options),
+            TestState.Supervision(options),
+            TestState.RunHistory(options),
             new PerInstanceCrashPolicyTests.RecordingEvents(),
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(

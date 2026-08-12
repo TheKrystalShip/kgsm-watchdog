@@ -33,7 +33,7 @@ public sealed class SupervisionStateStoreTests : IDisposable
     }
 
     private SupervisionStateStore NewStore() =>
-        new(new WatchdogOptions { StateFile = _stateFile }, NullLogger<SupervisionStateStore>.Instance);
+        TestState.Supervision(new WatchdogOptions { StateFile = _stateFile });
 
     [Fact]
     public void Load_missing_file_is_empty()

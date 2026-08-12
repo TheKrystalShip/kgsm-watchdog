@@ -30,7 +30,7 @@ public sealed class DesiredStateStoreTests : IDisposable
     }
 
     private DesiredStateStore NewStore() =>
-        new(new WatchdogOptions { StateFile = _file }, NullLogger<DesiredStateStore>.Instance);
+        TestState.Desired(new WatchdogOptions { StateFile = _file });
 
     [Fact]
     public void Load_missing_file_is_empty()
@@ -110,7 +110,7 @@ public sealed class DesiredStateStoreTests : IDisposable
     // tests above never reaches it, so it would otherwise be wholly untested.
 
     private DesiredStateStore DefaultStore() =>
-        new(new WatchdogOptions(), NullLogger<DesiredStateStore>.Instance); // StateFile = "" -> derive it
+        TestState.Desired(new WatchdogOptions()); // StateFile = "" -> derive it
 
     [Fact]
     public void Default_path_derives_under_HOME_when_XDG_unset()

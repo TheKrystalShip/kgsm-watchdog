@@ -13,21 +13,19 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// count to zero — fabricating health the operator never earned, the precise dishonesty the ecosystem
 /// forbids.
 /// <para>
-/// This mirrors <see cref="DesiredStateStore"/> exactly — same lazily-resolved directory
-/// (<c>Watchdog__StateFile</c>'s parent, else
-/// <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog</c>), same atomic same-dir temp+rename, same
-/// best-effort posture (a failed write or a corrupt file degrades to "nothing to rehydrate", never
-/// throws). Unlike the desired-state set, the on-disk shape here is a full snapshot
+/// This mirrors <see cref="DesiredStateStore"/> exactly — same directory (<see cref="StatePathResolver"/>),
+/// same atomic same-dir temp+rename, same best-effort posture (a failed write or a corrupt file
+/// degrades to "nothing to rehydrate", never throws). Unlike the desired-state set, the on-disk shape here is a full snapshot
 /// (<see cref="PersistedSupervisionState"/>), rewritten on each meaningful transition — cheap, since
 /// counters only move on a crash/give-up/stability/stop.
 /// </para>
 /// <para>
 /// All callers are post-bootstrap (the supervisor writes from inside the gate; rehydrate runs in a
-/// hosted-service <c>StartAsync</c> after <c>CgroupBootstrap</c>), so the lazily-resolved default path
-/// sees the dropped KGSM user's <c>HOME</c> and the access is already serialized — no internal locking.
+/// hosted-service <c>StartAsync</c> after <c>CgroupBootstrap</c>), so the resolver sees the KGSM
+/// user's environment and the access is already serialized — no internal locking.
 /// </para>
 /// </summary>
-internal sealed class SupervisionStateStore(WatchdogOptions options, ILogger<SupervisionStateStore> logger)
+internal sealed class SupervisionStateStore(StatePathResolver paths, ILogger<SupervisionStateStore> logger)
 {
     /// <summary>
     /// Read the persisted supervision counters. Returns an <b>empty</b> snapshot on an absent or corrupt
@@ -82,26 +80,6 @@ internal sealed class SupervisionStateStore(WatchdogOptions options, ILogger<Sup
         }
     }
 
-    /// <summary>
-    /// The state-file path: <c>supervision-state.json</c> in the SAME directory the
-    /// <see cref="DesiredStateStore"/> uses — the parent of an explicit <c>Watchdog__StateFile</c>
-    /// if set, else <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog/</c>. Resolved lazily (never at
-    /// options construction) because <c>HOME</c> only becomes the dropped KGSM user's after the bootstrap
-    /// privilege drop, and every call site runs after that.
-    /// </summary>
-    private string ResolvePath()
-    {
-        if (!string.IsNullOrEmpty(options.StateFile))
-        {
-            // Companion file in the operator-chosen state dir (next to their desired-state.json).
-            string dir = Path.GetDirectoryName(options.StateFile) ?? ".";
-            return Path.Combine(dir, "supervision-state.json");
-        }
-
-        string dataHome = Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } xdg
-            ? xdg
-            : Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "/var/lib", ".local", "share");
-
-        return Path.Combine(dataHome, "kgsm-watchdog", "supervision-state.json");
-    }
+    /// <summary><c>supervision-state.json</c> in the resolved state directory — see <see cref="StatePathResolver"/>.</summary>
+    private string ResolvePath() => paths.PathFor(StatePathResolver.SupervisionStateFile);
 }

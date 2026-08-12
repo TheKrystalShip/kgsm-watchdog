@@ -174,8 +174,9 @@ public sealed class HotSwapCoordinatorTests
             cgroups,
             new BackoffPolicy(),
             state,
-            new DesiredStateStore(options, NullLogger<DesiredStateStore>.Instance),
-            new SupervisionStateStore(options, NullLogger<SupervisionStateStore>.Instance),
+            TestState.Desired(options),
+            TestState.Supervision(options),
+            TestState.RunHistory(options),
             events,
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(

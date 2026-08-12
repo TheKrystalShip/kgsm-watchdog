@@ -147,8 +147,9 @@ public sealed class DeregisterTests
             cgroups,
             new BackoffPolicy(),
             state,
-            new DesiredStateStore(options, NullLogger<DesiredStateStore>.Instance),
-            new SupervisionStateStore(options, NullLogger<SupervisionStateStore>.Instance),
+            TestState.Desired(options),
+            TestState.Supervision(options),
+            TestState.RunHistory(options),
             new RecordingEvents(),
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(

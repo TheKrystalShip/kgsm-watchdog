@@ -216,8 +216,9 @@ public sealed class PerInstanceCrashPolicyTests
             cgroups,
             new BackoffPolicy(), // global default: MaxRetries=5, GraceWindow=10s
             state,
-            new DesiredStateStore(options, NullLogger<DesiredStateStore>.Instance),
-            new SupervisionStateStore(options, NullLogger<SupervisionStateStore>.Instance),
+            TestState.Desired(options),
+            TestState.Supervision(options),
+            TestState.RunHistory(options),
             events,
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(

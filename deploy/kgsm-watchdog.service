@@ -55,6 +55,14 @@ EnvironmentFile=-/etc/kgsm-watchdog/kgsm-watchdog.env
 RuntimeDirectory=kgsm-watchdog
 RuntimeDirectoryMode=0750
 
+# Persistent state (the boot-autostart set, the restart counters, the run ledger) lives in
+# /var/lib/kgsm-watchdog. systemd creates it before ExecStart owned by User= and exports
+# $STATE_DIRECTORY, so provisioning it costs no privilege — the same declaration kgsm-api and
+# kgsm-monitor use. It is independent of User=, which setup.sh templates per host, and of whether
+# that account has a home directory at all.
+StateDirectory=kgsm-watchdog
+StateDirectoryMode=0750
+
 Restart=always
 RestartSec=2
 

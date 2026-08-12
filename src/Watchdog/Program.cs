@@ -131,10 +131,17 @@ builder.Services.AddSingleton<CgroupBootstrap>();
 // Supervision layer.
 builder.Services.AddSingleton(BackoffPolicy.FromOptions(options));
 builder.Services.AddSingleton<SpawnEngine>();
+// Where all three state files live, resolved once: Watchdog__StateFile > $STATE_DIRECTORY (systemd's
+// StateDirectory=kgsm-watchdog) > the XDG data home. Carries state over from a home-directory layout
+// on first use, which the autostart set depends on to survive the move.
+builder.Services.AddSingleton<StatePathResolver>();
 builder.Services.AddSingleton<DesiredStateStore>();
 // Inc 7 Phase 2 — companion supervision-state.json: persists restart counters / give-up latch so they
 // survive ANY daemon death (OOM/SIGKILL), not just a planned hot-swap. Injected into InstanceSupervisor.
 builder.Services.AddSingleton<SupervisionStateStore>();
+// The run ledger: how each run ended, keyed by the console file's mtime so a consumer can find the
+// run that holds a crash instead of guessing from timestamps.
+builder.Services.AddSingleton<RunHistoryStore>();
 // UPnP port forwarding: process-lifetime network state the supervisor owns (opens on bring-up,
 // holds across crash-restart, closes on intended stop). Self-gates on enable_port_forwarding.
 builder.Services.AddSingleton<UpnpService>();

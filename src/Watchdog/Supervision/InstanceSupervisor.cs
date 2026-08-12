@@ -42,6 +42,7 @@ internal sealed class InstanceSupervisor(
     SupervisorState state,
     DesiredStateStore store,
     SupervisionStateStore supervisionStore,
+    RunHistoryStore runHistory,
     IEventManagementService events,
     UpnpService upnp,
     FirewallPortsService firewall,
@@ -219,7 +220,11 @@ internal sealed class InstanceSupervisor(
                     reason = si.Phase == SupervisionPhase.RestartPending ? "stopped (cancelled pending restart)" : "not running";
                 }
                 _instances.TryRemove(name, out _);
+                si.LastReason = reason;
                 PersistSupervisionState(); // deliberate stop — drop this instance's persisted counters
+                // A run only ends here when there was one to end: cancelling a pending restart concludes
+                // nothing, and the crash that queued it already recorded that console.
+                RecordRunEnd(si, RunRecord.Stopped, exit: null);
                 return new ActionResult(name, true, reason);
             }
 
@@ -244,10 +249,14 @@ internal sealed class InstanceSupervisor(
             DisposeCurrent(si);
             cgroups.Remove(name);
             _instances.TryRemove(name, out _);
+
+            string stopReason = drained ? "stopped gracefully" : "killed (timeout)";
+            si.LastReason = stopReason;
             PersistSupervisionState(); // deliberate stop — drop this instance's persisted counters
+            RecordRunEnd(si, RunRecord.Stopped, exit: null);
 
             logger.LogInformation("stopped {Instance}", name);
-            return new ActionResult(name, true, drained ? "stopped gracefully" : "killed (timeout)");
+            return new ActionResult(name, true, stopReason);
         }
         finally
         {
@@ -418,6 +427,8 @@ internal sealed class InstanceSupervisor(
             store.Remove(name);  // boot-autostart intent must not resurrect a deleted instance
             sessions.Forget(name); // the stop above emptied the map; drop it, so an uninstalled instance
                                    // stops appearing in GET /players at all rather than as an empty list
+            runHistory.Forget(name); // its consoles go with the instance; rows that can join to nothing
+                                     // would only grow the ledger
             PersistSupervisionState();
 
             logger.LogInformation("deregistered {Instance} (was supervised: {WasTracked})", name, wasTracked);
@@ -1273,6 +1284,7 @@ internal sealed class InstanceSupervisor(
         si.LastReason = "stopped (stop request completed after the caller abandoned it)";
         _instances.TryRemove(si.Name, out _);
         PersistSupervisionState();
+        RecordRunEnd(si, RunRecord.Stopped, exit: null);
 
         logger.LogInformation(
             "{Instance} exited under a pending stop — completing the teardown, not restarting (intent: stopped)", si.Name);
@@ -1326,6 +1338,7 @@ internal sealed class InstanceSupervisor(
             si.LastReason = $"exited ({exitText}); not restarted (crash_restart=false)";
             logger.LogInformation("{Instance} exited ({Exit}); not restarting (crash_restart=false policy)", name, exitText);
             PersistSupervisionState();
+            RecordRunEnd(si, RunRecord.Crashed, exit);
             EmitSupervisionEvent(EventCrashed, name, exit, 0);
             return;
         }
@@ -1336,6 +1349,7 @@ internal sealed class InstanceSupervisor(
             si.LastReason = "exited cleanly (code 0); not restarted (on-failure policy)";
             logger.LogInformation("{Instance} exited cleanly; not restarting (on-failure policy)", name);
             PersistSupervisionState(); // clean exit → Stopped (terminal); persist so it isn't resurrected as Running
+            RecordRunEnd(si, RunRecord.Exited, exit);
             return;
         }
 
@@ -1348,6 +1362,7 @@ internal sealed class InstanceSupervisor(
             logger.LogWarning("{Instance} hit the restart limit ({Count} failures, last {Exit}); giving up after {Max} retries — reporting failed",
                 name, si.Restart.ConsecutiveFailures, exitText, effectivePolicy.MaxRetries);
             PersistSupervisionState(); // gave up (→Failed) — persist the latch so an OOM doesn't fake recovery
+            RecordRunEnd(si, RunRecord.GaveUp, exit);
             EmitSupervisionEvent(EventFailed, name, exit, si.Restart.ConsecutiveFailures);
             return;
         }
@@ -1358,6 +1373,9 @@ internal sealed class InstanceSupervisor(
         logger.LogWarning("{Instance} {Verb} ({Exit}); restart #{N} in {Delay}",
             name, verb, exitText, si.Restart.ConsecutiveFailures, delay.Value);
         PersistSupervisionState(); // crash registered (→RestartPending) — persist the streak across any daemon death
+        // Recorded BEFORE the restart: the next spawn rotates this console away, and the ledger row is
+        // what lets a consumer find it afterwards.
+        RecordRunEnd(si, RunRecord.Crashed, exit);
         EmitSupervisionEvent(EventCrashed, name, exit, si.Restart.ConsecutiveFailures);
     }
 
@@ -1579,6 +1597,53 @@ internal sealed class InstanceSupervisor(
             };
         }
         supervisionStore.Save(state);
+    }
+
+    /// <summary>
+    /// Record how a run ended in the <see cref="RunHistoryStore"/> ledger, so a consumer correlating a
+    /// crash against console output can find the run that holds it instead of inferring one from
+    /// timestamps. Called from each transition that concludes a run, alongside
+    /// <see cref="PersistSupervisionState"/>, and always under the gate.
+    /// </summary>
+    /// <remarks>
+    /// <b>The end time is the console file's, not the clock's.</b> A run's identity is the last line it
+    /// printed; the moment the supervisor noticed the cgroup had emptied is a different quantity,
+    /// arriving up to a poll interval later, and a ledger stamped with it would not match the file it
+    /// describes. Reading mtime here is what makes the join exact — rotation moves the file with
+    /// <c>rename(2)</c>, which does not touch mtime, so the same value still identifies it afterwards.
+    /// <para>
+    /// An instance whose console does not exist or is empty produces no row. There is no run to
+    /// describe, and a row that cannot be joined to a file is worse than none: it would occupy a
+    /// bounded slot while answering nothing.
+    /// </para>
+    /// </remarks>
+    private void RecordRunEnd(SupervisedInstance si, string outcome, int? exit)
+    {
+        string log = si.Spec.LogFile;
+        if (string.IsNullOrEmpty(log))
+            return;
+
+        DateTime endedAt;
+        try
+        {
+            var info = new FileInfo(log);
+            if (!info.Exists || info.Length == 0)
+                return;
+            endedAt = info.LastWriteTimeUtc;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "could not read {Log} to date {Instance}'s run; not recording it", log, si.Name);
+            return;
+        }
+
+        runHistory.Record(si.Name, new RunRecord(
+            EndedAt: endedAt,
+            StartedAt: si.SpawnedAt,
+            Outcome: outcome,
+            ExitCode: exit,
+            RestartCount: si.Restart.ConsecutiveFailures,
+            Detail: si.LastReason));
     }
 
     /// <summary>

@@ -25,11 +25,11 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <para>
 /// All callers are post-bootstrap (restore runs in a hosted-service <c>StartAsync</c> after
 /// <c>CgroupBootstrap</c>; <see cref="Add"/>/<see cref="Remove"/> run inside the enable/disable control
-/// verbs under the supervisor gate), so the lazily-resolved default path sees the dropped user's
-/// <c>HOME</c>, and the load/modify/save sequence is already serialized — no internal locking needed.
+/// verbs under the supervisor gate), so <see cref="StatePathResolver"/> resolves against the KGSM
+/// user's environment, and the load/modify/save sequence is already serialized — no internal locking.
 /// </para>
 /// </summary>
-internal sealed class DesiredStateStore(WatchdogOptions options, ILogger<DesiredStateStore> logger)
+internal sealed class DesiredStateStore(StatePathResolver paths, ILogger<DesiredStateStore> logger)
 {
     /// <summary>The set of instance names currently enabled for boot auto-start (deduped, order-insensitive).</summary>
     public IReadOnlyList<string> Load()
@@ -101,21 +101,6 @@ internal sealed class DesiredStateStore(WatchdogOptions options, ILogger<Desired
         }
     }
 
-    /// <summary>
-    /// The state-file path: the explicit <c>KGSM_WATCHDOG_STATE_FILE</c> if set, else
-    /// <c>${XDG_DATA_HOME:-$HOME/.local/share}/kgsm-watchdog/desired-state.json</c>. Resolved lazily
-    /// (never at options construction) because <c>HOME</c> only becomes the dropped KGSM user's after
-    /// the bootstrap privilege drop, and every call site runs after that.
-    /// </summary>
-    private string ResolvePath()
-    {
-        if (!string.IsNullOrEmpty(options.StateFile))
-            return options.StateFile;
-
-        string dataHome = Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } xdg
-            ? xdg
-            : Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "/var/lib", ".local", "share");
-
-        return Path.Combine(dataHome, "kgsm-watchdog", "desired-state.json");
-    }
+    /// <summary><c>desired-state.json</c> in the resolved state directory — see <see cref="StatePathResolver"/>.</summary>
+    private string ResolvePath() => paths.DesiredStatePath;
 }

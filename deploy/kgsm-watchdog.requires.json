@@ -1,0 +1,34 @@
+{
+  "project": "kgsm-watchdog",
+  "leafId": "watchdog",
+  "role": "engine",
+  "runtime": {
+    "kind": "native-aot",
+    "note": "A single native binary. The host needs no .NET runtime."
+  },
+  "commands": [
+    { "name": "kgsm",      "package": "kgsm",   "required": true, "probe": "kgsm --version",      "why": "resolves instance config and runs the engine's install/update paths", "warning": "The unit sets Watchdog__KgsmPath=/usr/local/bin/kgsm. A package must never write to /usr/local — packaged, this has to be /usr/bin/kgsm." },
+    { "name": "sh",        "package": "bash",   "required": true, "probe": "sh -c true",          "why": "spawns each native server's launch command" },
+    { "name": "systemctl", "package": "systemd", "required": true, "probe": "systemctl --version", "why": "owns kgsm.slice and the per-instance cgroups beneath it" },
+    { "name": "stat",      "package": "coreutils", "required": true, "probe": "stat --version",   "why": "reads cgroup inodes to correlate an instance with its cgroup" },
+
+    { "name": "upnpc", "package": "miniupnpc", "required": false, "probe": "upnpc -h", "why": "opens and closes router port forwards on server start/stop", "without": "servers start normally and no router forward is created; LAN reachability is unaffected", "note": "The router must also allow 1900/udp outbound for SSDP discovery." }
+  ],
+  "services": [],
+  "system": [
+    { "feature": "cgroup-v2",       "required": true, "probe": "test -f /sys/fs/cgroup/cgroup.controllers", "why": "native servers are spawned into per-instance cgroups under kgsm.slice" },
+    { "feature": "delegate",        "required": true, "probe": "systemctl show kgsm.slice -p Delegate",     "why": "the daemon manages the subtree of kgsm.slice itself" },
+    { "feature": "subtree-control", "required": true, "probe": "test -f /sys/fs/cgroup/kgsm.slice/cgroup.subtree_control", "why": "per-instance cpu and memory caps need the controllers enabled on the slice", "warning": "A `systemctl daemon-reload` wipes kgsm.slice's subtree_control when an instance declares memory=0. The daemon re-establishes it, but anything attached to the slice from outside (the monitor's eBPF meter) is lost until re-attached." }
+  ],
+  "units": {
+    "system": ["kgsm-watchdog.service"],
+    "user": []
+  },
+  "paths": {
+    "prefix": "/opt/kgsm-watchdog",
+    "state": ["/var/lib/kgsm-watchdog"],
+    "runtime": ["/run/kgsm-watchdog"],
+    "config": ["/etc/kgsm-watchdog/kgsm-watchdog.env"],
+    "descriptor": "/var/lib/kgsm/leaves/watchdog.json"
+  }
+}

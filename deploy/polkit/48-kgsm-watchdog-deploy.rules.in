@@ -1,0 +1,37 @@
+// 48-@PROJECT@-deploy.rules — headless-deploy grant for @PROJECT@.
+//
+// Rendered from @PROJECT@/deploy/polkit/48-@PROJECT@-deploy.rules.in and installed by
+// deploy/setup.sh. Lets '@DEPLOY_USER@' run the systemctl verbs that deploy/deploy.sh needs, for
+// THIS project's units only, with no password and no interactive auth agent. Every other unit on
+// the host is untouched by this rule.
+//
+// Managed by setup.sh — re-run it rather than hand-editing the installed copy.
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "@DEPLOY_USER@") {
+        return;
+    }
+
+    // daemon-reload: global by nature (the action carries no unit), re-reads unit files only.
+    if (action.id === "org.freedesktop.systemd1.reload-daemon") {
+        return polkit.Result.YES;
+    }
+
+    if (action.id !== "org.freedesktop.systemd1.manage-units") {
+        return;
+    }
+
+    // One entry per unit this project owns, filled in from UNITS= at render time. The trailing
+    // comma is valid JS and keeps the renderer simple.
+    var units = {
+@UNITS@
+    };
+    if (units[action.lookup("unit")] !== true) {
+        return;
+    }
+
+    var verb = action.lookup("verb");
+    if (verb === "start" || verb === "stop" || verb === "restart" ||
+        verb === "reload" || verb === "try-restart" || verb === "reload-or-restart") {
+        return polkit.Result.YES;
+    }
+});

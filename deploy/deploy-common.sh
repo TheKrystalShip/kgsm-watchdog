@@ -83,6 +83,28 @@ SYSTEMD_DIR="/etc/systemd/system"
 # with no password and no interactive auth agent.
 POLKIT_DST="/etc/polkit-1/rules.d/48-${PROJECT}-deploy.rules"
 
+# The polkit rule's CONTENT is a committed file, not a heredoc, so what the host grants can be
+# read and reviewed without running anything. Only the deploying user and the unit list cannot be
+# known until install time, and those are the template's two placeholders.
+POLKIT_TEMPLATE="${REPO_DIR}/deploy/polkit/48-${PROJECT}-deploy.rules.in"
+
+render_polkit_rule() {
+    [[ -f "$POLKIT_TEMPLATE" ]] || { err "missing polkit template: ${POLKIT_TEMPLATE}"; return 1; }
+
+    local units_js="" u
+    for u in "${UNITS[@]}"; do
+        units_js+="        \"${u}\": true,"$'\n'
+    done
+    units_js="${units_js%$'\n'}"
+
+    local rendered
+    rendered="$(< "$POLKIT_TEMPLATE")"
+    rendered="${rendered//@PROJECT@/${PROJECT}}"
+    rendered="${rendered//@DEPLOY_USER@/${DEPLOY_USER}}"
+    rendered="${rendered//@UNITS@/${units_js}}"
+    printf '%s\n' "$rendered"
+}
+
 SERVICE="${UNITS[0]}"           # the primary unit, e.g. kgsm-api.service
 PUBLISH_DIR="${REPO_DIR}/artifacts/publish"
 

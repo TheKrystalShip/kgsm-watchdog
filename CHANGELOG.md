@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the deploy contract is files, not install-time script output
+
+`deploy/polkit/48-kgsm-watchdog-deploy.rules.in` carries the headless-deploy grant as reviewable content, and
+`setup.sh` renders the deploying user and unit list into it instead of embedding the rule in a
+heredoc — what a host is granted can now be read without running anything.
+
+`deploy/sysusers.d/kgsm-watchdog.conf` declares the `kgsm` service account so a packaged install provisions it
+declaratively rather than relying on an account that happens to exist.
+
+`deploy/kgsm-watchdog.requires.json` states every host command, peer service and kernel feature this project
+needs — each with its Arch package name, a probe that proves it works, and, for anything optional,
+what is lost without it.
+
+### Changed — the committed unit names the service account, not a developer
+
+`User=`/`Group=` read `kgsm`, the account `sysusers.d` declares. `render_unit()` still substitutes
+the deploying user at install time, so a dev-host deploy is unchanged.
+
 ### Changed — kgsm-lib 4.25.0
 
 Picks up the events an audit of the engine's whole vocabulary added: the update's failure fact and the

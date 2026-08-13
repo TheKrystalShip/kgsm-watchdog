@@ -66,9 +66,11 @@ internal sealed class InstanceSupervisor(
     // sole observer of a crash AND the sole driver of the recovery respawn / boot bring-up, so it
     // is the sole emitter of these. A USER-driven start/restart is NOT emitted here: that routes
     // through the kgsm command layer (exit 211/213), which emits its own event with the user's
-    // provenance — emitting here too would double-emit. EventRestarted fires ONLY for the
-    // supervisor's own crash-recovery respawn (ReconcileRestartPending); EventStarted ONLY for an
-    // autonomous boot bring-up of a dead enabled instance (RespawnFresh) — neither shells kgsm.
+    // provenance — emitting here too would double-emit. EventRestarted fires for the supervisor's
+    // own crash-recovery respawn (ReconcileRestartPending) and for the restart THIS daemon performs
+    // itself (RestartAsync, the scheduler's), which also emits EventRestartStopped in its middle;
+    // EventStarted ONLY for an autonomous boot bring-up of a dead enabled instance (RespawnFresh) —
+    // none of them shells kgsm.
     // (Boot-autostart is a fresh bring-up, not a crash recovery: downstream it is audited but
     // deliberately NOT linked as an alert's resolution.actionId — see kgsm-api
     // KgsmAuditConsumer.IsRecoveryAction, which excludes the system-origin start specifically.)
@@ -76,6 +78,7 @@ internal sealed class InstanceSupervisor(
     private const string EventFailed = "instance-failed";
     private const string EventRestarted = "instance-restarted";
     private const string EventStarted = "instance-started";
+    private const string EventRestartStopped = "instance-restart-stopped";
 
     // ---- control verbs ----------------------------------------------------------------------
 
@@ -296,6 +299,15 @@ internal sealed class InstanceSupervisor(
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (DateTime.UtcNow < deadline && cgroups.IsPopulated(name))
             await Task.Delay(200, ct).ConfigureAwait(false);
+
+        // The old run is down and the new one has not been spawned yet — the middle of the restart,
+        // said out loud. Neither half emits anything of its own here (StopAsync/StartAsync are the
+        // control verbs, and a user-driven start/stop is kgsm's to announce), so without this the
+        // first and only word is instance-restarted at the very end and every consumer reads the
+        // instance as running for the whole shutdown. Attributed to the requester like the restart
+        // itself. A step inside one operation, never instance-stopped — that one is the fact that
+        // somebody stopped a server.
+        journal.Instance(EventRestartStopped, name, ProvenanceActor(requester));
 
         var startResult = await StartAsync(name, ct).ConfigureAwait(false);
         if (!startResult.Ok)

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — a scheduled restart reports its middle
+
+`RestartAsync` stops the instance, waits for its cgroup to drain, then starts it — and said nothing
+between the two, so for the whole shutdown a consumer had only `instance-restarted` at the very end
+and read the instance as running while its process did not exist. It now emits
+`instance-restart-stopped` once the drain completes, attributed to the requester like the restart
+itself. A step inside one operation, never `instance-stopped`: that one is the fact that somebody
+stopped a server (kgsm-lib 4.24.0 classifies the new event `Phase`).
+
 ### Changed — this daemon no longer records firewall edges
 
 `OpenFirewallPorts`/`CloseFirewallPorts` ask kgsm-firewall and record nothing. The authority performs the

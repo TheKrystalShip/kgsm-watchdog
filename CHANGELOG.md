@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — kgsm-lib 4.25.0
+
+Picks up the events an audit of the engine's whole vocabulary added: the update's failure fact and the
+brackets around the two backup verbs. Nothing here emits them; the daemon tracks the library its
+consumers share.
+
 ### Added — a scheduled restart reports its middle
 
 `RestartAsync` stops the instance, waits for its cgroup to drain, then starts it — and said nothing

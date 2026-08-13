@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — one machine-readable version, read rather than restated
+
+`deploy/version.sh` prints this project's version from the single file that declares it, and
+`--pkgver` prints the form pacman accepts (a `pkgver` may not contain a hyphen; ordering survives it,
+since `vercmp` puts `3.16.0rc3` before `3.16.0`). Packaging asks for a version instead of carrying a
+copy that can fall behind the binary.
+
 ### Added — the deploy contract is files, not install-time script output
 
 `deploy/polkit/48-kgsm-watchdog-deploy.rules.in` carries the headless-deploy grant as reviewable content, and

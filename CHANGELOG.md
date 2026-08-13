@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — GPL-3.0-or-later
+
+This project now carries a `LICENSE`. Its package declares `GPL-3.0-or-later` and installs the text
+to `/usr/share/licenses/`, so a distributed binary travels with the terms it is under.
+
 ### Added — an Arch package, built from the tested binaries
 
 `packaging/PKGBUILD` builds this project into a pacman package. It compiles nothing: CI publishes

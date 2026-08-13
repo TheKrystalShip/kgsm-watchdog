@@ -214,3 +214,7 @@ leaves it enabled). Writes are atomic (temp + rename), and a missing or corrupt 
 "nothing to restore" rather than wedging boot. To pre-seed auto-start before the daemon's first run, drop a file in this shape at the
 configured path (keys are case-sensitive `camelCase`, and JSON comments are **not** permitted — a file
 the parser rejects is treated as empty).
+
+## License
+
+GNU General Public License v3.0 or later. See [LICENSE](LICENSE).

@@ -42,7 +42,7 @@ Delegate=yes
 
 # REQUIRED: absolute path to kgsm.sh (read-only, via kgsm-lib, for each instance's spawn config). Point
 # at the packaged launcher, not a copy under /home. The full reference: `kgsm-watchdog --help`.
-Environment=Watchdog__KgsmPath=/usr/local/bin/kgsm
+Environment=Watchdog__KgsmPath=/usr/bin/kgsm
 # Optional: keep the rest of the knobs in a file. The leading '-' makes it optional (no failure if
 # absent). Every key here must exist in kgsm-watchdog.settings.json, which declares the daemon's whole
 # configurable surface; a variable naming an undeclared key binds to nothing and is warned about at

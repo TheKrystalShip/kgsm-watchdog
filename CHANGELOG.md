@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — an Arch package, built from the tested binaries
+
+`packaging/PKGBUILD` builds this project into a pacman package. It compiles nothing: CI publishes
+first and the recipe places that output, so the packaged bytes are the tested bytes. `pkgver()`
+reads `deploy/version.sh`, so the package never restates a version.
+
+The install prefix stays `/opt/<project>` — the same path `deploy.sh` uses — which is what lets the
+committed systemd unit ship verbatim instead of being rewritten at packaging time.
+
+Config files are listed in `backup=()`, so an upgrade writes `.pacnew` beside a file you edited
+rather than over it. The unit, the sysusers fragment and the leaf descriptor are packaged files, so
+the descriptor can never lag the binary it describes. Nothing is enabled by a scriptlet: pacman's
+own hooks handle the service account, the state directories and the daemon reload, and enabling a
+unit is the administrator's decision.
+
 ### Added — one machine-readable version, read rather than restated
 
 `deploy/version.sh` prints this project's version from the single file that declares it, and

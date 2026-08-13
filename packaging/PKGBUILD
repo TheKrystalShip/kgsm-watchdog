@@ -1,0 +1,67 @@
+# Maintainer: Cristian Moraru <info@thekrystalship.com>
+#
+# Build from this directory:  cd packaging && makepkg
+#
+# Compiles nothing. CI publishes first and this places the result, so the packaged bytes are the
+# tested bytes. Point KGSM_STAGE at that publish output, or leave it unset to use
+# ../artifacts/publish, which is where deploy.sh leaves one.
+#
+# The install prefix stays /opt/kgsm-watchdog, the same path deploy.sh uses on a development host, so the
+# systemd unit is byte-identical whether it came from a package or a deploy. A unit rewritten at
+# packaging time is a unit nobody tested.
+
+pkgname=kgsm-watchdog
+pkgver=1.27.1
+pkgrel=1
+pkgdesc="KGSM watchdog — resident supervisor for native game-server instances"
+arch=('x86_64')
+url="https://github.com/TheKrystalShip/kgsm-watchdog"
+# this repo ships no LICENSE file; set a real identifier once it does
+license=('LicenseRef-Unspecified')
+groups=('kgsm-node')
+# No separate debug package: these are shipped to a private fleet, not a distro archive.
+options=('!debug')
+depends=('kgsm' 'systemd' 'glibc')
+optdepends=('miniupnpc: opening and closing router port forwards on server start/stop')
+backup=('etc/kgsm-watchdog/kgsm-watchdog.env')
+
+_stage() { printf '%s' "${KGSM_STAGE:-${startdir}/../artifacts/publish}"; }
+
+pkgver() {
+    "${startdir}/../deploy/version.sh" --pkgver
+}
+
+build() {
+    local stage; stage="$(_stage)"
+    [[ -e "${stage}/kgsm-watchdog" ]] || {
+        printf '\n  no publish output at %s\n' "$stage" >&2
+        printf '  build it first:  dotnet publish src/Watchdog/Watchdog.csproj -c Release -r linux-x64 -o artifacts/publish\n' >&2
+        printf '  or point KGSM_STAGE at an existing one.\n\n' >&2
+        return 1
+    }
+}
+
+package() {
+    local repo="${startdir}/.." stage; stage="$(_stage)"
+    local prefix="${pkgdir}/opt/kgsm-watchdog"
+
+    install -dm755 "$prefix"
+    cp -a "${stage}/." "${prefix}/"
+    # Debug artifacts a published tree carries and a package should not.
+    rm -f "${prefix}"/*.pdb "${prefix}"/*.dbg
+
+    install -Dm644 "${repo}/deploy/kgsm-watchdog.service" \
+        "${pkgdir}/usr/lib/systemd/system/kgsm-watchdog.service"
+    install -Dm644 "${repo}/deploy/sysusers.d/kgsm-watchdog.conf" \
+        "${pkgdir}/usr/lib/sysusers.d/kgsm-watchdog.conf"
+
+    # Seeded from the committed example and listed in backup=(), so an upgrade writes .pacnew beside
+    # a file you edited rather than over it. Secrets are set here and ship in no package.
+    install -Dm640 "${repo}/deploy/kgsm-watchdog.env.example" \
+        "${pkgdir}/etc/kgsm-watchdog/kgsm-watchdog.env"
+
+    # The leaf config descriptor, in the directory kgsm-api scans. Packaged rather than installed by
+    # a script, so it can never describe a different build than the one beside it.
+    install -Dm644 "${repo}/deploy/kgsm-watchdog.leaf.json" \
+        "${pkgdir}/var/lib/kgsm/leaves/watchdog.json"
+}

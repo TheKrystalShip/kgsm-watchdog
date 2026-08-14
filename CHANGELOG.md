@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — a console can be read past its tail, and had whole
+
+`GET /console/{name}` reports the byte range it served in `X-Console-Start` / `X-Console-End`, and
+takes `?end=OFFSET` to read the window ending there. A caller pages back by passing the `Start` it was
+given, so the windows meet exactly while the game keeps appending — a line count from the end names a
+different line on every request, and consecutive pages overlap or skip with nothing saying so. A
+`Start` of 0 is the beginning of the run. `?tail=` is still clamped to 5000, but that now bounds ONE
+response rather than how far back a caller can read.
+
+The reader behind it walks the file backwards a block at a time instead of streaming it forward into
+a ring buffer, so a window costs its own size rather than the size of the log — which is what makes
+paging back through a large run affordable at all. Splitting on `'\n'` before decoding is safe
+because a newline byte cannot occur inside a multi-byte UTF-8 sequence.
+
+`GET /console/{name}/download` streams the whole of one run's log with a `Content-Length`, copying it
+block by block: a multi-gigabyte log costs the daemon a buffer, not its RSS. The length is
+snapshotted when the file is opened and exactly that many bytes are sent, because the game is still
+appending and a body longer than its own Content-Length is a broken response, not a fresher one.
+
+Both remain one run. The log rotates on every fresh spawn, so a crash and the restart behind it stay
+two answers — this surface still refuses to splice them into one stream.
+
 ## [1.27.2] - 2026-08-14
 
 ### Added — GPL-3.0-or-later

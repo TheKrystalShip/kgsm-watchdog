@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Core.Models.Enums;
@@ -44,14 +46,56 @@ namespace TheKrystalShip.KGSM.Watchdog.Control;
 internal static class ConsoleEndpoints
 {
     private const int DefaultTail = 200;
+
+    /// <summary>
+    /// The most lines ONE request will assemble. It bounds a single response, not how far back a
+    /// caller can read: the window is addressed by byte offset, so paging with the
+    /// <see cref="StartHeader"/> cursor reaches the beginning of a run of any size. The whole file in
+    /// one piece is <c>/console/{name}/download</c>, which streams and holds none of it.
+    /// </summary>
     private const int MaxTail = 5000;
+
+    /// <summary>Where in the file the window served begins — the cursor to page further back with.</summary>
+    private const string StartHeader = "X-Console-Start";
+
+    /// <summary>Where it ends (exclusive): the caller's own <c>?end=</c>, or the length at read time.</summary>
+    private const string EndHeader = "X-Console-End";
+
+    /// <summary>Copy buffer for the download stream — one per request, not a buffer per megabyte.</summary>
+    private const int BlockSize = 64 * 1024;
+
+    /// <summary>
+    /// Copy exactly <paramref name="length"/> bytes, which is what keeps the body honest against the
+    /// Content-Length declared for it while the game appends to the far end of the same file.
+    /// </summary>
+    private static async Task CopyExactAsync(Stream from, Stream to, long length, CancellationToken ct)
+    {
+        byte[] buffer = new byte[BlockSize];
+        long left = length;
+        while (left > 0)
+        {
+            int want = (int)Math.Min(buffer.Length, left);
+            int got = await from.ReadAsync(buffer.AsMemory(0, want), ct).ConfigureAwait(false);
+            if (got <= 0)
+                break;   // truncated under us (rotation) — stop at what was actually there
+            await to.WriteAsync(buffer.AsMemory(0, got), ct).ConfigureAwait(false);
+            left -= got;
+        }
+    }
 
     public static void MapConsole(this WebApplication app)
     {
         // Finite scrollback: the last <=N lines of ONE run, then the response closes. `int?` (not
         // `int`) so an omitted ?tail / ?run binds to null → our default, rather than minimal-API
         // returning 400.
-        app.MapGet("/console/{name}", (string name, int? tail, int? run, IInstanceService instances) =>
+        //
+        // `?end=OFFSET` reads the window ending at that byte offset instead of at the end of the file,
+        // and every response carries the range it served in X-Console-Start / X-Console-End. That is
+        // what makes reading further back exact: the caller asks for the window ending at the Start it
+        // was last given, so a game appending throughout cannot shift the answer, and a Start of 0
+        // says the run begins there. A line count from the end would name a different line on every
+        // request and quietly overlap or skip.
+        app.MapGet("/console/{name}", (string name, int? tail, int? run, long? end, HttpContext http, IInstanceService instances) =>
         {
             Instance? instance = ResolveNativeInstance(instances, name);
             if (instance is null)
@@ -71,12 +115,68 @@ internal static class ConsoleEndpoints
                     : Results.NotFound();
 
             int count = Math.Clamp(tail ?? DefaultTail, 0, MaxTail);
-            IReadOnlyList<string> lines = ConsoleTailReader.ReadLastLines(runs[index].File.FullName, count);
+            ConsoleWindow window = ConsoleTailReader.ReadWindow(runs[index].File.FullName, count, end ?? -1);
+
+            http.Response.Headers[StartHeader] = window.Start.ToString(CultureInfo.InvariantCulture);
+            http.Response.Headers[EndHeader] = window.End.ToString(CultureInfo.InvariantCulture);
 
             // Honest empty (200) when the log doesn't exist yet or N=0 — never a 404, the instance IS
             // native and known; there is just nothing buffered to show.
-            string body = lines.Count == 0 ? string.Empty : string.Join('\n', lines) + "\n";
+            string body = window.Lines.Count == 0 ? string.Empty : string.Join('\n', window.Lines) + "\n";
             return Results.Text(body, "text/plain", System.Text.Encoding.UTF8);
+        });
+
+        // The whole of ONE run, streamed. The paged read above answers "show me more" a window at a
+        // time; this answers "give me the file" — the thing somebody attaches to a bug report — and it
+        // is a separate route because it is a different shape: no line budget, and the body is copied
+        // block by block rather than assembled in memory, so a multi-gigabyte log costs the daemon a
+        // buffer rather than its whole RSS.
+        app.MapGet("/console/{name}/download", async (
+            string name, int? run, HttpContext http, IInstanceService instances) =>
+        {
+            Instance? instance = ResolveNativeInstance(instances, name);
+            if (instance is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            int index = run ?? CurrentRun;
+            IReadOnlyList<RunFile> runs = EnumerateRuns(instance);
+            if (index < 0 || (index >= runs.Count && index != CurrentRun))
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            http.Response.ContentType = "text/plain; charset=utf-8";
+            if (index >= runs.Count)
+            {
+                http.Response.ContentLength = 0;   // known native instance that has never printed
+                return;
+            }
+
+            FileStream file;
+            try
+            {
+                file = new FileStream(runs[index].File.FullName, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite, BlockSize, useAsync: true);
+            }
+            catch (IOException)
+            {
+                http.Response.ContentLength = 0;   // vanished or unreadable between listing and open
+                return;
+            }
+
+            await using (file)
+            {
+                // The length is snapshotted at open and exactly that many bytes are copied: the game
+                // is still appending, and a body longer than the Content-Length announced for it is a
+                // broken response, not a fresher one.
+                long length = file.Length;
+                http.Response.ContentLength = length;
+                await CopyExactAsync(file, http.Response.Body, length, http.RequestAborted).ConfigureAwait(false);
+            }
         });
 
         // The run index: what stretches of console exist and when each one ended. A caller correlating

@@ -139,24 +139,16 @@ builder.Services.AddSingleton<SpawnEngine>();
 // StateDirectory=kgsm-watchdog) > the XDG data home. Carries state over from a home-directory layout
 // on first use, which the autostart set depends on to survive the move.
 builder.Services.AddSingleton<StatePathResolver>();
-// This daemon's own event journal, in its state directory beside the other three state files. It
-// records what the watchdog itself did — the process it spawned, the port it opened, the readiness line
-// it saw — instead of spawning kgsm.sh to write each one down, which cost a bash bootstrap, a sourced
-// library and a jq call per event. The producer id is the state directory's own name, which is what a
-// reader scans for, so the writer and every reader agree on the location without either being told.
-builder.Services.AddSingleton<IEventJournalWriter>(sp =>
-{
-    string stateDirectory = sp.GetRequiredService<StatePathResolver>().StateDirectory;
-
-    return new EventJournalWriter(
-        new TheKrystalShip.KGSM.Core.Models.EventJournalWriterOptions
-        {
-            Producer = "kgsm-watchdog",
-            Directory = Path.Combine(stateDirectory, "events"),
-            ProducerVersion = VersionInfo.Informational,
-        },
-        sp.GetRequiredService<ILogger<EventJournalWriter>>());
-});
+// This daemon's own event journal. It records what the watchdog itself did — the process it spawned,
+// the port it opened, the readiness line it saw — instead of spawning kgsm.sh to write each one down,
+// which cost a bash bootstrap, a sourced library and a jq call per event.
+//
+// The producer id is the only input: it decides the directory a reader scans for, the version stamped
+// on every event, and the derived system:watchdog actor. ⚠ Deliberately NOT StatePathResolver's answer,
+// which the other three state files use — that resolver can land on a home-directory layout, and a
+// journal there is one no reader on this host would ever find. A journal has to sit where it can be
+// read; KGSM_JOURNAL_STATE_ROOT moves it for a run that must not touch this host's record.
+builder.Services.AddKgsmJournal(WatchdogJournal.ProducerId, typeof(Program).Assembly);
 builder.Services.AddSingleton<WatchdogJournal>();
 builder.Services.AddSingleton<DesiredStateStore>();
 // Inc 7 Phase 2 — companion supervision-state.json: persists restart counters / give-up latch so they

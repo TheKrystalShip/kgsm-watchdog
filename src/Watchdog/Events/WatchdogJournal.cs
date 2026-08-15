@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text.Json;
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
+using TheKrystalShip.KGSM.Events;
+using TheKrystalShip.KGSM.Services;
 
 namespace TheKrystalShip.KGSM.Watchdog.Events;
 
@@ -17,17 +19,16 @@ namespace TheKrystalShip.KGSM.Watchdog.Events;
 /// append one line, three times over on a single server start.
 /// </para>
 /// <para>
-/// <b>Writes are inline, not off-thread.</b> The old path hopped to the thread pool because an engine
-/// spawn is slow enough to stall the reconcile tick, and that hop meant two events emitted back to back
-/// could land out of order. An append is a single write to a file this daemon owns, so doing it in
-/// place is both fast enough and strictly better: the journal's order becomes the order things
-/// happened.
+/// <b>Writes are inline, not off-thread.</b> An append is a single write to a file this daemon owns,
+/// so doing it in place is fast enough and strictly better: the journal's order becomes the order
+/// things happened, where hopping to the thread pool lets two events emitted back to back land the
+/// wrong way round.
 /// </para>
 /// <para>
-/// <b>Best-effort, and never fatal.</b> A failed write is logged by the writer and reported back as
-/// false; supervision continues. A dropped event is the same honest no-backfill boundary consumers
-/// already accept, and failing an operation that has already happened because recording it did not work
-/// would be the worse trade.
+/// <b>Best-effort, and never fatal.</b> A failed write is logged and reported back; supervision
+/// continues. A dropped event is the same honest no-backfill boundary consumers already accept, and
+/// failing an operation that has already happened because recording it did not work would be the
+/// worse trade.
 /// </para>
 /// <para>
 /// The payload shapes live here and nowhere else, so the four places that emit cannot drift into
@@ -35,17 +36,23 @@ namespace TheKrystalShip.KGSM.Watchdog.Events;
 /// </para>
 /// </remarks>
 public sealed class WatchdogJournal(IEventJournalWriter writer, ILogger<WatchdogJournal> logger)
+    : JournalRecorder(writer, logger)
 {
-    /// <summary>This daemon's identity, and the origin of an action no human surface drove.</summary>
+    /// <summary>
+    /// This daemon's producer id — its state directory's own name, and the single input from which its
+    /// journal location, its stamped version and its actor are all derived.
+    /// </summary>
+    public const string ProducerId = "kgsm-watchdog";
+
+    /// <summary>This daemon's identity on an action it took by itself.</summary>
     /// <remarks>
     /// <c>provider:name</c> is the actor convention every consumer parses: a bare name reads as an OS
     /// user (kgsm-api treats an unprefixed actor as a person on the local host), so an autonomous
-    /// emitter has to name its identity source.
+    /// emitter has to name its identity source. Derived from <see cref="ProducerId"/> rather than
+    /// spelled out, so this daemon's identity has one source — and exposed because the supervisor
+    /// hands it to the firewall authority as the provenance of a change it asked for.
     /// </remarks>
-    public const string ActorWatchdog = "system:watchdog";
-
-    /// <summary>The origin for an action no product surface drove.</summary>
-    public const string OriginSystem = "system";
+    public static readonly string ActorWatchdog = JournalProducer.SystemActorFor(ProducerId);
 
     /// <summary>
     /// An event whose whole payload is the instance it is about — started, restarted, ready.
@@ -144,38 +151,17 @@ public sealed class WatchdogJournal(IEventJournalWriter writer, ILogger<Watchdog
                 WriteNullable(w, "Reason", reason);
         });
 
-    /// <summary>Writes a value, or a real JSON null when it carries nothing.</summary>
-    private static void WriteNullable(Utf8JsonWriter writer, string name, string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            writer.WriteNull(name);
-        else
-            writer.WriteString(name, value);
-    }
-
     /// <summary>
-    /// Appends one event, normalising the type and never throwing.
+    /// Appends one event, naming the instance it was about.
     /// </summary>
+    /// <remarks>
+    /// The base handles the append itself — type normalisation, the derived actor, and a failure that
+    /// is logged rather than thrown. This adds the one thing it cannot know: which instance the line
+    /// was about, which is what makes the debug trail readable when several are moving at once.
+    /// </remarks>
     private void Write(string eventType, string instanceName, string? actor, Action<Utf8JsonWriter> data)
     {
-        // Dash on the CLI, underscore on the wire — the engine's own convention, applied here because
-        // the call sites name events the way the engine's command line does.
-        string type = eventType.Replace('-', '_');
-
-        try
-        {
-            bool written = writer
-                .AppendAsync(type, data, actor ?? ActorWatchdog, OriginSystem)
-                .AsTask()
-                .GetAwaiter()
-                .GetResult();
-
-            if (written)
-                logger.LogDebug("recorded {Event} for {Instance}", type, instanceName);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to record {Event} for {Instance} (event dropped)", type, instanceName);
-        }
+        if (Record(eventType, data, actor))
+            logger.LogDebug("recorded {Event} for {Instance}", NormalizeType(eventType), instanceName);
     }
 }

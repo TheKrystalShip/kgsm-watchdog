@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — journal identity is derived from the producer id
+
+`AddKgsmJournal(WatchdogJournal.ProducerId, …)` replaces the hand-built writer registration and
+`WatchdogJournal` derives from `JournalRecorder` (kgsm-lib 4.29.0 / Journal 1.3.0). This daemon keeps
+what is its own — the nine event types it authors and the payload each carries — and stops answering
+for the parts every producer answers the same way.
+
+- **`ActorWatchdog` is derived from `ProducerId`**, not spelled out. Still `system:watchdog`,
+  byte-for-byte, and still exposed: the supervisor hands it to the firewall authority as the
+  provenance of a change it asked for.
+- **⚠ The journal no longer follows `StatePathResolver`.** The other three state files go wherever
+  that resolver lands, which can be a home-directory layout — and a journal there is one **no reader
+  on this host would ever find**, because discovery scans state directories under `/var/lib`. Under
+  systemd both answers are `/var/lib/kgsm-watchdog`, so nothing moves; a daemon run from a home
+  layout now records where its events can actually be read. `KGSM_JOURNAL_STATE_ROOT` relocates it
+  for a run that must not touch this host's record.
+- **`ProducerVersion` is unchanged in shape** — this daemon already stamped its informational
+  version, which is what the ecosystem standardised on. It is the other three producers that moved.
+
+The debug line naming a recorded event now reports the normalised type, so it says what the journal
+says: these call sites name events the engine's command-line way (`instance-crashed`), and the wire
+carries `instance_crashed`.
+
 ### Added — a console can be read past its tail, and had whole
 
 `GET /console/{name}` reports the byte range it served in `X-Console-Start` / `X-Console-End`, and

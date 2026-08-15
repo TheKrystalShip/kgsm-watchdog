@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — federation cannot be registered in the wrong order
+
+kgsm-lib 4.30.0 makes `AddKgsmServices` and `AddKgsmJournalFederation` register the same resolution
+rule, so either call order yields a federated reader. ⚠ **The bug it removes had no symptom**: a
+consumer that federated too early kept reading the engine's journal *successfully* — healthy journal,
+quiet host, nothing to catch — while every other producer's events sat in files it never opened.
+`JournalDiscovery` also scans once per process now, instead of once for the history reader and again
+for the live tail.
+
 ### Changed — journal identity is derived from the producer id
 
 `AddKgsmJournal(WatchdogJournal.ProducerId, …)` replaces the hand-built writer registration and

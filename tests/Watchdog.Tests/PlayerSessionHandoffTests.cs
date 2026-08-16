@@ -166,6 +166,7 @@ public sealed class PlayerSessionHandoffTests
         var cgroups = new CgroupManager(options, NullLogger<CgroupManager>.Instance);
         var spawn = new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance);
         var state = new SupervisorState { Ready = true, Detail = "test" };
+        var recorder = new RecordingJournal();
         return new InstanceSupervisor(
             new PerInstanceCrashPolicyTests.SingleInstance(new Instance { Name = "unused" }),
             spawn,
@@ -175,7 +176,8 @@ public sealed class PlayerSessionHandoffTests
             TestState.Desired(options),
             TestState.Supervision(options),
             TestState.RunHistory(options),
-            new RecordingJournal(),
+            recorder,
+            recorder.Lifecycle,
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),

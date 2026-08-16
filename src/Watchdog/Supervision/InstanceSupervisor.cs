@@ -11,6 +11,7 @@ using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using System.Text;
 using System.Text.Json;
+using TheKrystalShip.KGSM.Lifecycle;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -45,6 +46,7 @@ internal sealed class InstanceSupervisor(
     SupervisionStateStore supervisionStore,
     RunHistoryStore runHistory,
     WatchdogJournal journal,
+    LeafLifecycle lifecycle,
     UpnpService upnp,
     FirewallPortsService firewall,
     PlayerSessionStore sessions,
@@ -832,6 +834,13 @@ internal sealed class InstanceSupervisor(
             // 3. Belt-and-suspenders: also flush the Phase-2 disk state, so the counters survive even if the
             //    swap aborts mid-flight and the successor has to fall back to the normal restore.
             PersistSupervisionState();
+
+            // Say goodbye as a RELOAD, before the execve that never returns. ⚠ This is the only chance:
+            // the image is replaced in place, so ApplicationStopping never runs and the successor cannot
+            // know what happened to its predecessor. A consumer reading `reload` knows the process id is
+            // the same and that not one supervised game restarted — which is indistinguishable from an
+            // outage without it, and would otherwise page somebody on a successful deploy.
+            lifecycle.MarkStopping(LeafStopReason.Reload);
 
             // 4. Encode the blob and build an EXPLICIT envp for execve. VERIFIED 2026-06-25:
             //    Environment.SetEnvironmentVariable does NOT write through to libc environ on net10, so a

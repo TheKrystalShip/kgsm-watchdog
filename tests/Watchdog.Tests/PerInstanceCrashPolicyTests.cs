@@ -220,6 +220,7 @@ public sealed class PerInstanceCrashPolicyTests
             TestState.Supervision(options),
             TestState.RunHistory(options),
             events,
+            events.Lifecycle,
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),

@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using TheKrystalShip.KGSM.Lifecycle;
+using TheKrystalShip.KGSM.Watchdog.Events;
 
 namespace TheKrystalShip.KGSM.Watchdog.Cgroup;
 
@@ -31,6 +33,7 @@ internal sealed class CgroupBootstrap(
     WatchdogOptions options,
     CgroupManager cgroups,
     SupervisorState state,
+    LeafLifecycle lifecycle,
     ILogger<CgroupBootstrap> logger)
 {
     public void Run()
@@ -89,7 +92,19 @@ internal sealed class CgroupBootstrap(
             //    here — cgroup v2 does not retroactively charge already-resident pages. Inherent; it
             //    self-heals when that game next restarts. Fresh spawns and host reboots are unaffected.
             if (!cgroups.EnableControllers(cgroups.Base))
+            {
                 logger.LogWarning("could not enable controllers on delegated base {Base}", cgroups.Base);
+
+                // Not fatal and not silent. The daemon still spawns; what breaks is accounting, so a
+                // game runs and reads as using no memory — which looks like a monitoring fault from
+                // every surface and is a supervision one.
+                lifecycle.MarkDegraded(
+                    WatchdogComponents.Controllers,
+                    $"could not enable controllers on {cgroups.Base}; per-instance resource accounting "
+                    + "will read as zero");
+            }
+
+            CheckAtomicKill();
 
             state.Ready = true;
             state.Detail = $"delegated; base {cgroups.Base}, in {cgroups.SupervisorPath}";
@@ -101,6 +116,26 @@ internal sealed class CgroupBootstrap(
             state.Detail = $"bootstrap threw: {ex.Message}";
             logger.LogError(ex, "bootstrap failed");
         }
+    }
+
+    /// <summary>
+    /// Reports whether this kernel offers <c>cgroup.kill</c>, at boot rather than at the first stop.
+    /// </summary>
+    /// <remarks>
+    /// The file is per-cgroup but the capability is per-kernel, so the delegated base answers for every
+    /// instance cgroup that will ever be created under it. Asking here makes it one deterministic
+    /// check; discovering it on the first kill would report a capability gap as an incident, and only
+    /// once somebody was already waiting for a server to stop.
+    /// </remarks>
+    private void CheckAtomicKill()
+    {
+        if (File.Exists(Path.Combine(cgroups.Base, "cgroup.kill")))
+            return;
+
+        lifecycle.MarkDegraded(
+            WatchdogComponents.CgroupKill,
+            $"{cgroups.Base}/cgroup.kill is absent (kernel < 5.14) — a stop cannot atomically kill the "
+            + "whole process tree, so a game that forked may leave survivors holding its port");
     }
 
     /// <summary>The base path relative to the cgroup mount, for the operator hint (kgsm config coupling).</summary>

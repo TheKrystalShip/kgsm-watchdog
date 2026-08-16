@@ -207,6 +207,7 @@ public sealed class PlayerSessionTeardownTests
         var cgroups = new CgroupManager(options, NullLogger<CgroupManager>.Instance);
         var spawn = new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance);
         var state = new SupervisorState { Ready = true, Detail = "test" };
+        RecordingJournal recorder = events ?? new RecordingJournal();
         return new InstanceSupervisor(
             new PerInstanceCrashPolicyTests.SingleInstance(spec),
             spawn,
@@ -216,7 +217,8 @@ public sealed class PlayerSessionTeardownTests
             TestState.Desired(options),
             TestState.Supervision(options),
             TestState.RunHistory(options),
-            events ?? new RecordingJournal(),
+            recorder,
+            recorder.Lifecycle,
             new UpnpService(NullLogger<UpnpService>.Instance),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),

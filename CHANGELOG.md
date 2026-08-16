@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the daemon reports its own state, not just its instances'
+
+`leaf_ready`, `leaf_degraded` and `leaf_stopping` on this daemon's own journal, through
+`TheKrystalShip.KGSM.Lifecycle`. Readiness is reported once the control socket is listening and reads
+`SupervisorState` — the same answer `/health` serves — so the journal and the probe cannot disagree
+about whether this daemon came up.
+
+Three parts of the job can now break without the daemon dying, and each says so instead of only
+logging:
+
+- `cgroup-delegation` — no writable delegated subtree, so `/start` refuses. The daemon being unable to
+  do its whole job rather than part of it.
+- `cgroup-controllers` — controllers could not be enabled on the delegated base. The daemon still
+  spawns; what stops is accounting, so a game runs and its memory reads as zero. That looks like a
+  monitoring fault from every surface and is a supervision one.
+- `cgroup-kill` — checked once at boot against the delegated base rather than discovered on the first
+  stop, because the file is per-cgroup but the capability is per-kernel. ⚠ Without it a stop cannot
+  atomically kill the whole process tree, so a game that forked may leave survivors holding its port.
+
+⚠ **`StartupMs` is anchored to the top of `Program.cs`, not to the process start.** A hot-swap
+`execve`s a new image into the same process id, so the OS goes on reporting the original start — the
+first swap of this daemon reported a startup time of four hours. Measured, and still the wrong clock
+for an image that replaced itself.
+
+⚠ **A hot-swap says goodbye as `reload`, before the `execve` that never returns.** It is the only
+chance: the image is replaced in place, so `ApplicationStopping` never runs and the successor cannot
+know what happened to its predecessor. A consumer reading `reload` knows the process id is unchanged
+and that not one supervised game restarted — indistinguishable from an outage without it, and it would
+otherwise page somebody on a successful deploy.
+
 ### Fixed — a leave keeps the name the join never saw
 
 `PlayerSessionMap.Leave` merges the identity captured at join with the leave line's own, per field,

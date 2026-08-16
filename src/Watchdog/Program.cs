@@ -10,6 +10,17 @@ using TheKrystalShip.KGSM.Watchdog.Control;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+using TheKrystalShip.KGSM.Lifecycle;
+
+// When THIS IMAGE began, captured before anything else runs.
+//
+// ⚠ Not the process start, which is what LeafLifecycle reads by default and what every other leaf
+// wants. A hot-swap `execve`s a new image into the SAME process id, so the OS keeps reporting the
+// original start — and a swap of a daemon that had been up four hours reported a four-hour startup
+// time. The process really did start then; it is simply the wrong clock for an image that replaced
+// itself. This one is right for both paths: on a cold start it differs from the process start only by
+// runtime init, and on a swap it is the only honest answer available.
+DateTimeOffset imageStartedAt = DateTimeOffset.UtcNow;
 
 // The daemon's configuration sources, in precedence order, applied identically wherever config is
 // read. kgsm-watchdog.settings.json (beside the binary) declares every knob with its default; an
@@ -150,6 +161,14 @@ builder.Services.AddSingleton<StatePathResolver>();
 // read; KGSM_JOURNAL_STATE_ROOT moves it for a run that must not touch this host's record.
 builder.Services.AddKgsmJournal(WatchdogJournal.ProducerId, typeof(Program).Assembly);
 builder.Services.AddSingleton<WatchdogJournal>();
+// What this daemon says about ITSELF, as opposed to about the instances it supervises. Separate from
+// WatchdogJournal because the two answer to different identities: an instance event carries whoever
+// asked for it, and a lifecycle event is the daemon reporting on its own state with nobody behind it.
+builder.Services.AddSingleton(sp => new LeafLifecycle(
+    sp.GetRequiredService<IEventJournalWriter>(),
+    sp.GetRequiredService<ILogger<LeafLifecycle>>(),
+    clock: null,
+    startedAt: () => imageStartedAt));
 builder.Services.AddSingleton<DesiredStateStore>();
 // Inc 7 Phase 2 — companion supervision-state.json: persists restart counters / give-up latch so they
 // survive ANY daemon death (OOM/SIGKILL), not just a planned hot-swap. Injected into InstanceSupervisor.
@@ -263,7 +282,25 @@ app.Lifetime.ApplicationStarted.Register(() =>
     {
         app.Logger.LogWarning(ex, "could not set mode on control socket {Socket}", options.SocketPath);
     }
+
+    // Report readiness here rather than after the bootstrap call above, because both halves have to be
+    // true: the bootstrap decided whether this daemon may spawn, and only now is the control socket
+    // listening for somebody to ask it to. SupervisorState is the same answer /health serves, so the
+    // journal and the probe cannot disagree about whether this daemon came up.
+    SupervisorState supervisor = app.Services.GetRequiredService<SupervisorState>();
+    LeafLifecycle lifecycle = app.Services.GetRequiredService<LeafLifecycle>();
+
+    if (supervisor.Ready)
+        lifecycle.MarkReady(supervisor.Detail);
+    else
+        lifecycle.MarkDegraded(WatchdogComponents.Delegation, supervisor.Detail);
 });
+
+// The last thing this daemon says. ⚠ A hot-swap has already said it with reason `reload` by the time
+// this runs, and MarkStopping only writes once — so a swap that keeps every supervised game running is
+// never reported as a stop, which is the distinction a consumer needs and cannot recover afterwards.
+app.Lifetime.ApplicationStopping.Register(() =>
+    app.Services.GetRequiredService<LeafLifecycle>().MarkStopping(LeafStopReason.Signal));
 
 app.MapWatchdog();
 app.MapConsole();

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Lifecycle;
 using TheKrystalShip.KGSM.Watchdog.Events;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
@@ -21,7 +22,21 @@ public sealed class RecordingJournal
     /// <summary>The journal to hand to the component under test.</summary>
     public WatchdogJournal Journal { get; }
 
-    public RecordingJournal() => Journal = new WatchdogJournal(_writer, NullLogger<WatchdogJournal>.Instance);
+    /// <summary>
+    /// What the daemon says about itself, over the same writer.
+    /// </summary>
+    /// <remarks>
+    /// The same writer deliberately, because that is the production shape: both recorders append to
+    /// this producer's one journal, so a test asserting order sees the two kinds of event interleaved
+    /// exactly as a reader will.
+    /// </remarks>
+    public LeafLifecycle Lifecycle { get; }
+
+    public RecordingJournal()
+    {
+        Journal = new WatchdogJournal(_writer, NullLogger<WatchdogJournal>.Instance);
+        Lifecycle = new LeafLifecycle(_writer, NullLogger<LeafLifecycle>.Instance);
+    }
 
     /// <summary>So a test can pass the recorder itself wherever the journal is expected.</summary>
     public static implicit operator WatchdogJournal(RecordingJournal recorder) => recorder.Journal;

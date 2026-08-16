@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — this producer prunes its own journal
+
+Segments older than **90 days** are removed, matching the engine's own retention window
+(`TheKrystalShip.KGSM.Journal` 1.4.0). ⚠ **Before this, only the engine pruned anything** — its daily
+timer covers its own directory alone, and every leaf journal grew without bound.
+
+Pruning runs at startup and again when the segment date rolls over, so a resident daemon prunes daily
+and a short-lived one prunes every time it wakes — no timer, and therefore no hosting dependency in
+the writer package. Segments are unlinked **whole**, never truncated: a consumer's position is a byte
+offset into a named segment, so a rewritten file misplaces every event after the cut, where a removed
+one makes the consumer report an honest gap. Age is read from the segment's **name**, not its mtime,
+which a restore or a backup tool moves without any event moving.
+
+
 ### Fixed — federation cannot be registered in the wrong order
 
 kgsm-lib 4.30.0 makes `AddKgsmServices` and `AddKgsmJournalFederation` register the same resolution

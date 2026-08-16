@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — this producer reports a journal no other account can reach
+
+`TheKrystalShip.KGSM.Journal` 1.5.0 checks at startup whether this producer's state directory grants
+its group access, and warns when it does not. A directory cannot be entered without execute on every
+directory above it, so a state directory closed to the group hides the journal inside it however
+permissive the journal's own mode is.
+
+⚠ **That failure is silent.** A reader that cannot traverse in gets `Directory.Exists == false`, not a
+permission error — so discovery concludes this producer has recorded nothing, which is exactly what a
+genuinely idle leaf looks like. This unit declares `0750` and names the shared `kgsm` group, so the
+check stays quiet here; it exists for the leaf that ships `0700` and disappears.
+
+
 ### Added — this producer prunes its own journal
 
 Segments older than **90 days** are removed, matching the engine's own retention window

@@ -89,6 +89,56 @@ public sealed class PlayerSessionMapTests
     }
 
     [Fact]
+    public void Leave_takes_the_name_from_the_leave_line_when_the_join_had_none()
+    {
+        // Necesse-shaped, and the reverse of the bare-token case above: the connect line carries the
+        // SteamID64 and the endpoint but no character name, and the disconnect line is the only place
+        // the name appears. Returning the stored session verbatim would throw away a name the server
+        // actually reported and leave the roster showing a bare account id.
+        var map = new PlayerSessionMap();
+        map.Join("76561198144397568", id: "76561198144397568", name: null, addr: "95.19.50.122:61042");
+
+        var resolved = map.Leave("76561198144397568", id: "76561198144397568", name: "Heisen", addr: null);
+
+        Assert.NotNull(resolved);
+        Assert.Equal("Heisen", resolved!.Value.Name);
+        // The join's fields survive: the endpoint is on the connect line only.
+        Assert.Equal("76561198144397568", resolved.Value.Id);
+        Assert.Equal("95.19.50.122:61042", resolved.Value.Addr);
+    }
+
+    [Fact]
+    public void Leave_keeps_the_join_value_when_both_lines_carry_the_field()
+    {
+        // Join-wins, so the merge cannot rewrite an identity mid-session: a leave line disagreeing with
+        // the join (a renamed character, a recycled key) does not overwrite what was measured at join.
+        var map = new PlayerSessionMap();
+        map.Join("K", id: "id-join", name: "Aelia", addr: "1.1.1.1:100");
+
+        var resolved = map.Leave("K", id: "id-leave", name: "Someone Else", addr: "2.2.2.2:200");
+
+        Assert.NotNull(resolved);
+        Assert.Equal("id-join", resolved!.Value.Id);
+        Assert.Equal("Aelia", resolved.Value.Name);
+        Assert.Equal("1.1.1.1:100", resolved.Value.Addr);
+    }
+
+    [Fact]
+    public void Leave_treats_a_whitespace_only_join_field_as_absent_when_merging()
+    {
+        // Blank is absent everywhere else in this type; the merge must agree, or a pattern that matched
+        // an empty group would pin the field to "" and still lose the leave line's value.
+        var map = new PlayerSessionMap();
+        map.Join("K", id: "the-id", name: "   ", addr: null);
+
+        var resolved = map.Leave("K", id: null, name: "Heisen", addr: null);
+
+        Assert.NotNull(resolved);
+        Assert.Equal("Heisen", resolved!.Value.Name);
+        Assert.Equal("the-id", resolved.Value.Id);
+    }
+
+    [Fact]
     public void Leave_falls_back_to_the_lines_own_identity_on_a_map_miss()
     {
         // Honest fallback: the watchdog restarted mid-session (or otherwise never saw the join), but the

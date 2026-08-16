@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a leave keeps the name the join never saw
+
+`PlayerSessionMap.Leave` merges the identity captured at join with the leave line's own, per field,
+join-wins — rather than returning the stored session verbatim. For nearly every game the leave line is
+the poorer of the two and the merge changes nothing. Necesse runs the other way: its connect line
+carries the SteamID64 and the endpoint, its disconnect line carries the character name, so the name
+was measured and then discarded, and the roster showed a bare account id for a player the server had
+named. A field is taken from the leave line only where the join captured nothing, so a measured value
+is never overwritten by a later one.
+
+Contract authority `player-presence-contract.md` §4 updated to match.
+
+
 ### Added — this producer reports a journal no other account can reach
 
 `TheKrystalShip.KGSM.Journal` 1.5.0 checks at startup whether this producer's state directory grants

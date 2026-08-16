@@ -7,9 +7,12 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// three distinct problems the four validated games all exhibit in some combination:
 /// <list type="bullet">
 /// <item>
-/// <b>Correlation</b> — some games' leave lines carry only a bare token (romestead: <c>addr</c>;
-/// Valheim/Core Keeper: <c>key</c>), never the display name. The map remembers what the matching join
-/// captured so the leave can still emit a self-describing event.
+/// <b>Correlation</b> — a game's join and leave lines rarely carry the same fields. Usually the leave
+/// is the poorer of the two, down to a bare token (romestead: <c>addr</c>; Valheim/Core Keeper:
+/// <c>key</c>) with no display name, and the map supplies what the matching join captured. Necesse
+/// runs the other way — its connect line has the SteamID64 and endpoint, its disconnect line has the
+/// character name — so the resolution merges the two per field rather than preferring either line
+/// wholesale, and a session ends up described by everything the server said about it.
 /// </item>
 /// <item>
 /// <b>Doubled-join dedup</b> — Valheim logs every line twice (a <c>Console:</c>-wrapped form and a bare
@@ -95,23 +98,45 @@ internal sealed class PlayerSessionMap
     }
 
     /// <summary>
-    /// LEAVE: resolve-and-evict. On a map hit, evicts the session and returns what was captured at join
-    /// — this is the self-describing part (a bare-token leave still emits the name/id/addr seen at
-    /// join). A repeated leave (Valheim's burst) then misses (already evicted) and falls to the honest
-    /// fallback: if the leave line itself carried an <c>id</c> or <c>name</c>, emit with just that
+    /// LEAVE: resolve-and-evict. On a map hit, evicts the session and returns the identity captured at
+    /// join <b>merged field-by-field</b> with whatever the leave line carried — this is the
+    /// self-describing part (a bare-token leave still emits the name/id/addr seen at join). A repeated
+    /// leave (Valheim's burst) then misses (already evicted) and falls to the honest fallback: if the
+    /// leave line itself carried an <c>id</c> or <c>name</c>, emit with just that
     /// (<paramref name="addr"/> passed through as-is); otherwise there is nothing to attribute and the
     /// caller must skip — returned as <see langword="null"/>.
+    /// <para>
+    /// The merge is per-field and join-wins, so it changes nothing for a game whose leave line is the
+    /// poorer of the two (every game whose leave carries a bare token: the stored value is present and
+    /// is kept). It exists for the reverse case: Necesse's connect line carries the SteamID64 and the
+    /// endpoint but no character name, while its disconnect line carries the name. Returning the
+    /// stored session verbatim would discard a name the server actually reported and leave the roster
+    /// showing a bare SteamID64. A field is filled from the leave line only where the join captured
+    /// nothing, so this never overwrites a measured value with a later one — it only stops throwing
+    /// one away.
+    /// </para>
     /// </summary>
     public Session? Leave(string sessionKey, string? id, string? name, string? addr)
     {
         if (_sessions.Remove(sessionKey, out Session stored))
-            return stored;
+            return new Session(
+                Coalesce(stored.Id, id),
+                Coalesce(stored.Name, name),
+                Coalesce(stored.Addr, addr));
 
         if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(name))
             return new Session(id, name, addr); // honest fallback: map missed (e.g. watchdog restart mid-session)
 
         return null; // nothing to attribute — skip, never fabricate
     }
+
+    /// <summary>
+    /// The join-wins rule of <see cref="Leave"/>'s merge: keep what the join captured, and use the
+    /// leave line's value only where the join had nothing. Blank is absent, matching how every other
+    /// field in this type treats whitespace.
+    /// </summary>
+    private static string? Coalesce(string? fromJoin, string? fromLeave)
+        => string.IsNullOrWhiteSpace(fromJoin) ? fromLeave : fromJoin;
 
     /// <summary>
     /// Return a point-in-time copy of all tracked sessions. Used by <see cref="PlayerSessionStore"/>

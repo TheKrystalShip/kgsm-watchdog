@@ -23,7 +23,10 @@
 #                                     update a unit by writing a file it already owns.
 #   5. a scoped polkit rule         — lets you drive systemctl for THIS project's units with no
 #                                     password and no interactive auth agent.
-#   6. the units enabled + started.
+#   6. the units enabled at boot, and started when there is something to start. On a host
+#                                     that has never deployed this project there is no binary at the unit's
+#                                     ExecStart yet, so the unit is enabled and left stopped for
+#                                     deploy/deploy.sh to install and start.
 #
 # Then it VERIFIES the grant by making the same unprivileged systemctl calls deploy.sh will,
 # and fails loudly if they would have prompted.
@@ -46,6 +49,35 @@ source "$(dirname "${BASH_SOURCE[0]}")/deploy-common.sh"
 trap 'err "setup failed (line ${LINENO}). The host may be partly provisioned — re-run this script."; exit 1' ERR
 
 refuse_root
+
+# ── Can this unit start yet? ──────────────────────────────────────────────────
+# The executable a unit's first ExecStart names, or nothing for a unit that has none (a .socket).
+# Read from the RENDERED unit, so it is the same text systemd is given, and with systemd's exec
+# prefixes (-@+!:) stripped. The first thing to run is the first thing that can be missing.
+unit_execstart_binary() {   # $1 = unit filename under deploy/
+    local rendered line
+    rendered="$(render_unit "$1" 2>/dev/null)" || return 0
+    while IFS= read -r line; do
+        [[ "$line" == ExecStart=* ]] || continue
+        line="${line#ExecStart=}"
+        while [[ "$line" == [-@+!:]* ]]; do line="${line:1}"; done
+        printf '%s\n' "${line%%[[:space:]]*}"
+        return 0
+    done <<< "$rendered"
+}
+
+# True when starting this unit is something the host can actually do. A unit naming no absolute
+# path (a .socket, or a command systemd resolves itself) can always start; a unit whose binary is
+# absent cannot — and that is the fresh-host case, where the prefix stays empty until deploy.sh
+# has run once.
+unit_can_start() {          # $1 = unit filename under deploy/
+    local bin
+    bin="$(unit_execstart_binary "$1")"
+    if [[ -z "$bin" || "$bin" != /* ]]; then
+        return 0
+    fi
+    [[ -x "$bin" ]]
+}
 
 log "provisioning ${PROJECT} for headless deploys by '${DEPLOY_USER}'"
 
@@ -145,22 +177,46 @@ else
 fi
 rm -f "$POLKIT_RENDERED"
 
-# ── 6. Enable + start ─────────────────────────────────────────────────────────
+# ── 6. Enable, and start what can start ───────────────────────────────────────
+# Enablement is unconditional — wiring the unit into boot is the whole point of this script.
+# STARTING it is only possible once something exists at the unit's ExecStart, and on a host that
+# has never deployed this project nothing does. Starting there would fail for a reason that has
+# nothing to do with provisioning, so the unit is enabled and left stopped; deploy.sh installs the
+# binary and starts it. The fresh-host path is setup.sh → deploy.sh, with nothing in between.
+NOT_STARTED=()
 for u in "${ENABLE_UNITS[@]}"; do
-    log "enabling + starting ${u}"
-    $SUDO systemctl enable --now "$u"
+    if unit_can_start "$u"; then
+        log "enabling + starting ${u}"
+        $SUDO systemctl enable --now "$u"
+    else
+        log "enabling ${u} — NOT starting it: nothing is installed at $(unit_execstart_binary "$u") yet"
+        $SUDO systemctl enable "$u"
+        NOT_STARTED+=("$u")
+    fi
 done
 
 # ── 7. Verify the grant actually works, unprivileged ──────────────────────────
 # The point of this script is that deploy.sh never needs a password. Prove it here rather than
-# discovering it on the next deploy. Both calls are the real, polkit-gated ones deploy.sh makes:
-# daemon-reload (reload-daemon) and start on an already-running unit (manage-units, a no-op job).
+# discovering it on the next deploy. Both calls are real, polkit-gated ones deploy.sh makes:
+# daemon-reload (action reload-daemon) and a manage-units call on this project's own service.
+#
+# Which manage-units call depends on the service's state, because the probe must prove the grant
+# without having an effect. A running service takes `start` — systemd queues a no-op job. A stopped
+# one takes `try-restart`, which systemd documents as doing nothing when the unit is not running,
+# and which is refused exactly like `start` when the grant is missing: the polkit check happens
+# before the no-op short-circuit, so it measures the grant and not the unit. `try-restart` is one
+# of the verbs the rule grants, so this probes the rule as installed.
 log "verifying the headless grant (no password expected) ..."
 GRANT_OK=0
 for _ in 1 2 3 4 5; do
+    if systemctl is-active --quiet "$SERVICE"; then
+        MANAGE_PROBE=(start "$SERVICE")          # a no-op job on a unit already running
+    else
+        MANAGE_PROBE=(try-restart "$SERVICE")    # a no-op on a unit that is not running
+    fi
     # polkitd picks up rules.d via inotify; give it a moment on the first pass.
     if systemctl --no-ask-password daemon-reload 2>/dev/null &&
-       systemctl --no-ask-password start "$SERVICE" 2>/dev/null; then
+       systemctl --no-ask-password "${MANAGE_PROBE[@]}" 2>/dev/null; then
         GRANT_OK=1
         break
     fi
@@ -191,5 +247,9 @@ printf '   grant  : %s may start/stop/restart/reload %s with no password\n' "$DE
 if [[ -f "$ENV_FILE" ]]; then
     printf '   config : %s%s\n' "$ENV_FILE" \
         "$([[ "$ENV_SEEDED" -eq 1 ]] && printf '  ← FRESH FROM TEMPLATE, EDIT IT' || printf '  (untouched)')"
+fi
+if [[ "${#NOT_STARTED[@]}" -gt 0 ]]; then
+    printf '   status : %s is ENABLED at boot but NOT RUNNING — nothing is installed yet.\n' "${NOT_STARTED[*]}"
+    printf '            deploy/deploy.sh builds it, installs it and starts it. Run it next.\n'
 fi
 printf '\n   deploy from now on with:  %s/deploy/deploy.sh   (no sudo, no prompts)\n' "$REPO_DIR"

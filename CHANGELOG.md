@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a first setup on a host where nothing is installed yet completes
+
+`deploy/setup.sh` enables its unit at boot and starts it only when something exists at the unit's
+`ExecStart`. A host that has never deployed this project has an empty prefix, so the unit is enabled
+and left stopped, and the summary names the unit that is enabled but not running and says
+`deploy/deploy.sh` is what starts it. The fresh-host path is `setup.sh` → `deploy.sh` with nothing
+in between.
+
+The grant verification adapts with it, and still makes two real polkit-gated calls: `daemon-reload`,
+plus one `manage-units` call on this project's own service — `start` when the service is running
+(systemd queues a no-op job), `try-restart` when it is not (documented to do nothing for a unit that
+is not running). Both are dispatched as the same `manage-units` action, so a host without the grant is
+refused either way and the probe measures the grant rather than the unit.
+
+⚠ Measured in the positive direction only. The deploying user on the development host is in
+`wheel`, and two pre-existing polkit rules there grant that group every
+`org.freedesktop.systemd1.*` action outright, so no systemctl call by that user can be refused
+and the negative path cannot be exercised on it. That `try-restart` consults polkit before it
+decides there is nothing to do is systemd's own dispatch order, not something this host can
+demonstrate.
+
 ### Added — the daemon reports its own state, not just its instances'
 
 `leaf_ready`, `leaf_degraded` and `leaf_stopping` on this daemon's own journal, through

@@ -34,7 +34,7 @@ public sealed class PlayerSessionTeardownTests
     [Fact]
     public async Task Stop_clears_the_session_map()
     {
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var spec = SpecFor("wd-sessions-stop");
         var supervisor = NewSupervisor(spec, sessions);
 
@@ -54,7 +54,7 @@ public sealed class PlayerSessionTeardownTests
         // record dropped by an earlier teardown, or a stop re-issued against an already-stopped
         // instance) still answers "not running" — and must still leave nobody behind, because the
         // ingester that populated the map is not tracking table entries at all.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var spec = SpecFor("wd-sessions-untracked");
         var supervisor = NewSupervisor(spec, sessions);
 
@@ -72,7 +72,7 @@ public sealed class PlayerSessionTeardownTests
     {
         // Crash-restart is on (the default), so this exit is classified as a crash and a respawn is
         // pending — the sessions still ended when the process did.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var spec = SpecFor("wd-sessions-crash");
         var supervisor = NewSupervisor(spec, sessions);
 
@@ -92,7 +92,7 @@ public sealed class PlayerSessionTeardownTests
         // disconnect record no game ever reported — and the crash event this teardown DOES emit is
         // already what tells a consumer to reset the whole roster.
         var events = new RecordingJournal();
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var spec = SpecFor("wd-sessions-silent");
         var supervisor = NewSupervisor(spec, sessions, events);
 
@@ -111,7 +111,7 @@ public sealed class PlayerSessionTeardownTests
     {
         // The terminal branch, and the one no other reset covers: retries exhausted → phase failed, no
         // respawn, so no fresh log session will ever come along to clear the map for us.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var spec = SpecFor("wd-sessions-failed", crashMaxRestarts: 1);
         var supervisor = NewSupervisor(spec, sessions);
 
@@ -129,7 +129,7 @@ public sealed class PlayerSessionTeardownTests
     {
         // An uninstalled instance is not "an instance with nobody on it" — it is not there. Clearing
         // alone would leave it answering GET /players with an empty list forever.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var spec = SpecFor("wd-sessions-forget");
         var supervisor = NewSupervisor(spec, sessions);
 
@@ -144,7 +144,7 @@ public sealed class PlayerSessionTeardownTests
     [Fact]
     public void Clearing_one_instance_leaves_every_other_instance_alone()
     {
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var spec = SpecFor("wd-sessions-scoped");
         var supervisor = NewSupervisor(spec, sessions);
 

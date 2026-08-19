@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.33.0] - 2026-08-19
+
+### Added — a join carries the player's name on a game that prints one only on disconnect
+
+A game's connect and disconnect lines need not carry the same fields, and some name the player on
+only one of them. Necesse is the case: `Client "76561198800558749" … is connecting` on the way in,
+`Player 76561198800558749 ("gingur") disconnected` on the way out — the account id on both, the
+character name on the second alone. The per-field merge already gives the leave event everything the
+server said about that session, but a join is emitted the moment the connect line appears, long
+before its disconnect line exists. Every arrival therefore announced a bare SteamID64, while the
+roster beside it showed the person's name.
+
+`player-names.json` in the state directory now holds, per instance, the display name each account id
+was last reported under. A join whose line carries no name is emitted with it. Every surface reading
+these events gets the completed identity — the Control Panel's audit log, the roster, Discord, push —
+because the fix is where the event is made rather than in any one reader.
+
+It is an association, not a guess, and three things keep it that way: it is keyed on the game's own
+account id and never on an address (a port is reassigned per connection and an ip is ISP-mutable, so
+that would eventually name a stranger); it fills a field the line left blank and never replaces one it
+carried; and it is scoped per instance, claiming only what that server reported. Bounded at 200
+accounts per instance, evicting the least recently seen. Losing the file costs a display name on one
+join — the next disconnect re-learns it.
+
+Authority: `player-presence-contract.md` §4.
+
 ## [1.32.0] - 2026-08-18
 
 ### Added — every journal line now carries its own id

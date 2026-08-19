@@ -3,7 +3,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <summary>
 /// Where the daemon's persistent state lives, resolved once for every store that keeps a file there —
 /// the boot-autostart set (<see cref="DesiredStateStore"/>), the restart counters
-/// (<see cref="SupervisionStateStore"/>) and the run ledger (<see cref="RunHistoryStore"/>).
+/// (<see cref="SupervisionStateStore"/>), the run ledger (<see cref="RunHistoryStore"/>) and the
+/// player name index (<see cref="PlayerNameStore"/>).
 /// <para>
 /// <b>Three sources, in order.</b> An explicit <c>Watchdog__StateFile</c> wins — it names the
 /// desired-state file itself, and its directory is where the companions go. Otherwise
@@ -37,9 +38,13 @@ internal sealed class StatePathResolver(WatchdogOptions options, ILogger<StatePa
     /// <summary>How each run of each instance ended.</summary>
     public const string RunHistoryFile = "run-history.json";
 
+    /// <summary>The display name each account id was last seen under, per instance.</summary>
+    public const string PlayerNamesFile = "player-names.json";
+
     /// <summary>
-    /// The files carried over from a home-directory layout. The run ledger is absent by design: it is
-    /// only ever written to the resolved directory, so there is no older copy of it anywhere.
+    /// The files carried over from a home-directory layout. The run ledger and the player name index
+    /// are absent by design: both are only ever written to the resolved directory, so there is no older
+    /// copy of either anywhere.
     /// </summary>
     private static readonly string[] CarriedOver = [DesiredStateFile, SupervisionStateFile];
 

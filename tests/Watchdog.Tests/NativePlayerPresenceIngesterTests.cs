@@ -719,7 +719,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     // ---- helpers ------------------------------------------------------------------------------
 
     private NativePlayerPresenceIngester NewIngester(WatchdogJournal journal, IInstanceService instances, CgroupManager? cgroups = null)
-        => new(new WatchdogOptions { InstancesDir = _root }, instances, journal, new PlayerSessionStore(), cgroups ?? NewCgroups(), NullLogger<NativePlayerPresenceIngester>.Instance);
+        => new(new WatchdogOptions { InstancesDir = _root }, instances, journal, TestState.Sessions(), cgroups ?? NewCgroups(), NullLogger<NativePlayerPresenceIngester>.Instance);
 
     [Fact]
     public void A_config_read_before_the_install_finished_is_re_read_on_the_first_run()

@@ -257,9 +257,12 @@ internal sealed class RconPlayerPresencePoller(
                 if (!previousPlayers.ContainsKey(player.Key))
                 {
                     string sessionKey = PlayerSessionMap.ComputeSessionKey(null, null, player.Id, player.Name) ?? player.Key;
-                    if (sessionStore.Join(name, sessionKey, player.Id, player.Name, null))
+                    PlayerSessionStore.JoinOutcome join = sessionStore.Join(name, sessionKey, player.Id, player.Name, null);
+                    if (join.Accepted)
                     {
-                        EmitJoined(name, player.Id, player.Name, sessionKey);
+                        // join.Name, not player.Name: the store fills a name this poll did not carry
+                        // from what the account was last reported as here (see PlayerSessionStore).
+                        EmitJoined(name, player.Id, join.Name, sessionKey);
                     }
                 }
             }

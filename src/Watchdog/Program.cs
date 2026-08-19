@@ -243,6 +243,7 @@ builder.Services.AddHostedService<ContainerLifecycleIngester>();
 // startup_success_regex with the pure NativeReadinessMatcher, keyed on the instance's cgroup
 // populated-edge (reads CgroupManager — read-only, never acts). Additive + decoupled from
 // InstanceSupervisor; no spawn-path change.
+builder.Services.AddSingleton<PlayerNameStore>();
 builder.Services.AddSingleton<PlayerSessionStore>();
 builder.Services.AddHostedService<NativePlayerPresenceIngester>();
 

@@ -54,7 +54,7 @@ public sealed class PlayerSessionHandoffTests
     [Fact]
     public void Adopting_a_handoff_restores_the_session_map()
     {
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var supervisor = NewSupervisor(sessions);
 
         WithHandoff(
@@ -72,7 +72,7 @@ public sealed class PlayerSessionHandoffTests
         // The payoff, and the whole reason the map exists. Romestead's leave line carries the peer address
         // and nothing else; the name came from a join line the successor will never read. Resolving it is
         // the difference between an honest "Juno left" and a presence event dropped on the floor.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var supervisor = NewSupervisor(sessions);
 
         WithHandoff(
@@ -93,7 +93,7 @@ public sealed class PlayerSessionHandoffTests
         // The handoff's instance entries cover only instances carrying a live FIFO fd; the session maps
         // cover every instance the ingester tracks. An adopted, cgroup-only instance appears in the second
         // and not the first — and has already lost its console, so it can least afford a second loss.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var supervisor = NewSupervisor(sessions);
 
         var handoff = Handoff(("adopted-only", new PlayerSession("player-a", null, "player-a", null)));
@@ -109,7 +109,7 @@ public sealed class PlayerSessionHandoffTests
     {
         // The key is what a later leave resolves against. An entry without one can never be matched, so
         // keeping it would only inflate what GET /players reports — a player nothing can ever retire.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var supervisor = NewSupervisor(sessions);
 
         WithHandoff(Handoff(("romestead", new PlayerSession(null, null, "Ghost", null))),
@@ -123,7 +123,7 @@ public sealed class PlayerSessionHandoffTests
     {
         // Same degrade-don't-wedge rule the instance half already follows: a bad handoff costs presence
         // correlation, never the daemon's boot.
-        var sessions = new PlayerSessionStore();
+        var sessions = TestState.Sessions();
         var supervisor = NewSupervisor(sessions);
 
         string? prior = Environment.GetEnvironmentVariable(HotSwapHandoff.EnvVarName);

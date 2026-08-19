@@ -43,7 +43,10 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// join inserts-if-absent (dedups a doubled join line), leave resolves-and-evicts (dedups a repeated
 /// leave burst and recovers the identity a bare-token leave line doesn't itself carry). The map is
 /// cleared whenever <see cref="EventChannelTail.LastReadResetSession"/> reports the log rolled to a
-/// fresh session — every prior session is gone with it.
+/// fresh session — every prior session is gone with it. What survives that reset is the
+/// <see cref="PlayerNameStore"/> behind <see cref="PlayerSessionStore"/>: the display name an account
+/// id was last reported under, which is what lets a join carry a name on a game that prints one only
+/// on disconnect.
 /// </para>
 /// <para>
 /// <b>Readiness (per instance start/session).</b> See <see cref="ProcessReadiness"/>: the authoritative
@@ -415,10 +418,15 @@ internal sealed class NativePlayerPresenceIngester(
 
         if (result.EventName == PlayerPresenceParser.EventPlayerJoined)
         {
-            if (!sessionStore.Join(instanceName, sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr))
+            PlayerSessionStore.JoinOutcome join = sessionStore.Join(
+                instanceName, sessionKey, result.PlayerId, result.PlayerName, result.PlayerAddr);
+            if (!join.Accepted)
                 return; // already tracked — a doubled join line (Valheim logs every line twice)
 
-            EmitJoined(instanceName, result.PlayerId, result.PlayerName, result.PlayerAddr, sessionKey);
+            // join.Name, not result.PlayerName: where the connect line carried no name, the store
+            // supplies the one this instance last reported for the same account id (Necesse names the
+            // player only on disconnect). It never replaces a name the line did carry.
+            EmitJoined(instanceName, result.PlayerId, join.Name, result.PlayerAddr, sessionKey);
         }
         else
         {

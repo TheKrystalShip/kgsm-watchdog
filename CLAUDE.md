@@ -139,13 +139,17 @@ anything else as "unavailable, retry". The daemon supervises native-standalone i
   before the host is built) let a deploy interrogate a freshly-installed binary as a cheap subprocess
   **without** binding the socket, entering the slice, or touching cgroups. `HotSwapCoordinator` +
   `HotSwapSignalListener` bridge SIGHUP → in-place `execv`. SIGTERM is a normal shutdown.
-- **Two persistence files, two independent axes.**
+- **Persistence: the state directory, and two independent axes.**
   `desired-state.json` (`Watchdog__StateFile`) = the **boot/enable** axis (replaces `systemctl
   enable`/`WantedBy=`): `enable`/`disable` add/remove a name; on startup `StartupRestorer` re-adopts a
   still-live cgroup or respawns a dead one. Stores **intent only** — each spawn config is re-read fresh
   from kgsm-lib, so no stale-spec drift. `supervision-state.json` (`SupervisionStateStore`) persists
   restart counters / the give-up latch so they survive *any* death (OOM/SIGKILL), not just a planned
   hot-swap. The runtime `start`/`stop` axis is separate from the boot `enable`/`disable` axis.
+  `run-history.json` (`RunHistoryStore`) records how each run ended, so a crash can be joined to the
+  console file that holds its output; `player-names.json` (`PlayerNameStore`) holds each instance's
+  `accountId → display name`, which is what lets a join event carry a name on a game that prints one
+  only on disconnect. All four resolve their location through `StatePathResolver`.
 
 ## Project-specific invariants
 

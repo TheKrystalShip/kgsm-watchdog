@@ -23,4 +23,22 @@ internal static class TestState
 
     public static RunHistoryStore RunHistory(WatchdogOptions options) =>
         new(Resolver(options), NullLogger<RunHistoryStore>.Instance);
+
+    public static PlayerNameStore PlayerNames(WatchdogOptions options) =>
+        new(Resolver(options), NullLogger<PlayerNameStore>.Instance);
+
+    public static PlayerSessionStore Sessions(WatchdogOptions options) =>
+        new(PlayerNames(options));
+
+    /// <summary>
+    /// A session store for a test that exercises session tracking and nothing about remembered names.
+    /// Its name index is pinned to a throwaway directory that is only ever created if something writes
+    /// to it, so a test that never learns a name leaves nothing behind.
+    /// </summary>
+    public static PlayerSessionStore Sessions() =>
+        Sessions(new WatchdogOptions
+        {
+            StateFile = Path.Combine(
+                Path.GetTempPath(), "kgsm-wd-names-" + Guid.NewGuid().ToString("N"), "desired-state.json"),
+        });
 }

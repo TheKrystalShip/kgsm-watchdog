@@ -11,6 +11,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 [JsonSerializable(typeof(ActionResult))]
 [JsonSerializable(typeof(InstanceState))]
 [JsonSerializable(typeof(InstanceState[]))]
+[JsonSerializable(typeof(InstanceRunTimes[]))] // GET /runtimes — the run clock for every instance the daemon can date
 [JsonSerializable(typeof(ReadyState))]
 [JsonSerializable(typeof(PersistedDesiredState))]
 [JsonSerializable(typeof(PersistedSupervisionState))] // companion supervision-state.json (restart counters survive any daemon death)

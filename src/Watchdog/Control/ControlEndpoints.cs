@@ -82,6 +82,12 @@ internal static class ControlEndpoints
         app.MapGet("/list", (InstanceSupervisor sup) =>
             Results.Json(sup.List(), WatchdogJsonContext.Default.InstanceStateArray));
 
+        // The run clock, separate from /list because it answers for instances /list cannot: an instance
+        // leaves the supervised table when it stops, and "how long has this been down" is asked of exactly
+        // those. Reads the durable ledger, so it survives a daemon restart.
+        app.MapGet("/runtimes", (InstanceSupervisor sup) =>
+            Results.Json(sup.RunTimes(), WatchdogJsonContext.Default.InstanceRunTimesArray));
+
         // Boot-autostart (systemctl-style enable/disable), orthogonal to start/stop. These mutate only
         // the persisted set RestoreAsync reads at boot; they never spawn or kill.
         app.MapPost("/enable/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>

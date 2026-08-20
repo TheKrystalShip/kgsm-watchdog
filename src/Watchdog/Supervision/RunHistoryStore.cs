@@ -86,6 +86,27 @@ internal sealed class RunHistoryStore(StatePathResolver paths, ILogger<RunHistor
     public IReadOnlyList<RunRecord> RunsFor(string instance) =>
         Load().Instances.TryGetValue(instance, out var runs) ? runs : [];
 
+    /// <summary>
+    /// When each instance's most recent run ended, from ONE read of the ledger. The list endpoint
+    /// reports this for every tracked instance at once, and asking <see cref="RunsFor"/> per instance
+    /// would re-read the file once per row.
+    /// </summary>
+    public IReadOnlyDictionary<string, DateTime> LastEndedByInstance()
+    {
+        var latest = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        foreach (var (instance, runs) in Load().Instances)
+            if (runs.Count > 0)
+                latest[instance] = runs[0].EndedAt;   // rows are held newest-first
+        return latest;
+    }
+
+    /// <summary>When one instance's most recent run ended, or null when it has no recorded runs.</summary>
+    public DateTime? LastEndedFor(string instance)
+    {
+        IReadOnlyList<RunRecord> runs = RunsFor(instance);
+        return runs.Count > 0 ? runs[0].EndedAt : null;
+    }
+
     /// <summary>Drop an instance's rows entirely — used when the instance itself is removed.</summary>
     public void Forget(string instance)
     {

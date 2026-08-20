@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.34.0] - 2026-08-21
+
+### Added — the reported instance state dates the run
+
+`GET /instances` and `GET /instances/{name}` now carry `spawnedAt` and `lastExitedAt`, so a consumer
+can say how long a server has been up, or how long it has been down, without asking a second source.
+
+Both come from state the daemon already keeps. `spawnedAt` is the supervised instance's own spawn
+time, which is persisted alongside the phase — so it survives a daemon restart rather than resetting
+to the moment the daemon came back, which would report every instance as freshly started after a
+redeploy. `lastExitedAt` is the newest row in the run ledger, and is therefore the run's last output
+rather than the moment the supervisor noticed the cgroup had emptied.
+
+`spawnedAt` is reported only while the cgroup is populated. A stopped instance keeps its last spawn
+time in the table, and reporting it would read as an uptime for a process that is gone. An instance
+the daemon adopted rather than spawned reports null: nothing here started it, so there is no spawn
+time to state. An instance with no recorded runs reports a null `lastExitedAt` — an honest unknown,
+never a fabricated date.
+
+The list endpoint reads the ledger once for the whole fleet rather than once per instance.
+
 ## [1.33.0] - 2026-08-19
 
 ### Added — a join carries the player's name on a game that prints one only on disconnect

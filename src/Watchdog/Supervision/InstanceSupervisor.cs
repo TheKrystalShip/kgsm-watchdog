@@ -1141,12 +1141,15 @@ internal sealed class InstanceSupervisor(
         bool enabled = store.Load().Contains(name, StringComparer.Ordinal);
 
         if (_instances.TryGetValue(name, out var si))
-            return ToState(si, enabled);
+            return ToState(si, enabled, runHistory.LastEndedFor(name));
 
         // Untracked but possibly alive (e.g. orphaned across a daemon restart — re-adoption is Inc 3).
+        // Nothing here spawned it, so there is no spawn time to report; the ledger still dates its last
+        // recorded run.
         if (cgroups.IsPopulated(name))
             return new InstanceState(name, "unknown", enabled, true, null, cgroups.PathFor(name), "unknown", 0,
-                "untracked live cgroup (orphan from a previous daemon?)");
+                "untracked live cgroup (orphan from a previous daemon?)",
+                SpawnedAt: null, LastExitedAt: runHistory.LastEndedFor(name));
 
         // Not tracked and not live → 404 (stable contract for __watchdog_is_active/__watchdog_tracks).
         // The boot-autostart bit is reported authoritatively by GET /enabled, not here.
@@ -1210,10 +1213,52 @@ internal sealed class InstanceSupervisor(
     public InstanceState[] List()
     {
         var enabled = new HashSet<string>(store.Load(), StringComparer.Ordinal);
-        return _instances.Values.Select(si => ToState(si, enabled.Contains(si.Name))).ToArray();
+        // One read of the run ledger for the whole list: LastEndedFor re-reads the file per call, which
+        // over a fleet would be one file read per row.
+        IReadOnlyDictionary<string, DateTime> lastEnded = runHistory.LastEndedByInstance();
+        return _instances.Values
+            .Select(si => ToState(si, enabled.Contains(si.Name),
+                                  lastEnded.TryGetValue(si.Name, out DateTime e) ? e : null))
+            .ToArray();
     }
 
-    private InstanceState ToState(SupervisedInstance si, bool enabled) => new(
+    /// <summary>
+    /// The run clock for every instance this daemon can date: the ones it is supervising now, and the ones
+    /// only the run ledger remembers.
+    /// </summary>
+    /// <remarks>
+    /// The union is what makes this useful. An instance leaves the live table when it stops, so
+    /// <see cref="List"/> — which walks that table — can never answer how long a STOPPED instance has been
+    /// down, which is precisely when the question is asked. The ledger is durable and keyed by name, so it
+    /// still holds the run that ended.
+    /// </remarks>
+    public InstanceRunTimes[] RunTimes()
+    {
+        IReadOnlyDictionary<string, DateTime> lastEnded = runHistory.LastEndedByInstance();
+
+        var names = new HashSet<string>(lastEnded.Keys, StringComparer.Ordinal);
+        foreach (string tracked in _instances.Keys)
+            names.Add(tracked);
+
+        var rows = new List<InstanceRunTimes>(names.Count);
+        foreach (string name in names)
+        {
+            // A spawn time is reported only for a tracked instance whose cgroup is actually populated —
+            // the same rule ToState applies, so the two surfaces cannot disagree about what is running.
+            DateTime? spawned = _instances.TryGetValue(name, out SupervisedInstance? si) && cgroups.IsPopulated(name)
+                ? si.SpawnedAt
+                : null;
+            rows.Add(new InstanceRunTimes(
+                name,
+                spawned,
+                lastEnded.TryGetValue(name, out DateTime ended) ? ended : null));
+        }
+
+        rows.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
+        return [.. rows];
+    }
+
+    private InstanceState ToState(SupervisedInstance si, bool enabled, DateTime? lastExited) => new(
         si.Name,
         si.DesiredText,
         enabled,
@@ -1222,7 +1267,11 @@ internal sealed class InstanceSupervisor(
         cgroups.PathFor(si.Name),
         si.PhaseText,
         si.Restart.ConsecutiveFailures,
-        si.LastReason);
+        si.LastReason,
+        // Only meaningful while something is actually running: a stopped instance keeps its last
+        // SpawnedAt in the table, and reporting it would read as an uptime for a process that is gone.
+        SpawnedAt: cgroups.IsPopulated(si.Name) ? si.SpawnedAt : null,
+        LastExitedAt: lastExited);
 
     // ---- the supervision loop ---------------------------------------------------------------
 

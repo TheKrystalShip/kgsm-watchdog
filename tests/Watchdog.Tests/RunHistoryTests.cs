@@ -198,3 +198,71 @@ public sealed class ConsoleRunLedgerJoinTests
         Assert.NotNull(ConsoleEndpoints.MatchLedger(ledger, At(16, 38)));
     }
 }
+
+/// <summary>
+/// The two lookups the control surface reports a run duration from: when the current run was spawned,
+/// and when the last one ended. Both come out of the ledger the supervisor already keeps, which is
+/// what makes them survive a daemon restart — a consumer asking "running since when" must not be told
+/// the moment the daemon last came back.
+/// </summary>
+[Collection(EnvironmentCollection.Name)]
+public sealed class RunHistoryLookupTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(
+        Path.GetTempPath(), "kgsm-wd-lookup-" + Guid.NewGuid().ToString("N"));
+
+    public RunHistoryLookupTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
+    }
+
+    private RunHistoryStore NewStore() =>
+        TestState.RunHistory(new WatchdogOptions { StateFile = Path.Combine(_dir, "desired-state.json") });
+
+    private static RunRecord Run(DateTime endedAt) =>
+        new(endedAt, StartedAt: endedAt.AddMinutes(-30), RunRecord.Stopped, 0, RestartCount: 0, Detail: "test");
+
+    private static DateTime At(int day, int hour) => new(2026, 8, day, hour, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void LastEndedForReportsTheNewestRun()
+    {
+        var store = NewStore();
+        store.Record("romestead", Run(At(11, 9)));
+        store.Record("romestead", Run(At(12, 18)));   // newer, recorded second
+
+        Assert.Equal(At(12, 18), NewStore().LastEndedFor("romestead"));
+    }
+
+    [Fact]
+    public void LastEndedForIsNullForAnInstanceWithNoRuns()
+    {
+        NewStore().Record("romestead", Run(At(11, 9)));
+
+        // An instance the ledger has never seen is an honest unknown, never a fabricated date.
+        Assert.Null(NewStore().LastEndedFor("necesse"));
+    }
+
+    [Fact]
+    public void LastEndedByInstanceAnswersEveryInstanceFromOneRead()
+    {
+        var store = NewStore();
+        store.Record("romestead", Run(At(11, 9)));
+        store.Record("romestead", Run(At(12, 18)));
+        store.Record("necesse", Run(At(10, 7)));
+
+        var all = NewStore().LastEndedByInstance();
+
+        Assert.Equal(2, all.Count);
+        Assert.Equal(At(12, 18), all["romestead"]);
+        Assert.Equal(At(10, 7), all["necesse"]);
+    }
+
+    [Fact]
+    public void LastEndedByInstanceIsEmptyWithNoLedger()
+    {
+        Assert.Empty(NewStore().LastEndedByInstance());
+    }
+}

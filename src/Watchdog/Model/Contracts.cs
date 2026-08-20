@@ -68,7 +68,34 @@ public sealed record InstanceState(
     string CgroupPath,
     string Phase,         // "running" | "restart-pending" | "stopped" | "failed" | "unknown"
     int Restarts,         // consecutive-failure streak since last stability (0 when healthy)
-    string Reason);       // last transition reason (e.g. "crashed (exit 139); restart in 2s")
+    string Reason,        // last transition reason (e.g. "crashed (exit 139); restart in 2s")
+    // When the CURRENT run was spawned, UTC, or null when nothing is running and when the daemon
+    // adopted a live cgroup it did not spawn. Persisted alongside the phase, so it survives a daemon
+    // restart rather than resetting to the moment the daemon came back.
+    DateTime? SpawnedAt = null,
+    // When the LAST run ended, UTC, or null when no run of this instance has been recorded. Read from
+    // the run ledger, so it survives a daemon restart and is not lost when the instance stops being
+    // tracked. This is the console file's mtime — the run's own last output — not the moment the
+    // supervisor noticed the cgroup had emptied.
+    DateTime? LastExitedAt = null);
+
+/// <summary>
+/// One instance's run clock: when its current run was spawned, and when its last run ended.
+/// </summary>
+/// <remarks>
+/// Reported for every instance the daemon can date — the ones it is supervising right now AND the ones
+/// only the run ledger remembers. That union is the whole point of this being its own record rather than
+/// two fields on <see cref="InstanceState"/>: an instance stops being tracked when it stops, so a
+/// consumer asking <c>/list</c> how long a stopped server has been down would never be told about the
+/// instances that are actually down.
+/// </remarks>
+/// <param name="Name">The instance name.</param>
+/// <param name="SpawnedAt">When the current run was spawned (UTC); null when nothing is running.</param>
+/// <param name="LastExitedAt">When the last recorded run ended (UTC); null when no run is on record.</param>
+public sealed record InstanceRunTimes(
+    string Name,
+    DateTime? SpawnedAt,
+    DateTime? LastExitedAt);
 
 /// <summary>Readiness of the supervisor itself: whether it is in-slice and able to spawn.</summary>
 public sealed record ReadyState(bool Ready, string Detail);

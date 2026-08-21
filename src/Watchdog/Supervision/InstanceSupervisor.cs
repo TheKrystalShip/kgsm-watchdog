@@ -50,10 +50,22 @@ internal sealed class InstanceSupervisor(
     UpnpService upnp,
     FirewallPortsService firewall,
     PlayerSessionStore sessions,
+    MemoryGate memoryGate,
     ILogger<InstanceSupervisor> logger) : IDisposable, IForwardedPortClaims
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// How long an instance held back for want of memory waits before the node is re-checked.
+    /// </summary>
+    /// <remarks>
+    /// Independent of the crash backoff, because this is not a crash: the delay is not a punishment for
+    /// repeated failure but a polling interval on somebody else's memory. Short enough that an instance
+    /// comes back promptly once another server stops, long enough that a permanently-full node is not
+    /// re-reading /proc/meminfo every tick.
+    /// </remarks>
+    private static readonly TimeSpan NoRoomRecheckDelay = TimeSpan.FromSeconds(30);
 
     // PIDs of hot-swap-ADOPTED instances we must reap ourselves. A game that survives a same-PID execve
     // stays OUR child, but the re-exec'd image holds no managed Process for it (it adopted it as
@@ -641,7 +653,8 @@ internal sealed class InstanceSupervisor(
     /// <summary>
     /// Spawn an instance whose cgroup is empty (a host reboot / clean stop left nothing running). Mirrors
     /// the RESTART path (<see cref="ReconcileRestartPending"/>), not <see cref="StartAsync"/>: a bare
-    /// <see cref="TrySpawn"/> that trusts the grace window, NOT a synchronous <c>WaitForPopulated</c> —
+    /// <see cref="TrySpawn(SupervisedInstance, DateTime, out string)"/> that trusts the grace window,
+    /// NOT a synchronous <c>WaitForPopulated</c> —
     /// blocking 5s × N instances here would delay the control socket binding during boot. The reconcile
     /// loop confirms liveness a tick later. Returns true if it spawned, false if the spawn failed
     /// (tracked as <see cref="SupervisionPhase.Failed"/>).
@@ -649,7 +662,7 @@ internal sealed class InstanceSupervisor(
     private bool RespawnFresh(string name, Instance spec, DateTime now)
     {
         var si = new SupervisedInstance { Name = name, Spec = spec, DesiredRunning = true };
-        if (TrySpawn(si, now, out var reason))
+        if (TrySpawn(si, now, out var reason, out bool noRoom))
         {
             si.LastReason = $"restored after restart; {reason}";
             _instances[name] = si;
@@ -668,6 +681,22 @@ internal sealed class InstanceSupervisor(
             // resolution.actionId. The ADOPTED-live path (AdoptLive) stays silent — no state change.
             journal.Instance(EventStarted, name);
             return true;
+        }
+
+        // No room on the node — hold it rather than latching Failed. A boot is exactly when this is most
+        // likely and least permanent: every enabled instance is coming up at once, so the ones at the
+        // back of the queue can find the node briefly full and fit perfectly well a moment later. Failed
+        // is terminal until someone starts it by hand, which would leave a server down for a shortage
+        // that had already passed.
+        if (noRoom)
+        {
+            si.Phase = SupervisionPhase.RestartPending;
+            si.NextRestartAt = now + NoRoomRecheckDelay;
+            si.LastReason = $"not started: {reason}";
+            _instances[name] = si;
+            logger.LogWarning("restore: {Instance} is not being started: {Reason}. Re-checking every {Delay}s.",
+                name, reason, (int)NoRoomRecheckDelay.TotalSeconds);
+            return false;
         }
 
         si.Phase = SupervisionPhase.Failed;
@@ -1456,7 +1485,7 @@ internal sealed class InstanceSupervisor(
             return; // still waiting out the backoff delay
 
         logger.LogInformation("{Instance} restarting (attempt #{N})", si.Name, si.Restart.ConsecutiveFailures);
-        if (TrySpawn(si, now, out var reason))
+        if (TrySpawn(si, now, out var reason, out bool noRoom))
         {
             si.LastReason = $"restarted (attempt #{si.Restart.ConsecutiveFailures}); {reason}";
             // The autonomous crash-recovery respawn succeeded — emit instance-restarted (system/system)
@@ -1464,6 +1493,26 @@ internal sealed class InstanceSupervisor(
             // alert's resolution.actionId). Emitted per successful attempt, symmetric with the per-crash
             // instance-crashed above; a respawn that immediately re-dies just re-fires the crash next tick.
             journal.Instance(EventRestarted, si.Name);
+            return;
+        }
+
+        // No room on the node. This is NOT the instance failing, so it does not spend a retry and it
+        // never latches Failed: nothing is wrong with this server, the node is simply full right now,
+        // and the moment something else stops it fits again. Spending the give-up budget here would
+        // report a capacity problem as a crash loop and leave the instance down after the memory came
+        // back. The phase stays RestartPending and the next tick re-checks.
+        if (noRoom)
+        {
+            si.NextRestartAt = now + NoRoomRecheckDelay;
+            string held = $"not restarted: {reason}";
+            bool firstTime = si.LastReason != held;
+            si.LastReason = held;
+            // Logged once per entry into the state, not once per re-check — an instance waiting hours
+            // for room would otherwise fill the journal with the same line.
+            if (firstTime)
+                logger.LogWarning("{Instance} is not being restarted: {Reason}. Re-checking every {Delay}s.",
+                    si.Name, reason, (int)NoRoomRecheckDelay.TotalSeconds);
+            PersistSupervisionState();
             return;
         }
 
@@ -1709,7 +1758,30 @@ internal sealed class InstanceSupervisor(
 
     /// <summary>Fork the game from the instance's cached spec into a fresh cgroup; on success the record is Running.</summary>
     private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason)
+        => TrySpawn(si, now, out reason, out _);
+
+    /// <summary>
+    /// Fork the game, refusing first if the node has no room for it.
+    /// </summary>
+    /// <remarks>
+    /// Every spawn this daemon performs comes through here — the dispatched start, the boot autostart
+    /// and the crash-restart — so the capacity check sits here rather than being restated at each.
+    /// <paramref name="noRoom"/> is what lets the callers differ where they must: a refusal is not the
+    /// instance failing to start, and the restart path must not spend a retry on it.
+    /// </remarks>
+    private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason, out bool noRoom)
     {
+        noRoom = false;
+
+        MemoryGate.Decision room = memoryGate.Evaluate(si.Spec);
+        if (room.IsRefused)
+        {
+            noRoom = true;
+            reason = room.Reason ?? "not enough memory";
+            si.Current = null;
+            return false;
+        }
+
         try
         {
             var ri = spawnEngine.Spawn(si.Spec);

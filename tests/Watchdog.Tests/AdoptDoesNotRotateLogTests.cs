@@ -155,6 +155,7 @@ public sealed class AdoptDoesNotRotateLogTests : IDisposable
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),
+            TestMemoryGate.Disabled(),
             NullLogger<InstanceSupervisor>.Instance);
     }
 

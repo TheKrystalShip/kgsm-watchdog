@@ -225,6 +225,7 @@ public sealed class PerInstanceCrashPolicyTests
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),
+            TestMemoryGate.Disabled(),
             NullLogger<InstanceSupervisor>.Instance);
     }
 

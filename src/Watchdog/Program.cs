@@ -185,6 +185,10 @@ builder.Services.AddSingleton<UpnpService>();
 // crash-respawn. Reached through kgsm-lib's client, like every other C# consumer of the authority.
 builder.Services.AddKgsmFirewallClient(options.FirewallSocketPath);
 builder.Services.AddSingleton<FirewallPortsService>();
+// The node-capacity check every spawn passes through. A singleton because it caches kgsm's two config
+// keys and each blueprint's declared requirement — a crash-restart can ask repeatedly, and each miss
+// costs a kgsm invocation.
+builder.Services.AddSingleton<MemoryGate>();
 builder.Services.AddSingleton<InstanceSupervisor>();
 
 // The supervisor holds desired-state, so it is what can answer which forwarded ports are still claimed

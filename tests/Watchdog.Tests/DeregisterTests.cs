@@ -157,6 +157,7 @@ public sealed class DeregisterTests
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),
+            TestMemoryGate.Disabled(),
             NullLogger<InstanceSupervisor>.Instance);
     }
 

@@ -183,6 +183,7 @@ public sealed class HotSwapCoordinatorTests
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),
+            TestMemoryGate.Disabled(),
             NullLogger<InstanceSupervisor>.Instance);
     }
 

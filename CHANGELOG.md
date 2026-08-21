@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.35.0] - 2026-08-22
+
+### Added — the daemon refuses to spawn into a node with no room
+
+Every spawn the daemon performs — the dispatched start, the boot autostart, and the crash-restart —
+now passes a node-capacity check first. The kgsm CLI gates the starts a person types; the other two
+never pass through it, so a gate that lived only there would be missing from exactly the case that
+motivates it: an instance restarting into a node that has filled up since it last ran.
+
+The two knobs are read from **kgsm's** config (`enable_memory_gate`, `memory_gate_headroom_mb`)
+through `IConfigService`, not from this daemon's own settings, so the host has one answer rather than
+two that can disagree. Both are cached for a minute — each read costs a kgsm invocation and a crash
+loop can ask repeatedly. Absent keys fall back to the same coded defaults kgsm uses (on, 1024MB), so
+a host whose config predates the gate is protected rather than unprotected.
+
+What an instance is expected to need is its own `memory_cap_mb` when set — the ceiling this daemon
+itself writes to `memory.max`, so it bounds what the node stands to lose — otherwise the blueprint's
+advisory `metadata.min_ram_mb`. With neither declared the check cannot run and the spawn proceeds; no
+figure is invented. The reading is `MemAvailable`, never `MemFree`.
+
+**A refusal is not a crash.** The crash-restart path defers instead of spawning, does **not** spend a
+retry, and never latches `Failed`: nothing is wrong with the server, the node is simply full, and it
+fits again the moment something else stops. The phase stays `restart-pending` and the node is
+re-checked every 30s. Spending the give-up budget here would report a capacity problem as a crash
+loop and leave the instance down after the memory came back. The boot autostart holds the same way,
+which matters most there — every enabled instance comes up at once, so the ones at the back can find
+the node briefly full and fit perfectly well a moment later.
+
+There is deliberately **no `--force` equivalent**. The CLI has one because a person at a terminal can
+judge that a blueprint's declared figure overstates what a game really uses; the daemon has nobody to
+make that judgement, so it never overrules itself.
+
 ## [1.34.0] - 2026-08-21
 
 ### Added — the reported instance state dates the run

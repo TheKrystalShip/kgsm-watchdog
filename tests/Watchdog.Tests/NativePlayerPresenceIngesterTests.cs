@@ -716,10 +716,100 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.Equal("FreshFromRun2", rec.Calls[0].String("PlayerName"));
     }
 
+    // ---- readiness releases the spawn's memory reservation -------------------------------------
+
+    [Fact]
+    public void Ready_releases_the_memory_reservation_the_spawn_took()
+    {
+        // Readiness is the release signal for the whole ledger: the declared memory has materialised by
+        // the time a game says it is up, so from here MemAvailable accounts for it and continuing to
+        // subtract a reservation would double-count.
+        string log = MakeInstanceWithLog("factorio", "factorio-res", "");
+        var fake = new FakeInstanceService();
+        var spec = Native("factorio-res", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+");
+        spec.MemoryCapMb = 4096;
+        fake.Add(spec);
+
+        var gate = TestMemoryGate.Posed(availableMb: 10_000);
+        Assert.Equal(MemoryGate.Verdict.Allowed, gate.TryReserve("factorio-res", spec).Verdict);
+
+        var cgroups = NewCgroups();
+        var ingester = NewIngester(new RecordingJournal(), fake, cgroups, gate);
+
+        SetPopulated("factorio-res", populated: true);
+        ingester.IngestOnce(_root);
+        Assert.Equal(4096, gate.OutstandingReservedMb()); // started, but not yet ready — still committed
+
+        File.AppendAllText(log, "1234.567 Hosting game at IP ADDR:34197\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(0, gate.OutstandingReservedMb());
+    }
+
+    [Fact]
+    public void Immediate_readiness_releases_the_reservation_on_the_start_edge()
+    {
+        // A blueprint with no startup_success_regex has no distinct readiness signal, so "ready" is
+        // "observed started" — the reservation has nothing else to wait for and is released on the same
+        // rule, rather than being held for a signal that will never come.
+        string log = MakeInstanceWithLog("factorio", "factorio-res-immediate", "");
+        var fake = new FakeInstanceService();
+        var spec = Native("factorio-res-immediate", log, joined: "", left: "", ready: "");
+        spec.MemoryCapMb = 4096;
+        fake.Add(spec);
+
+        var gate = TestMemoryGate.Posed(availableMb: 10_000);
+        gate.TryReserve("factorio-res-immediate", spec);
+
+        var cgroups = NewCgroups();
+        var ingester = NewIngester(new RecordingJournal(), fake, cgroups, gate);
+
+        ingester.IngestOnce(_root); // not populated yet — no start edge, so nothing is released
+        Assert.Equal(4096, gate.OutstandingReservedMb());
+
+        SetPopulated("factorio-res-immediate", populated: true);
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(0, gate.OutstandingReservedMb());
+    }
+
+    [Fact]
+    public void A_readiness_pattern_that_does_not_compile_never_releases_the_reservation()
+    {
+        // A non-empty startup_success_regex that fails to compile is a real blueprint bug: readiness
+        // detection is disabled rather than silently downgraded to the immediate rule, so no
+        // instance-ready will ever arrive for this instance and nothing here can release its
+        // reservation. The gate's own backstop is the only thing that does.
+        string log = MakeInstanceWithLog("factorio", "factorio-res-badregex", "");
+        var fake = new FakeInstanceService();
+        var spec = Native("factorio-res-badregex", log, joined: "", left: "", ready: "((((unclosed");
+        spec.MemoryCapMb = 4096;
+        fake.Add(spec);
+
+        var gate = TestMemoryGate.Posed(availableMb: 10_000);
+        gate.TryReserve("factorio-res-badregex", spec);
+
+        var rec = new RecordingJournal();
+        var cgroups = NewCgroups();
+        var ingester = NewIngester(rec, fake, cgroups, gate);
+
+        SetPopulated("factorio-res-badregex", populated: true);
+        ingester.IngestOnce(_root);
+        File.AppendAllText(log, "1234.567 Hosting game at IP ADDR:34197\n");
+        ingester.IngestOnce(_root);
+        ingester.IngestOnce(_root);
+
+        Assert.Empty(rec.Calls);                          // no readiness was fabricated…
+        Assert.Equal(4096, gate.OutstandingReservedMb()); // …so the reservation stands until the backstop
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
-    private NativePlayerPresenceIngester NewIngester(WatchdogJournal journal, IInstanceService instances, CgroupManager? cgroups = null)
-        => new(new WatchdogOptions { InstancesDir = _root }, instances, journal, TestState.Sessions(), cgroups ?? NewCgroups(), NullLogger<NativePlayerPresenceIngester>.Instance);
+    private NativePlayerPresenceIngester NewIngester(
+        WatchdogJournal journal, IInstanceService instances, CgroupManager? cgroups = null, MemoryGate? memoryGate = null)
+        => new(new WatchdogOptions { InstancesDir = _root }, instances, journal, TestState.Sessions(),
+            cgroups ?? NewCgroups(), memoryGate ?? TestMemoryGate.Disabled(),
+            NullLogger<NativePlayerPresenceIngester>.Instance);
 
     [Fact]
     public void A_config_read_before_the_install_finished_is_re_read_on_the_first_run()

@@ -8,10 +8,13 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// <summary>
 /// The node-capacity check the daemon applies before every spawn. The arithmetic is pure, so these run
 /// against fakes for the two engine reads (kgsm's config, a blueprint's declared figure) and the real
-/// /proc/meminfo reading the host provides.
+/// /proc/meminfo reading the host provides. The reservation-ledger tests instead pose a node of a known
+/// size (<see cref="PosedGate"/>): they are about several starts composing, which needs the node's own
+/// figure to hold still — and proving a memory bound by consuming memory would be self-defeating.
 /// <para>
 /// What is pinned here is mostly what the gate must NOT do: refuse on its own ignorance, invent a
-/// requirement nobody declared, or ignore an operator's cap in favour of a vendor estimate.
+/// requirement nobody declared, ignore an operator's cap in favour of a vendor estimate, or let a
+/// reservation outlive the instance it was taken for.
 /// </para>
 /// </summary>
 public sealed class MemoryGateTests
@@ -116,6 +119,126 @@ public sealed class MemoryGateTests
         Assert.Equal(MemoryGate.Verdict.Allowed, gate.Evaluate(Spec(capMb: 1)).Verdict);
     }
 
+    // ---- the reservation ledger -------------------------------------------------------------
+
+    [Fact]
+    public void A_second_start_is_refused_against_the_first_ones_outstanding_reservation()
+    {
+        // The defect this ledger exists for: MemAvailable lags a server that has just spawned, so the
+        // raw reading alone lets every instance of a batch pass honestly and the node fills anyway.
+        // 10000MB node, 1024MB floor, two 8192MB instances: the first fits, the second does not — but
+        // the node still reads 10000MB when it is judged, because the first has allocated almost
+        // nothing yet.
+        var gate = PosedGate(availableMb: 10_000);
+
+        Assert.Equal(MemoryGate.Verdict.Allowed, gate.TryReserve("first", Spec(capMb: 8192)).Verdict);
+
+        MemoryGate.Decision second = gate.TryReserve("second", Spec(capMb: 8192));
+
+        Assert.Equal(MemoryGate.Verdict.Refused, second.Verdict);
+        Assert.Contains("8192MB committed to 1 instance(s) still starting", second.Reason);
+        Assert.Equal(8192, gate.OutstandingReservedMb()); // the refused one reserved nothing
+    }
+
+    [Fact]
+    public void Readiness_releases_the_reservation_and_the_same_start_is_then_allowed()
+    {
+        // Readiness is the release signal: from that moment the instance's memory is in the node's own
+        // reading, so continuing to subtract it would double-count. The node reading is held fixed here
+        // precisely so the ONLY thing that changes is the ledger.
+        var gate = PosedGate(availableMb: 10_000);
+        gate.TryReserve("first", Spec(capMb: 8192));
+        Assert.True(gate.TryReserve("second", Spec(capMb: 8192)).IsRefused);
+
+        gate.Release("first"); // what NativePlayerPresenceIngester.EmitReady does
+
+        Assert.Equal(0, gate.OutstandingReservedMb());
+        Assert.Equal(MemoryGate.Verdict.Allowed, gate.TryReserve("second", Spec(capMb: 8192)).Verdict);
+    }
+
+    [Fact]
+    public void Releasing_twice_or_releasing_an_unknown_instance_is_a_noop()
+    {
+        // Release is called from several teardown paths that can overlap (a stop that lands while the
+        // crash path is already concluding the same run), so it must never depend on being called once.
+        var gate = PosedGate(availableMb: 10_000);
+        gate.TryReserve("first", Spec(capMb: 4096));
+
+        gate.Release("first");
+        gate.Release("first");
+        gate.Release("never-reserved");
+
+        Assert.Equal(0, gate.OutstandingReservedMb());
+    }
+
+    [Fact]
+    public void A_respawn_replaces_its_own_reservation_rather_than_stacking_a_second()
+    {
+        // A restart re-spawns an instance that may still hold a reservation from the run that just
+        // ended. Two entries for one instance would reserve twice what it can ever use.
+        var gate = PosedGate(availableMb: 10_000);
+
+        gate.TryReserve("looping", Spec(capMb: 4096));
+        gate.TryReserve("looping", Spec(capMb: 4096));
+
+        Assert.Equal(4096, gate.OutstandingReservedMb());
+    }
+
+    [Fact]
+    public void The_backstop_releases_a_reservation_that_never_reported_ready()
+    {
+        // The case with no release signal at all: a non-empty startup_success_regex that fails to
+        // compile disables readiness detection, so no instance-ready event will ever arrive for this
+        // instance. Without the backstop its reservation would sterilise the node for the life of the
+        // daemon.
+        var clock = new TestClock(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var gate = PosedGate(availableMb: 10_000, clock: clock);
+
+        gate.TryReserve("no-ready-signal", Spec(capMb: 8192));
+        clock.Advance(TimeSpan.FromMinutes(9));
+        Assert.True(gate.TryReserve("other", Spec(capMb: 8192)).IsRefused); // still held at 9 minutes
+
+        clock.Advance(TimeSpan.FromMinutes(2)); // past the ten-minute ceiling
+
+        Assert.Equal(0, gate.OutstandingReservedMb());
+        Assert.Equal(MemoryGate.Verdict.Allowed, gate.TryReserve("other", Spec(capMb: 8192)).Verdict);
+    }
+
+    [Fact]
+    public void An_unanswerable_check_still_allows_with_reservations_outstanding()
+    {
+        // The ledger must not turn a check the gate cannot run into a refusal. An unreadable
+        // /proc/meminfo is the same answer it always was — allowed, NotChecked — however much is
+        // committed to instances that are still starting.
+        var gate = PosedGate(availableMb: 10_000);
+        gate.TryReserve("first", Spec(capMb: 8000));
+
+        var unreadable = PosedGate(availableMb: null);
+        unreadable.TryReserve("first", Spec(capMb: 8000));
+
+        // Nothing declared: no requirement, so nothing to judge and nothing to reserve.
+        MemoryGate.Decision undeclared = gate.TryReserve("undeclared", Spec(capMb: 0));
+        Assert.Equal(MemoryGate.Verdict.NotChecked, undeclared.Verdict);
+        Assert.Equal(8000, gate.OutstandingReservedMb());
+
+        // Meminfo unreadable: allowed, and again nothing reserved on a figure that was never compared.
+        MemoryGate.Decision blind = unreadable.TryReserve("second", Spec(capMb: 8000));
+        Assert.Equal(MemoryGate.Verdict.NotChecked, blind.Verdict);
+        Assert.False(blind.IsRefused);
+        Assert.Equal(0, unreadable.OutstandingReservedMb());
+    }
+
+    [Fact]
+    public void A_disabled_gate_reserves_nothing()
+    {
+        // Off is off: with no check being made there is nothing for a ledger to compose over, and an
+        // entry taken here would only wait out the backstop.
+        var gate = PosedGate(availableMb: 10_000, enabled: "false");
+
+        Assert.Equal(MemoryGate.Verdict.Allowed, gate.TryReserve("first", Spec(capMb: 8192)).Verdict);
+        Assert.Equal(0, gate.OutstandingReservedMb());
+    }
+
     // ---- helpers ----------------------------------------------------------------------------
 
     private static int ReadAvailableMb()
@@ -131,6 +254,26 @@ public sealed class MemoryGateTests
 
     private static MemoryGate Gate(string? enabled, string? headroom, int? minRamMb) =>
         new(new FakeConfig(enabled, headroom), new FakeBlueprints(minRamMb), NullLogger<MemoryGate>.Instance);
+
+    /// <summary>
+    /// A gate over a POSED node reading rather than the host's own. The ledger tests are about a set of
+    /// starts composing, so the node's figure has to hold still while the reservations move — and a test
+    /// that proved the point by allocating memory would be the thing the gate exists to prevent.
+    /// <paramref name="availableMb"/> null poses an unreadable /proc/meminfo.
+    /// </summary>
+    private static MemoryGate PosedGate(
+        int? availableMb, string? enabled = "true", string? headroom = "1024", int? minRamMb = null,
+        TestClock? clock = null) =>
+        new(new FakeConfig(enabled, headroom), new FakeBlueprints(minRamMb), NullLogger<MemoryGate>.Instance,
+            () => availableMb, clock ?? new TestClock(DateTime.UtcNow));
+
+    /// <summary>A clock the test moves by hand, so the reservation backstop is exercised in microseconds.</summary>
+    private sealed class TestClock(DateTime start) : TimeProvider
+    {
+        private DateTimeOffset _now = new(start, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now = _now.Add(by);
+    }
 
     private static Instance Spec(int capMb) => new()
     {

@@ -77,6 +77,7 @@ internal sealed class NativePlayerPresenceIngester(
     WatchdogJournal journal,
     PlayerSessionStore sessionStore,
     CgroupManager cgroups,
+    MemoryGate memoryGate,
     ILogger<NativePlayerPresenceIngester> logger) : BackgroundService
 {
     /// <summary>
@@ -471,7 +472,14 @@ internal sealed class NativePlayerPresenceIngester(
     /// player-presence emit today).
     /// </summary>
     private void EmitReady(string instanceName)
-        => journal.Instance(EventReady, instanceName);
+    {
+        journal.Instance(EventReady, instanceName);
+        // Readiness is what discharges the memory reservation the spawn took: from here the instance's
+        // declared memory is in the node's own MemAvailable reading, so continuing to subtract it would
+        // double-count. Covers both readiness rules — the pattern match and the immediate fallback
+        // (ProcessReadiness), which is the only "ready" an instance with no startup_success_regex has.
+        memoryGate.Release(instanceName);
+    }
 
     /// <summary>
     /// Emit one presence event through kgsm-lib, stamped <c>actor="system" / origin="system"</c> — an

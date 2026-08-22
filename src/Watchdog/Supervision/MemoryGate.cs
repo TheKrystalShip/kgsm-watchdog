@@ -15,6 +15,16 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// motivates it — an instance restarting into a node that has filled up since it last ran.
 /// </para>
 /// <para>
+/// <b>The gate answers over a SET of starts, not one at a time.</b> <c>MemAvailable</c> lags a server
+/// that has just spawned — a process two seconds old has allocated almost nothing, and a JVM grows into
+/// its heap over minutes — so a batch of starts judged on the raw reading alone each pass honestly and
+/// collectively commit far past the floor. Every allowed spawn therefore takes a <b>reservation</b> for
+/// the figure it was judged on, and <see cref="Evaluate"/> subtracts what is outstanding: the next
+/// instance is judged against what the node will have once the ones already starting have taken what
+/// they asked for. <see cref="Release"/> drops a reservation the moment the instance reports ready, and
+/// on every path where it will never report ready.
+/// </para>
+/// <para>
 /// The two knobs are read from <b>kgsm's</b> config, not from the daemon's own settings, so the host
 /// has one answer rather than two that can disagree. They arrive through
 /// <see cref="IConfigService"/> — the C#-to-engine chokepoint — never by parsing the ini here.
@@ -48,9 +58,54 @@ public sealed class MemoryGate(
     /// </summary>
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// The longest a reservation is held without the instance reporting ready.
+    /// </summary>
+    /// <remarks>
+    /// Readiness is what releases a reservation; this is only the leak guard behind it, for the starts
+    /// that never report one — a blueprint whose <c>startup_success_regex</c> does not compile, a boot
+    /// that hangs before the game ever prints its ready line. It only has to be generous: holding a
+    /// reservation too long delays another start, while dropping it too early re-opens the over-commit
+    /// window it exists to close. Ten minutes sits well past the slow end of a game-server boot (a large
+    /// modpack or a big world load runs into minutes) without leaving a leaked entry standing for a
+    /// meaningful part of a day.
+    /// </remarks>
+    private static readonly TimeSpan ReservationMaxAge = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Guards the two caches and the reservation ledger. Not the supervisor's own spawn gate — that one
+    /// serialises whole start/stop verbs; this one is held only for the few statements that touch these
+    /// dictionaries, never across an engine read.
+    /// </summary>
     private readonly Lock _gate = new();
     private (bool Enabled, int HeadroomMb, DateTime ReadAt)? _settings;
     private readonly Dictionary<string, (int? MinRamMb, DateTime ReadAt)> _blueprintRam = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Memory committed to instances that have been allowed to spawn but have not yet reported ready,
+    /// keyed by instance name. One entry per instance: a re-spawn replaces the previous figure rather
+    /// than stacking a second one.
+    /// </summary>
+    private readonly Dictionary<string, (int Mb, DateTime TakenAt)> _reservations = new(StringComparer.Ordinal);
+
+    /// <summary>The node's own <c>MemAvailable</c> reading, seamed so a test can pose a node of a known size.</summary>
+    private readonly Func<int?> _available = MemoryReader.AvailableMb;
+
+    /// <summary>Clock behind the two cache TTLs and the reservation backstop.</summary>
+    private readonly TimeProvider _clock = TimeProvider.System;
+
+    /// <summary>Test seam: a posed node reading and a controllable clock. Production always reads
+    /// <c>/proc/meminfo</c> and the system clock.</summary>
+    internal MemoryGate(
+        IConfigService config,
+        IBlueprintService blueprints,
+        ILogger<MemoryGate> logger,
+        Func<int?> available,
+        TimeProvider clock) : this(config, blueprints, logger)
+    {
+        _available = available;
+        _clock = clock;
+    }
 
     /// <summary>The gate's answer. <see cref="Refused"/> is the only one that stops a spawn.</summary>
     public enum Verdict
@@ -74,15 +129,70 @@ public sealed class MemoryGate(
 
     private static readonly Decision AllowedDecision = new(Verdict.Allowed, null);
 
+    private DateTime Now => _clock.GetUtcNow().UtcDateTime;
+
     /// <summary>
-    /// Would starting <paramref name="spec"/> leave the node with less than the configured floor?
+    /// Would starting <paramref name="spec"/> leave the node with less than the configured floor, given
+    /// what is already reserved for the instances currently starting? Takes no reservation itself.
     /// </summary>
     /// <remarks>
     /// Allows in every case where it cannot answer — gate off, nothing declared, meminfo unreadable.
     /// A supervisor that refused to start game servers because it could not read its own config would
-    /// be a worse outage than the one the gate exists to prevent.
+    /// be a worse outage than the one the gate exists to prevent. An unanswerable check is unanswerable
+    /// whatever the ledger holds: those cases return before any reservation is subtracted.
     /// </remarks>
-    public Decision Evaluate(Instance spec)
+    public Decision Evaluate(Instance spec) => Judge(spec, reserveFor: null);
+
+    /// <summary>
+    /// Judge <paramref name="spec"/> exactly as <see cref="Evaluate"/> does and, when the answer is not
+    /// a refusal, reserve the figure it was judged on against <paramref name="instanceName"/>.
+    /// </summary>
+    /// <remarks>
+    /// One method rather than an evaluate-then-reserve pair, so the reserved figure and the judged
+    /// figure cannot differ and no other spawn can be judged between the two. A verdict the gate could
+    /// not answer (nothing declared, meminfo unreadable, gate off) reserves nothing: there is no
+    /// measured figure to reserve, and inventing one would refuse real starts on a number nobody
+    /// declared.
+    /// </remarks>
+    public Decision TryReserve(string instanceName, Instance spec) => Judge(spec, reserveFor: instanceName);
+
+    /// <summary>
+    /// Drop <paramref name="instanceName"/>'s reservation: the instance reported ready (its memory is
+    /// now in the node's own reading, so continuing to subtract would double-count), or it will never
+    /// report ready (the spawn failed, it stopped, it crashed, it was deregistered).
+    /// </summary>
+    /// <remarks>Idempotent. An unknown or already-released name is a no-op, never an error.</remarks>
+    public void Release(string instanceName)
+    {
+        if (string.IsNullOrEmpty(instanceName))
+            return;
+
+        (int Mb, DateTime TakenAt) held;
+        bool wasHeld;
+        lock (_gate)
+        {
+            wasHeld = _reservations.Remove(instanceName, out held);
+        }
+
+        if (wasHeld)
+            logger.LogDebug("released {Instance}'s {Mb}MB memory reservation", instanceName, held.Mb);
+    }
+
+    /// <summary>Total megabytes currently reserved, excluding anything past the backstop. Read-only.</summary>
+    internal int OutstandingReservedMb()
+    {
+        DateTime now = Now;
+        lock (_gate)
+        {
+            int total = 0;
+            foreach (var entry in _reservations.Values)
+                if (now - entry.TakenAt < ReservationMaxAge)
+                    total += entry.Mb;
+            return total;
+        }
+    }
+
+    private Decision Judge(Instance spec, string? reserveFor)
     {
         if (spec is null) return AllowedDecision;
 
@@ -94,15 +204,58 @@ public sealed class MemoryGate(
             return new Decision(Verdict.NotChecked,
                 "no memory requirement declared (no memory_cap_mb, no blueprint min_ram_mb)");
 
-        int? available = MemoryReader.AvailableMb();
+        int? available = _available();
         if (available is null)
             return new Decision(Verdict.NotChecked, "could not read MemAvailable from /proc/meminfo");
 
-        int remaining = available.Value - required.Value;
-        if (remaining >= headroomMb) return AllowedDecision;
+        DateTime now = Now;
+        List<(string Name, int Mb)>? expired = null;
+        int reserved;
+        int starting;
+        int remaining;
+        bool fits;
 
+        lock (_gate)
+        {
+            reserved = 0;
+            starting = 0;
+            foreach (var entry in _reservations)
+            {
+                if (now - entry.Value.TakenAt >= ReservationMaxAge)
+                {
+                    (expired ??= []).Add((entry.Key, entry.Value.Mb));
+                    continue;
+                }
+                reserved += entry.Value.Mb;
+                starting++;
+            }
+
+            if (expired is not null)
+                foreach ((string name, _) in expired)
+                    _reservations.Remove(name);
+
+            remaining = available.Value - reserved - required.Value;
+            fits = remaining >= headroomMb;
+
+            if (fits && reserveFor is { Length: > 0 })
+                _reservations[reserveFor] = (required.Value, now);
+        }
+
+        // Outside the lock: a start that never reported ready is worth an operator seeing.
+        if (expired is not null)
+            foreach ((string name, int mb) in expired)
+                logger.LogWarning(
+                    "{Instance}'s {Mb}MB memory reservation is released after {Minutes} minutes without a ready "
+                    + "signal — it was started but never reported ready",
+                    name, mb, (int)ReservationMaxAge.TotalMinutes);
+
+        if (fits) return AllowedDecision;
+
+        string committed = starting == 0
+            ? ","
+            : $" with {reserved}MB committed to {starting} instance(s) still starting,";
         return new Decision(Verdict.Refused,
-            $"needs {required.Value}MB, the node has {available.Value}MB available, and starting it "
+            $"needs {required.Value}MB, the node has {available.Value}MB available{committed} and starting it "
             + $"would leave {remaining}MB against a required floor of {headroomMb}MB");
     }
 
@@ -130,7 +283,7 @@ public sealed class MemoryGate(
         lock (_gate)
         {
             if (_blueprintRam.TryGetValue(blueprint, out var cached)
-                && DateTime.UtcNow - cached.ReadAt < CacheTtl)
+                && Now - cached.ReadAt < CacheTtl)
                 return cached.MinRamMb;
         }
 
@@ -148,7 +301,7 @@ public sealed class MemoryGate(
 
         lock (_gate)
         {
-            _blueprintRam[blueprint] = (minRam, DateTime.UtcNow);
+            _blueprintRam[blueprint] = (minRam, Now);
         }
         return minRam;
     }
@@ -159,7 +312,7 @@ public sealed class MemoryGate(
     {
         lock (_gate)
         {
-            if (_settings is { } s && DateTime.UtcNow - s.ReadAt < CacheTtl)
+            if (_settings is { } s && Now - s.ReadAt < CacheTtl)
                 return (s.Enabled, s.HeadroomMb);
         }
 
@@ -185,7 +338,7 @@ public sealed class MemoryGate(
 
         lock (_gate)
         {
-            _settings = (enabled, headroom, DateTime.UtcNow);
+            _settings = (enabled, headroom, Now);
         }
         return (enabled, headroom);
     }

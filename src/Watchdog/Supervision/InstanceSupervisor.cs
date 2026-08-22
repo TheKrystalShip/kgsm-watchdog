@@ -151,6 +151,7 @@ internal sealed class InstanceSupervisor(
             {
                 DisposeCurrent(si);
                 PurgeCgroup(name);
+                memoryGate.Release(name); // it never entered its cgroup, so it will never report ready
                 si.Phase = SupervisionPhase.Failed;
                 si.LastReason = "process did not enter its cgroup (exited immediately or self-move failed)";
                 _instances[name] = si;
@@ -283,6 +284,9 @@ internal sealed class InstanceSupervisor(
             // still clears, and AFTER the drain so a disconnect line the game logged on its way down
             // is read against a map that still holds the session it names.
             ForgetPlayerSessions(name);
+            // Same edge for the memory ledger: a stopped instance is never going to report ready, so a
+            // reservation taken for the start this stop interrupted must not outlive it.
+            memoryGate.Release(name);
             _gate.Release();
         }
     }
@@ -1380,6 +1384,7 @@ internal sealed class InstanceSupervisor(
         DisposeCurrent(si);
         PurgeCgroup(si.Name);
         ForgetPlayerSessions(si.Name);
+        memoryGate.Release(si.Name);
         si.Phase = SupervisionPhase.Stopped;
         si.LastReason = "stopped (stop request completed after the caller abandoned it)";
         _instances.TryRemove(si.Name, out _);
@@ -1420,6 +1425,9 @@ internal sealed class InstanceSupervisor(
         // below decides about restarting. Cleared here, once, ahead of the crash/failed/stay-down
         // branches so none of them can leave the map describing a dead process.
         ForgetPlayerSessions(name);
+        // Same position for the memory ledger: this run is over whatever happens next, so a reservation
+        // it took and never discharged goes with it. A restart takes a fresh one through TrySpawn.
+        memoryGate.Release(name);
 
         string exitText = exit is int c ? $"exit {c}" : "exit unknown";
 
@@ -1768,12 +1776,17 @@ internal sealed class InstanceSupervisor(
     /// and the crash-restart — so the capacity check sits here rather than being restated at each.
     /// <paramref name="noRoom"/> is what lets the callers differ where they must: a refusal is not the
     /// instance failing to start, and the restart path must not spend a retry on it.
+    /// <para>
+    /// An allowed spawn takes a memory reservation for the figure it was judged on, which the next
+    /// instance's check subtracts. It is released when the instance reports ready, and here when the
+    /// spawn throws — that instance never will.
+    /// </para>
     /// </remarks>
     private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason, out bool noRoom)
     {
         noRoom = false;
 
-        MemoryGate.Decision room = memoryGate.Evaluate(si.Spec);
+        MemoryGate.Decision room = memoryGate.TryReserve(si.Name, si.Spec);
         if (room.IsRefused)
         {
             noRoom = true;
@@ -1796,6 +1809,7 @@ internal sealed class InstanceSupervisor(
         {
             si.Current = null;
             PurgeCgroup(si.Name); // SpawnEngine cleans its own partials, but be defensive
+            memoryGate.Release(si.Name); // nothing was started, so nothing is going to claim that memory
             reason = ex.Message;
             return false;
         }

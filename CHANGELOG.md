@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.36.0] - 2026-08-22
+
+### Added — the capacity check composes over a batch of starts
+
+`MemAvailable` lags a server that has just spawned: a process two seconds old has allocated almost
+nothing, and a JVM grows into its heap over minutes. Judged on that reading alone, six 8GB instances
+starting together each measure a node that still looks nearly empty, each pass the check honestly, and
+collectively commit far past the headroom floor. The gate never fires and the node fills anyway. The
+paths where a set of starts arrives at once are exactly the ones only this daemon runs — the boot
+autostart brings every enabled instance up together, a crash storm restarts several, and kgsm-api
+dispatches a batch command up to four at a time.
+
+So an allowed spawn now takes a **reservation** for the figure it was judged on, and the check
+subtracts what is outstanding: the next instance is judged against what the node will have once the
+ones already starting have taken what they asked for. A refusal names what is committed and to how
+many instances, alongside the three figures it already named.
+
+**Readiness releases it.** `instance-ready` is the point at which the declared memory has materialised,
+so from there `MemAvailable` accounts for it and continuing to subtract would double-count. Both
+readiness rules discharge a reservation: the `startup_success_regex` match, and — for a blueprint that
+declares no such pattern — the immediate "ready == observed started" fallback, which is the only ready
+signal such an instance has. Every path on which an instance will never report ready releases it too:
+the spawn threw, the process never entered its cgroup, the run ended, the instance was stopped or
+deregistered.
+
+A ten-minute backstop stands behind that as a leak guard, not as the mechanism. It exists for the
+start that reports no readiness at all — a `startup_success_regex` that does not compile disables
+detection rather than being downgraded to the immediate rule, so no ready event is ever coming — where
+a reservation left standing would hold memory back for the life of the daemon. It is generous by
+design (the slowest honest boots run into minutes) and logs at Warning when it fires, because a
+reservation released by timeout means a start that never reported ready.
+
+The ledger changes nothing about what the gate does when it cannot answer: gate off, nothing declared,
+`/proc/meminfo` unreadable all still allow, and reserve nothing — there is no measured figure to
+reserve and none is invented. It is in-memory and dies with the process, which is correct: a restarted
+daemon has no in-flight spawns of its own, and adopted instances are already running, so
+`MemAvailable` reflects them.
+
 ## [1.35.0] - 2026-08-22
 
 ### Added — the daemon refuses to spawn into a node with no room

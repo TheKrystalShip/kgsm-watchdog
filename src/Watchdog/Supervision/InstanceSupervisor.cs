@@ -135,11 +135,21 @@ internal sealed class InstanceSupervisor(
             DisposeCurrent(si);
             PurgeCgroup(name);
 
-            if (!TrySpawn(si, DateTime.UtcNow, out var spawnReason))
+            if (!TrySpawn(si, DateTime.UtcNow, out var spawnReason, out bool noRoom))
             {
+                // A capacity refusal is reported as a refusal, not as a failure. Nothing was attempted
+                // and nothing is wrong with this instance, so the caller is told which of the two it is
+                // rather than being left to read it out of the sentence.
                 si.Phase = SupervisionPhase.Failed;
-                si.LastReason = $"start failed: {spawnReason}";
+                si.LastReason = noRoom ? $"not started: {spawnReason}" : $"start failed: {spawnReason}";
                 _instances[name] = si;
+
+                if (noRoom)
+                {
+                    logger.LogWarning("{Instance} is not being started: {Reason}", name, spawnReason);
+                    return new ActionResult(name, false, $"not started: {spawnReason}", ActionRefusal.NoRoom);
+                }
+
                 logger.LogError("spawn failed for {Instance}: {Reason}", name, spawnReason);
                 return new ActionResult(name, false, $"spawn failed: {spawnReason}");
             }
@@ -329,7 +339,14 @@ internal sealed class InstanceSupervisor(
 
         var startResult = await StartAsync(name, ct).ConfigureAwait(false);
         if (!startResult.Ok)
-            return new ActionResult(name, false, $"restart: stop ok; start failed: {startResult.Message}");
+        {
+            // The refusal kind rides out with the restart's own result: the stop half succeeded, so the
+            // instance is DOWN, and a caller that reads this as a generic failure would retry a start
+            // that is going to be refused identically for as long as the node is full.
+            string half = startResult.Refusal is null ? "start failed" : "start refused";
+            return new ActionResult(name, false, $"restart: stop ok; {half}: {startResult.Message}",
+                startResult.Refusal);
+        }
 
         // Emit instance-restarted attributed to the requester, so kgsm-api audits this as the scheduler
         // rather than as the watchdog's own crash recovery. Fire-and-forget, same posture as
@@ -657,7 +674,7 @@ internal sealed class InstanceSupervisor(
     /// <summary>
     /// Spawn an instance whose cgroup is empty (a host reboot / clean stop left nothing running). Mirrors
     /// the RESTART path (<see cref="ReconcileRestartPending"/>), not <see cref="StartAsync"/>: a bare
-    /// <see cref="TrySpawn(SupervisedInstance, DateTime, out string)"/> that trusts the grace window,
+    /// <see cref="TrySpawn(SupervisedInstance, DateTime, out string, out bool)"/> that trusts the grace window,
     /// NOT a synchronous <c>WaitForPopulated</c> —
     /// blocking 5s × N instances here would delay the control socket binding during boot. The reconcile
     /// loop confirms liveness a tick later. Returns true if it spawned, false if the spawn failed
@@ -1763,10 +1780,6 @@ internal sealed class InstanceSupervisor(
                 Mode = policy.Mode,
             }
             : policy;
-
-    /// <summary>Fork the game from the instance's cached spec into a fresh cgroup; on success the record is Running.</summary>
-    private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason)
-        => TrySpawn(si, now, out reason, out _);
 
     /// <summary>
     /// Fork the game, refusing first if the node has no room for it.

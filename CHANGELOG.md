@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.37.0] - 2026-08-22
+
+### Added — a capacity refusal is answered as a refusal, not as a failure
+
+`POST /start/{name}` answers **`507 Insufficient Storage`** when the node has no room for the
+instance, and `409` for everything else that went wrong. `POST /restart/{name}` does the same: its
+start half runs the same check, and a refusal there leaves the instance **down** with the stop
+already done — which a caller reading a generic `409` would retry into the identical answer.
+
+The distinction is on the status line because that is what the caller that most needs it can read:
+the kgsm CLI's transport keeps the HTTP code and discards the body, so a discriminator living only
+in the JSON would never reach it. kgsm maps the `507` to `EC_INSUFFICIENT_MEMORY` — the same exit
+code its own gate returns — so a capacity refusal has one meaning across both halves of the engine.
+
+`ActionResult` also carries the machine-readable `refusal` field (`no_room`, absent when the result
+is not a refusal) for callers that read JSON. Neither of those is a sentence: `message` is prose for
+a person and stays free to be reworded, and nothing downstream has to match on it.
+
+Nothing is wrong with an instance the gate turns away and nothing was attempted, which is why the
+two are worth telling apart at all — a failure invites a retry and reads as a fault in the server.
+
 ## [1.36.0] - 2026-08-22
 
 ### Added — the capacity check composes over a batch of starts

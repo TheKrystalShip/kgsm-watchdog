@@ -16,6 +16,23 @@ namespace TheKrystalShip.KGSM.Watchdog.Control;
 /// </summary>
 internal static class ControlEndpoints
 {
+    /// <summary>
+    /// The status line for one action result: <c>200</c> acted, <c>507</c> the node has no room,
+    /// <c>409</c> everything else.
+    /// </summary>
+    /// <remarks>
+    /// <c>507 Insufficient Storage</c> is the apt one — the request is well-formed and the instance is
+    /// fine; the host cannot hold what it asks for right now. It is a distinct code rather than a field
+    /// alone because the kgsm CLI's transport reads the status and discards the body, so a discriminator
+    /// that lived only in the JSON would not reach the caller that most needs it.
+    /// </remarks>
+    internal static int StatusFor(ActionResult result) => result switch
+    {
+        { Ok: true } => StatusCodes.Status200OK,
+        { Refusal: ActionRefusal.NoRoom } => StatusCodes.Status507InsufficientStorage,
+        _ => StatusCodes.Status409Conflict,
+    };
+
     public static void MapWatchdog(this WebApplication app)
     {
         // Unified ecosystem health probe — one `/health` everywhere (PLAN §5). This carries
@@ -36,11 +53,17 @@ internal static class ControlEndpoints
         app.MapGet("/health", Health);
         app.MapGet("/ready", Health); // deprecated alias — drop once kgsm CLI + kgsm-lib use /health
 
+        // 200 acted (including a genuine idempotent no-op — "already running"), 507 the node has no room,
+        // 409 anything else that went wrong. The three are separated on the STATUS LINE because the kgsm
+        // CLI reads the code and nothing else, and a capacity refusal has to reach it as its own exit
+        // code: nothing is wrong with the instance, so a caller must not retry it as a failure or report
+        // it as a fault. The body carries the same answer as ActionResult.Refusal for callers that read
+        // JSON — neither side is a sentence to be matched.
         app.MapPost("/start/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>
         {
             var result = await sup.StartAsync(name, ct);
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
-                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+                statusCode: StatusFor(result));
         });
 
         // NB: deliberately NOT the request's CancellationToken (same reasoning as DELETE /instance/{name}
@@ -61,14 +84,16 @@ internal static class ControlEndpoints
         // caller — and the emitted instance-restarted is attributed to it, so the audit trail names the
         // leaf that asked rather than this daemon. The query key stays `origin` because that is what
         // kgsm-lib's IWatchdogClient.RestartAsync sends. Does NOT touch the crash streak — it routes
-        // through StartAsync which resets it. 200/409 like start/stop (409 = restart couldn't complete:
-        // stop or the ensuing start failed). Uncancellable for the same reason as /stop — it performs a
-        // full graceful stop first, and an aborted one leaves the instance down but tabled.
+        // through StartAsync which resets it. Same three statuses as /start, for the same reason: its
+        // start half runs the capacity check, so a restart can be refused for room — and that lands the
+        // instance DOWN with the stop already done, which a caller reading a generic 409 would retry
+        // into the identical refusal. Uncancellable for the same reason as /stop — it performs a full
+        // graceful stop first, and an aborted one leaves the instance down but tabled.
         app.MapPost("/restart/{name}", async (string name, string? origin, InstanceSupervisor sup) =>
         {
             var result = await sup.RestartAsync(name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, CancellationToken.None);
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
-                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+                statusCode: StatusFor(result));
         });
 
         app.MapGet("/status/{name}", (string name, InstanceSupervisor sup) =>

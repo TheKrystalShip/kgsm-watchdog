@@ -71,11 +71,15 @@ Control plane (HTTP/1.1 over the unix socket — `curl --unix-socket`):
 ```bash
 S=/run/kgsm-watchdog/control.sock
 curl --unix-socket $S http://x/health    # readiness: 200 ready / 503 + reason (/ready = deprecated alias)
-curl --unix-socket $S -X POST http://x/start/my-server
+curl --unix-socket $S -X POST http://x/start/my-server   # 200 started / 507 no room / 409 failed
 curl --unix-socket $S http://x/status/my-server
 curl --unix-socket $S http://x/list
 curl --unix-socket $S -X POST http://x/stop/my-server
 ```
+
+`start` and `restart` answer **`507`** when the node has no room for the instance, and `409` for
+anything else that went wrong — a refusal is not a failure, so a caller can stop retrying one and
+stop reporting it as a fault in the server. The body carries the same answer as `refusal:"no_room"`.
 
 The watchdog supervises **native standalone** instances only; it no-ops on systemd/container
 instances (those are owned by systemd / Docker).

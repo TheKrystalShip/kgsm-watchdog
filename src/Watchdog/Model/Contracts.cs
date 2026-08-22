@@ -1,9 +1,40 @@
+using System.Text.Json.Serialization;
 using TheKrystalShip.KGSM.Core.Models;
 
 namespace TheKrystalShip.KGSM.Watchdog.Model;
 
-/// <summary>Result of a control action (<c>start</c>/<c>stop</c>): which instance, success, and a reason.</summary>
-public sealed record ActionResult(string Instance, bool Ok, string Message);
+/// <summary>
+/// Result of a control action (<c>start</c>/<c>stop</c>): which instance, success, and a reason.
+/// </summary>
+/// <param name="Instance">The instance the action was asked of.</param>
+/// <param name="Ok">Whether the action was carried out.</param>
+/// <param name="Message">The reason, in the shape a person reads.</param>
+/// <param name="Refusal">
+/// Which kind of refusal this is, when it is one — a value from <see cref="ActionRefusal"/>, absent
+/// otherwise. <see cref="Message"/> is prose meant for a person and is free to be reworded; this is
+/// what a caller branches on, so a consumer never has to match on a sentence.
+/// </param>
+public sealed record ActionResult(
+    string Instance,
+    bool Ok,
+    string Message,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Refusal = null);
+
+/// <summary>
+/// The refusal kinds <see cref="ActionResult.Refusal"/> can carry.
+/// </summary>
+/// <remarks>
+/// A refusal is not a failure. Nothing is wrong with the instance and nothing was attempted, so a
+/// caller retrying it unchanged gets the same answer — which is why it is worth telling apart from a
+/// start that broke. Each kind also has its own HTTP status on the control surface, because a bash
+/// caller reads the status line and nothing else.
+/// </remarks>
+public static class ActionRefusal
+{
+    /// <summary>The node has no room: what this instance needs, plus what is already committed to the
+    /// instances currently starting, would leave the node under the headroom floor.</summary>
+    public const string NoRoom = "no_room";
+}
 
 /// <summary>
 /// One UPnP port-mapping row read from the local IGD (<c>upnpc -l</c>), owned by an instance — its

@@ -73,13 +73,16 @@ FS perms on the socket are the only security boundary (auth lives in the surface
 ```bash
 S=/run/kgsm-watchdog/control.sock
 curl --unix-socket $S http://x/health            # readiness: 200 ready / 503 + {ready,detail}; /ready = deprecated alias
-curl --unix-socket $S -X POST http://x/start/my-server
+curl --unix-socket $S -X POST http://x/start/my-server   # 200 started / 507 no room / 409 failed
 curl --unix-socket $S http://x/status/my-server  # ...also /list, /stop/{n}, /version
 curl --unix-socket $S http://x/players           # every instance: its detection + who is connected
 ```
 
 `/health` is the unified ecosystem probe — **`200` only when in-slice and able to spawn**; treat
-anything else as "unavailable, retry". The daemon supervises native-standalone instances only; it
+anything else as "unavailable, retry". `start`/`restart` separate a **capacity refusal (`507`)** from
+a failure (`409`) on the status line, because the kgsm CLI's transport reads the code and discards
+the body; the body says the same thing in `ActionResult.refusal` for callers that read JSON, and
+kgsm maps the `507` to `EC_INSUFFICIENT_MEMORY` so both engine halves refuse with one code. The daemon supervises native-standalone instances only; it
 **no-ops on systemd/container** instances (owned by systemd / Docker).
 
 ## Architecture — the parts that span files

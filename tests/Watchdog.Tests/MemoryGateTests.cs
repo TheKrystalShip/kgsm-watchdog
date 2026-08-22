@@ -239,6 +239,68 @@ public sealed class MemoryGateTests
         Assert.Equal(0, gate.OutstandingReservedMb());
     }
 
+    // ---- forcing past the verdict -------------------------------------------------------------
+
+    [Fact]
+    public void A_forced_start_goes_ahead_and_still_takes_its_reservation()
+    {
+        // Force is a person's judgement that a declared figure overstates what the game really uses.
+        // It goes past the VERDICT, not past the ledger: what this instance is about to take is what
+        // the next one has to be judged against, whichever way its own verdict went. A forced start
+        // that reserved nothing would put the staleness back exactly when the node is fullest.
+        var gate = PosedGate(availableMb: 2000);
+
+        MemoryGate.Decision forced = gate.TryReserve("forced", Spec(capMb: 4096), force: true);
+
+        Assert.Equal(MemoryGate.Verdict.Forced, forced.Verdict);
+        Assert.False(forced.IsRefused);              // the spawn proceeds
+        Assert.Contains("4096MB", forced.Reason);    // …and the log still gets the figures
+        Assert.Equal(4096, gate.OutstandingReservedMb());
+    }
+
+    [Fact]
+    public void The_next_start_is_judged_against_what_a_forced_one_took()
+    {
+        // The point of reserving on a forced start: the instance after it must not be told the node
+        // has room that the forced one is in the middle of claiming.
+        var gate = PosedGate(availableMb: 12_000);
+        gate.TryReserve("forced", Spec(capMb: 8192), force: true);
+
+        MemoryGate.Decision next = gate.TryReserve("next", Spec(capMb: 4096));
+
+        Assert.Equal(MemoryGate.Verdict.Refused, next.Verdict);
+        Assert.Contains("8192MB committed to 1 instance(s) still starting", next.Reason);
+    }
+
+    [Fact]
+    public void Force_changes_nothing_for_a_start_that_fits()
+    {
+        // Forcing is not a second code path: a start with room is Allowed and reserves exactly as it
+        // would have, so a caller that always forces is not running different arithmetic.
+        var gate = PosedGate(availableMb: 12_000);
+
+        Assert.Equal(MemoryGate.Verdict.Allowed, gate.TryReserve("fits", Spec(capMb: 4096), force: true).Verdict);
+        Assert.Equal(4096, gate.OutstandingReservedMb());
+    }
+
+    [Fact]
+    public void Force_reserves_nothing_where_the_gate_could_not_answer()
+    {
+        // No verdict was reached, so there is nothing to force past and no measured figure to reserve.
+        // Inventing one here would be the fabrication the whole gate refuses to make.
+        var undeclared = PosedGate(availableMb: 2000);
+        Assert.Equal(MemoryGate.Verdict.NotChecked, undeclared.TryReserve("x", Spec(capMb: 0), force: true).Verdict);
+        Assert.Equal(0, undeclared.OutstandingReservedMb());
+
+        var unreadable = PosedGate(availableMb: null);
+        Assert.Equal(MemoryGate.Verdict.NotChecked, unreadable.TryReserve("x", Spec(capMb: 4096), force: true).Verdict);
+        Assert.Equal(0, unreadable.OutstandingReservedMb());
+
+        var off = PosedGate(availableMb: 2000, enabled: "false");
+        Assert.Equal(MemoryGate.Verdict.Allowed, off.TryReserve("x", Spec(capMb: 4096), force: true).Verdict);
+        Assert.Equal(0, off.OutstandingReservedMb());
+    }
+
     // ---- helpers ----------------------------------------------------------------------------
 
     private static int ReadAvailableMb()

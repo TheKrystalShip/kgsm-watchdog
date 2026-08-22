@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.38.0] - 2026-08-22
+
+### Added — an explicit start can carry a person's override
+
+`POST /start/{name}?force=true` starts an instance the capacity check refuses. A query flag rather
+than a header or a body field, because the caller that needs it is a curl invocation: the kgsm CLI's
+transport builds a URL and reads a status back, and sends no body in either direction. A spelling the
+flag does not recognise is a start *without* the override rather than a `400` — the protection is what
+a caller gets by not asking, and that has to include asking badly.
+
+**A forced start still takes its reservation.** Force goes past the verdict, not past the ledger:
+what this instance is about to claim is what the next one has to be judged against, whichever way its
+own verdict went. A forced start that reserved nothing would put back exactly the staleness the
+ledger exists to remove, at the moment the node is under the most pressure. The gate answers
+`Verdict.Forced` — allowed, and distinct from a start that simply fit — and the daemon logs the
+refusal it went past at Warning, with the figures, so a forced start is visible in the journal.
+
+**Only an explicit start forces.** The boot autostart, the crash-restart and `POST /restart/{name}`
+take the verdict as final. The judgement that a blueprint's declared figure overstates what a game
+really uses is a human's, made at a terminal; nobody is there for the other three, and a crash loop
+that forced its way past the floor is the failure the gate exists to prevent.
+
+This is what makes the override real for a native instance. This daemon's check subtracts the
+outstanding reservations on top of the same arithmetic the kgsm CLI's gate runs, so it refuses
+everything that gate would and more — skipping only the CLI's own check overrode nothing.
+
 ## [1.37.0] - 2026-08-22
 
 ### Added — a capacity refusal is answered as a refusal, not as a failure

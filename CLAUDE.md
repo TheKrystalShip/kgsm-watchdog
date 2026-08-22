@@ -82,7 +82,10 @@ curl --unix-socket $S http://x/players           # every instance: its detection
 anything else as "unavailable, retry". `start`/`restart` separate a **capacity refusal (`507`)** from
 a failure (`409`) on the status line, because the kgsm CLI's transport reads the code and discards
 the body; the body says the same thing in `ActionResult.refusal` for callers that read JSON, and
-kgsm maps the `507` to `EC_INSUFFICIENT_MEMORY` so both engine halves refuse with one code. The daemon supervises native-standalone instances only; it
+kgsm maps the `507` to `EC_INSUFFICIENT_MEMORY` so both engine halves refuse with one code.
+**`POST /start/{name}?force=true`** is the only way past that check — a person's override, carried
+from `kgsm start --force`; it still takes the reservation, and the autostart, the crash-restart and
+`/restart` never set it. The daemon supervises native-standalone instances only; it
 **no-ops on systemd/container** instances (owned by systemd / Docker).
 
 ## Architecture — the parts that span files

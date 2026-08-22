@@ -30,9 +30,11 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <see cref="IConfigService"/> — the C#-to-engine chokepoint — never by parsing the ini here.
 /// </para>
 /// <para>
-/// <b>There is no override.</b> The CLI has <c>--force</c> because a person at a terminal can judge
-/// that a blueprint's declared figure overstates what a game really uses. The daemon has nobody to
-/// make that judgement, so it never overrules itself.
+/// <b>The daemon never overrules itself.</b> It has nobody to ask, so the autostart and the
+/// crash-restart take the verdict as final. An <em>explicit</em> start can carry a person's
+/// <c>--force</c>, which is a different thing: the judgement that a blueprint's declared figure
+/// overstates what a game really uses is one a human at a terminal makes, and forcing only ever
+/// arrives from there. A forced start still takes its reservation — see <see cref="TryReserve"/>.
 /// </para>
 /// </remarks>
 public sealed class MemoryGate(
@@ -119,6 +121,11 @@ public sealed class MemoryGate(
 
         /// <summary>Starting this would leave the node below the headroom floor.</summary>
         Refused,
+
+        /// <summary>Starting this would leave the node below the floor and it is being started anyway,
+        /// on a person's explicit instruction. Not a refusal — the spawn proceeds — and deliberately
+        /// distinct from <see cref="Allowed"/> so the log can say which happened.</summary>
+        Forced,
     }
 
     /// <summary>The verdict and, when refused, the sentence explaining it in the same shape kgsm's does.</summary>
@@ -153,8 +160,17 @@ public sealed class MemoryGate(
     /// not answer (nothing declared, meminfo unreadable, gate off) reserves nothing: there is no
     /// measured figure to reserve, and inventing one would refuse real starts on a number nobody
     /// declared.
+    /// <para>
+    /// <paramref name="force"/> carries a person's explicit instruction to proceed regardless. It
+    /// changes the verdict from <see cref="Verdict.Refused"/> to <see cref="Verdict.Forced"/> and
+    /// <b>still takes the reservation</b>: forcing means going ahead despite the answer, not leaving
+    /// the ledger out of it. A forced start that reserved nothing would leave the next instance judged
+    /// against memory this one is about to take — the staleness the ledger exists to remove, back at
+    /// the moment the node is under the most pressure.
+    /// </para>
     /// </remarks>
-    public Decision TryReserve(string instanceName, Instance spec) => Judge(spec, reserveFor: instanceName);
+    public Decision TryReserve(string instanceName, Instance spec, bool force = false)
+        => Judge(spec, reserveFor: instanceName, force: force);
 
     /// <summary>
     /// Drop <paramref name="instanceName"/>'s reservation: the instance reported ready (its memory is
@@ -192,7 +208,7 @@ public sealed class MemoryGate(
         }
     }
 
-    private Decision Judge(Instance spec, string? reserveFor)
+    private Decision Judge(Instance spec, string? reserveFor, bool force = false)
     {
         if (spec is null) return AllowedDecision;
 
@@ -237,7 +253,9 @@ public sealed class MemoryGate(
             remaining = available.Value - reserved - required.Value;
             fits = remaining >= headroomMb;
 
-            if (fits && reserveFor is { Length: > 0 })
+            // A forced start reserves on exactly the same rule as one that fits: what it is about to
+            // take is what the next instance must be judged against, whichever way the verdict went.
+            if ((fits || force) && reserveFor is { Length: > 0 })
                 _reservations[reserveFor] = (required.Value, now);
         }
 
@@ -254,9 +272,13 @@ public sealed class MemoryGate(
         string committed = starting == 0
             ? ","
             : $" with {reserved}MB committed to {starting} instance(s) still starting,";
-        return new Decision(Verdict.Refused,
+        string why =
             $"needs {required.Value}MB, the node has {available.Value}MB available{committed} and starting it "
-            + $"would leave {remaining}MB against a required floor of {headroomMb}MB");
+            + $"would leave {remaining}MB against a required floor of {headroomMb}MB";
+
+        // The sentence is the same either way — what a forced start is going past is worth saying in
+        // the same words the refusal would have used.
+        return new Decision(force ? Verdict.Forced : Verdict.Refused, why);
     }
 
     /// <summary>

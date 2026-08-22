@@ -96,7 +96,19 @@ internal sealed class InstanceSupervisor(
 
     // ---- control verbs ----------------------------------------------------------------------
 
-    public async Task<ActionResult> StartAsync(string name, CancellationToken ct = default)
+    /// <summary>
+    /// Start an instance: spawn it into a fresh cgroup and confirm it entered.
+    /// </summary>
+    /// <param name="name">The instance to start.</param>
+    /// <param name="ct">Cancels the wait for the process to enter its cgroup.</param>
+    /// <param name="force">
+    /// Proceed even when the node-capacity check refuses. This is a person's judgement that a declared
+    /// figure overstates what the game really uses, and it reaches here only from an explicit start —
+    /// the autostart and the crash-restart never set it. It skips the verdict, not the ledger: the
+    /// instance still reserves what it declared, so the next one is judged against what this one is
+    /// about to take.
+    /// </param>
+    public async Task<ActionResult> StartAsync(string name, CancellationToken ct = default, bool force = false)
     {
         if (!state.Ready)
             return new ActionResult(name, false, $"supervisor not ready: {state.Detail}");
@@ -135,7 +147,7 @@ internal sealed class InstanceSupervisor(
             DisposeCurrent(si);
             PurgeCgroup(name);
 
-            if (!TrySpawn(si, DateTime.UtcNow, out var spawnReason, out bool noRoom))
+            if (!TrySpawn(si, DateTime.UtcNow, out var spawnReason, out bool noRoom, force))
             {
                 // A capacity refusal is reported as a refusal, not as a failure. Nothing was attempted
                 // and nothing is wrong with this instance, so the caller is told which of the two it is
@@ -1792,14 +1804,21 @@ internal sealed class InstanceSupervisor(
     /// <para>
     /// An allowed spawn takes a memory reservation for the figure it was judged on, which the next
     /// instance's check subtracts. It is released when the instance reports ready, and here when the
-    /// spawn throws — that instance never will.
+    /// spawn throws — that instance never will. A <paramref name="force"/>d spawn takes the same
+    /// reservation: it goes past the verdict, not past the ledger.
+    /// </para>
+    /// <para>
+    /// <paramref name="force"/> is only ever true for a start a person asked for. The boot autostart
+    /// and the crash-restart call this with it false and take the verdict as final — there is nobody
+    /// there to judge that a declared figure is wrong, and a crash loop that forced its way past the
+    /// floor is the failure the gate exists to prevent.
     /// </para>
     /// </remarks>
-    private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason, out bool noRoom)
+    private bool TrySpawn(SupervisedInstance si, DateTime now, out string reason, out bool noRoom, bool force = false)
     {
         noRoom = false;
 
-        MemoryGate.Decision room = memoryGate.TryReserve(si.Name, si.Spec);
+        MemoryGate.Decision room = memoryGate.TryReserve(si.Name, si.Spec, force);
         if (room.IsRefused)
         {
             noRoom = true;
@@ -1807,6 +1826,11 @@ internal sealed class InstanceSupervisor(
             si.Current = null;
             return false;
         }
+
+        if (room.Verdict == MemoryGate.Verdict.Forced)
+            logger.LogWarning(
+                "starting {Instance} on an explicit force: the node capacity check refused it ({Reason})",
+                si.Name, room.Reason);
 
         try
         {

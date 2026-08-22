@@ -73,6 +73,52 @@ public sealed class NoRoomRefusalTests
         Assert.Contains("stop ok", result.Message);
     }
 
+    [Fact]
+    public async Task An_explicit_start_can_be_forced_past_the_refusal()
+    {
+        // The same node and the same instance that produced the refusal above. With force the gate is
+        // no longer the answer: the spawn is attempted (and fails here, on a spec with no executable —
+        // there is no game to start in a unit test), which is the observable difference between "the
+        // gate refused this" and "the gate let it through".
+        var supervisor = NewSupervisor(SpecFor("wd-noroom-forced", memoryCapMb: 4096),
+            TestMemoryGate.Posed(availableMb: 2000));
+
+        var result = await supervisor.StartAsync("wd-noroom-forced", CancellationToken.None, force: true);
+
+        Assert.False(result.Ok);
+        Assert.Null(result.Refusal);          // not a capacity refusal — it got past the gate
+        Assert.Contains("spawn failed", result.Message);
+    }
+
+    [Fact]
+    public async Task A_restart_never_forces_on_its_own()
+    {
+        // RestartAsync is the scheduler's verb over the control socket, and nobody is at a terminal for
+        // it. Its start half takes the verdict as final, exactly like the autostart and the
+        // crash-restart do.
+        var supervisor = NewSupervisor(SpecFor("wd-noroom-restart-force", memoryCapMb: 4096),
+            TestMemoryGate.Posed(availableMb: 2000));
+
+        var result = await supervisor.RestartAsync("wd-noroom-restart-force");
+
+        Assert.Equal(ActionRefusal.NoRoom, result.Refusal);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("1", true)]
+    [InlineData("yes", true)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("false", false)]
+    [InlineData("maybe", false)]
+    public void The_force_query_flag_reads_unset_unless_it_plainly_says_otherwise(string? flag, bool expected)
+    {
+        // A spelling nothing recognises is a start WITHOUT the override, never a 400: the protection is
+        // what a caller gets by not asking for it, and that has to include asking badly.
+        Assert.Equal(expected, ControlEndpoints.IsTrue(flag));
+    }
+
     [Theory]
     [InlineData(true, null, 200)]
     [InlineData(false, ActionRefusal.NoRoom, 507)]

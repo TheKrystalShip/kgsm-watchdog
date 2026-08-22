@@ -33,6 +33,17 @@ internal static class ControlEndpoints
         _ => StatusCodes.Status409Conflict,
     };
 
+    /// <summary>
+    /// Whether a query flag reads as set. Absent, empty, and anything unrecognised are all false.
+    /// </summary>
+    /// <remarks>
+    /// Parsed rather than bound as a <c>bool?</c> so a spelling the binder rejects (<c>?force=1</c>) is
+    /// a start without the override rather than a <c>400</c> on the request. Unset is the protected
+    /// direction, which is what a value nobody can read should mean.
+    /// </remarks>
+    internal static bool IsTrue(string? flag) =>
+        flag is "1" or "true" or "TRUE" or "True" or "yes" or "on";
+
     public static void MapWatchdog(this WebApplication app)
     {
         // Unified ecosystem health probe — one `/health` everywhere (PLAN §5). This carries
@@ -59,9 +70,14 @@ internal static class ControlEndpoints
         // code: nothing is wrong with the instance, so a caller must not retry it as a failure or report
         // it as a fault. The body carries the same answer as ActionResult.Refusal for callers that read
         // JSON — neither side is a sentence to be matched.
-        app.MapPost("/start/{name}", async (string name, InstanceSupervisor sup, CancellationToken ct) =>
+        //
+        // `?force=true` carries a person's override of the capacity check, and a query parameter is what
+        // makes it reachable: the CLI's transport builds a URL and reads the status back, with no body in
+        // either direction. It is a QUERY rather than a header or a body field for the same reason the
+        // status code carries the refusal — the caller that needs it is a curl invocation.
+        app.MapPost("/start/{name}", async (string name, string? force, InstanceSupervisor sup, CancellationToken ct) =>
         {
-            var result = await sup.StartAsync(name, ct);
+            var result = await sup.StartAsync(name, ct, IsTrue(force));
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
                 statusCode: StatusFor(result));
         });

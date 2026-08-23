@@ -11,7 +11,7 @@
 # packaging time is a unit nobody tested.
 
 pkgname=kgsm-watchdog
-pkgver=1.27.1
+pkgver=1.39.0
 pkgrel=1
 pkgdesc="KGSM watchdog — resident supervisor for native game-server instances"
 arch=('x86_64')
@@ -20,9 +20,12 @@ license=('GPL-3.0-or-later')
 groups=('kgsm-node')
 # No separate debug package: these are shipped to a private fleet, not a distro archive.
 options=('!debug')
-depends=('kgsm' 'systemd' 'glibc')
+# kgsm-base carries the kgsm service account this unit runs as, the /var/lib/kgsm tree and the
+# preset policy that decides whether this daemon runs on a node.
+depends=('kgsm-base' 'kgsm' 'systemd' 'glibc')
 optdepends=('miniupnpc: opening and closing router port forwards on server start/stop')
 backup=('etc/kgsm-watchdog/kgsm-watchdog.env')
+install="${pkgname}.install"
 
 _stage() { printf '%s' "${KGSM_STAGE:-${startdir}/../artifacts/publish}"; }
 
@@ -51,8 +54,6 @@ package() {
 
     install -Dm644 "${repo}/deploy/kgsm-watchdog.service" \
         "${pkgdir}/usr/lib/systemd/system/kgsm-watchdog.service"
-    install -Dm644 "${repo}/deploy/sysusers.d/kgsm-watchdog.conf" \
-        "${pkgdir}/usr/lib/sysusers.d/kgsm-watchdog.conf"
 
     # Seeded from the committed example and listed in backup=(), so an upgrade writes .pacnew beside
     # a file you edited rather than over it. Secrets are set here and ship in no package.

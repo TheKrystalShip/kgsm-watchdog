@@ -1,0 +1,29 @@
+# The preset policy in kgsm-base decides whether this daemon runs on a node; applying it is symlink
+# manipulation on disk, so it works during the transaction and in a chroot alike. Starting it is the
+# node's post-transaction hook's job, which is where a running system is available.
+#
+# post_install only. An administrator who disabled this unit keeps it disabled across every later
+# version — re-presetting on upgrade would quietly undo that.
+
+post_install() {
+    systemctl preset kgsm-watchdog.service >/dev/null 2>&1 || true
+
+    cat <<'MSG'
+
+  kgsm-watchdog needs no configuration: /etc/kgsm-watchdog/kgsm-watchdog.env holds overrides only,
+  and every one of them has a working default.
+
+  It owns kgsm.slice and supervises native instances. Autostart and crash-restart are its desired
+  state, held per instance — `kgsm autostart enable <instance>` is what makes one come up on boot.
+
+MSG
+}
+
+post_upgrade() {
+    cat <<'MSG'
+
+  If pacman wrote a .pacnew beside /etc/kgsm-watchdog/kgsm-watchdog.env, merge it — new settings are
+  declared there and a key the file never declares binds to nothing.
+
+MSG
+}

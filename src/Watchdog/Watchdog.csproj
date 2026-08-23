@@ -23,7 +23,7 @@
 
     <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
     <AssemblyName>kgsm-watchdog</AssemblyName>
-    <Version>1.38.0</Version>
+    <Version>1.38.1</Version>
 
     <!-- The source-generated [LibraryImport] p/invokes (mkfifo/open/write/setres*uid)
          emit unsafe marshalling stubs; no hand-written unsafe code in the project. -->

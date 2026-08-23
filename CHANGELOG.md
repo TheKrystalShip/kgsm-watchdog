@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.38.1] - 2026-08-23
+
+### Fixed — the env template no longer points the engine at /usr/local
+
+`Watchdog__KgsmPath` is a commented override in `deploy/kgsm-watchdog.env.example`. The unit sets
+`/usr/bin/kgsm`, and systemd reads `EnvironmentFile=` after `Environment=`, so a live line in the
+template overrides the working default — with `/usr/local/bin/kgsm`, a path no package may create
+and which a node installed purely from packages does not have.
+
 ## [1.38.0] - 2026-08-22
 
 ### Added — an explicit start can carry a person's override

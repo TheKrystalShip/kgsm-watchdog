@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > Workspace context lives in `../CLAUDE.md` (the `tks` umbrella) and the keystone
 > `../system-architecture.md` — read those for the cross-repo dependency spine and ecosystem
-> invariants. This file is kgsm-watchdog-specific. **`PLAN.md` is the as-built source of truth**
-> (increment roadmap + what's live); `README.md` is the operator-facing summary.
+> invariants. This file is kgsm-watchdog-specific. **`PLAN.md` is the design source of truth**;
+> `README.md` is the operator-facing summary.
 
 ## What this is
 
@@ -72,7 +72,7 @@ FS perms on the socket are the only security boundary (auth lives in the surface
 
 ```bash
 S=/run/kgsm-watchdog/control.sock
-curl --unix-socket $S http://x/health            # readiness: 200 ready / 503 + {ready,detail}; /ready = deprecated alias
+curl --unix-socket $S http://x/health            # readiness: 200 ready / 503 + {ready,detail}
 curl --unix-socket $S -X POST http://x/start/my-server   # 200 started / 507 no room / 409 failed
 curl --unix-socket $S http://x/status/my-server  # ...also /list, /stop/{n}, /version
 curl --unix-socket $S http://x/players           # every instance: its detection + who is connected
@@ -112,7 +112,7 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   cgroup holding processes); (3) **enables controllers** on the now-empty base. Per-instance cgroups
   are `kgsm.slice/kgsm-watchdog.service/<inst>` — **under the service, not siblings under the slice**:
   systemd reconciles a slice's own `subtree_control` on every `daemon-reload` and would strip
-  `memory`/`pids`/`io` off siblings (the bug Inc 8 fixed — monitor read `memory.current`=0). Bootstrap
+  `memory`/`pids`/`io` off siblings, leaving their accounting files reading `0`. Bootstrap
   failure sets `SupervisorState.Ready=false` (with a reason on `/start` and `/health`) rather than
   crashing.
 - **`KillMode=process` is load-bearing.** Games live *under* the service cgroup, so `control-group`
@@ -146,8 +146,8 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   **without** binding the socket, entering the slice, or touching cgroups. `HotSwapCoordinator` +
   `HotSwapSignalListener` bridge SIGHUP → in-place `execv`. SIGTERM is a normal shutdown.
 - **Persistence: the state directory, and two independent axes.**
-  `desired-state.json` (`Watchdog__StateFile`) = the **boot/enable** axis (replaces `systemctl
-  enable`/`WantedBy=`): `enable`/`disable` add/remove a name; on startup `StartupRestorer` re-adopts a
+  `desired-state.json` (`Watchdog__StateFile`) = the **boot/enable** axis:
+  `enable`/`disable` add/remove a name; on startup `StartupRestorer` re-adopts a
   still-live cgroup or respawns a dead one. Stores **intent only** — each spawn config is re-read fresh
   from kgsm-lib, so no stale-spec drift. `supervision-state.json` (`SupervisionStateStore`) persists
   restart counters / the give-up latch so they survive *any* death (OOM/SIGKILL), not just a planned
@@ -162,14 +162,14 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
 - **kgsm-lib is the only path to KGSM, and READ-ONLY here.** `PackageReference
   TheKrystalShip.KGSM.Lib`. The watchdog uses it to *read* instance spawn config
   (`IInstanceService.GetInstanceInfo`) and watch lifecycle events — **never to start/stop** (that path
-  spawns detached, which is exactly what this daemon replaces). Never shell `kgsm.sh` directly. (kgsm,
+  spawns detached, outside this daemon's cgroups). Never shell `kgsm.sh` directly. (kgsm,
   conversely, routes its native `start/stop` *to* this daemon via `commands/handlers/watchdog.sh` when
   the socket is present.)
 - **Reflection-free JSON, or it throws at runtime.** Every (de)serialized type must be registered in
   `Model/WatchdogJsonContext.cs` (source-gen). An unregistered type throws `NotSupportedException` at
   runtime — there is no reflection fallback. This is what lets the daemon ship as AOT.
 - **Never fabricate state.** A status is measured (cgroup / `/proc`) or explicitly "unknown" — never
-  invented. (The spine principle that killed the old kgsm-api.)
+  invented.
 - **GC is tuned for an idle supervisor, deliberately.** `Watchdog.csproj` forces **Workstation,
   non-concurrent GC** (overriding the Web SDK's Server-GC default, which reserved a heap per core →
   ~100 MB idle RSS). `MemoryTrimmer` (hosted service) hands free pages back to the OS after activity
@@ -227,6 +227,12 @@ history; never duplicate it into docs or code.
   survive it: *"temporary shim for the rework"*, *"added to satisfy the new requirement"*,
   milestone/phase labels (*"per M2"*, *"the Phase 1 step"*). If a line's justification is the work
   that produced it rather than the system as it now stands, it goes.
+- **No volatile numbers.** Counts and versions that drift — how many projects/files/tests/
+  partials exist, a dependency's pinned version, a file's line count — never go in prose: they are
+  stale the moment anything changes, and nothing fails to remind anyone. Name the authoritative
+  source instead (the csproj, the directory, the barrel file). A number belongs in prose only when
+  it *is* the contract (a port, a timeout, a cap) or a measured fact that is itself the reason a
+  design exists.
 - **Edits are replacements, not appends.** When changing an existing feature, rewrite the affected
   doc/comment fresh as if writing it for the first time — never append a correction under the
   stale version, and never leave the stale version standing beside the new. The current revision

@@ -49,10 +49,7 @@ internal static class ControlEndpoints
         // Unified ecosystem health probe — one `/health` everywhere (PLAN §5). This carries
         // *readiness* semantics, not bare liveness: 200 only when the supervisor is in-slice and
         // able to spawn; 503 + reason when up-but-unable; no answer at all when down. Consumers
-        // treat anything other than 200 as "unavailable — retry until 200". The old bare-liveness
-        // /healthz is gone (it had no consumers). /ready is kept as a deprecated alias for one
-        // transition release so a not-yet-updated kgsm CLI / kgsm-lib never silently falls back
-        // off the daemon onto the direct-spawn path; remove it once both are on /health.
+        // treat anything other than 200 as "unavailable — retry until 200".
         IResult Health(SupervisorState state)
         {
             var body = new ReadyState(state.Ready, state.Detail);
@@ -62,7 +59,7 @@ internal static class ControlEndpoints
         }
 
         app.MapGet("/health", Health);
-        app.MapGet("/ready", Health); // deprecated alias — drop once kgsm CLI + kgsm-lib use /health
+        app.MapGet("/ready", Health); // /ready serves the same health payload as /health
 
         // 200 acted (including a genuine idempotent no-op — "already running"), 507 the node has no room,
         // 409 anything else that went wrong. The three are separated on the STATUS LINE because the kgsm
@@ -165,7 +162,7 @@ internal static class ControlEndpoints
         app.MapGet("/enabled", (InstanceSupervisor sup) =>
             Results.Json(sup.EnabledNames(), WatchdogJsonContext.Default.StringArray));
 
-        // Live-apply a CPU-priority change to a RUNNING instance's cgroup (Phase 2) — writes cpu.weight
+        // Live-apply a CPU-priority change to a RUNNING instance's cgroup — writes cpu.weight
         // in place, no respawn. 200 always: Ok=false + a plain message when the cgroup is absent (not
         // running), since the config is still persisted by kgsm and takes effect at the next start.
         // Memory cap has no live-apply twin: shrinking memory.max under a running game can't reclaim
@@ -180,7 +177,7 @@ internal static class ControlEndpoints
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult);
         });
 
-        // The running daemon's build identity (Inc 7 Phase 0). The hot-swap deploy curls this after a
+        // The running daemon's build identity. The hot-swap deploy curls this after a
         // reload to confirm the new binary is live; the same version is what `--version` prints. Read
         // from the compiled-in informational version (never fabricated), split into version + commit.
         app.MapGet("/version", () =>
@@ -258,7 +255,7 @@ internal static class ControlEndpoints
 }
 
 /// <summary>
-/// The assembly informational version, read once (Inc 7 Phase 0). SourceLink stamps it as
+/// The assembly informational version, read once. SourceLink stamps it as
 /// <c>&lt;version&gt;+&lt;commit&gt;</c>; <see cref="WatchdogVersionInfo.FromInformational"/> splits it.
 /// Falls back to the plain assembly version string when no informational attribute is present. Shared by
 /// <c>GET /version</c> and the top-of-<c>Main</c> <c>--version</c>/<c>--selfcheck</c> branches.

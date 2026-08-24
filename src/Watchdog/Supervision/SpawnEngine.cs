@@ -86,8 +86,8 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
             Directory.CreateDirectory(instance.LogsDir);
 
         // 0. Rotate a PRIOR run's log out of the way so this fresh spawn starts a brand-new inode at
-        //    `log` — see RotateLogFile for the full rationale (fixes the Increment-9 divergence noted
-        //    in PLAN.md: a stale ready/player-presence line surviving into the 2nd+ run). Safe here
+        //    `log` — see RotateLogFile for the full rationale (without rotation, a stale
+        //    ready/player-presence line from a prior run survives into the next one). Safe here
         //    because Spawn() is the sole fresh-spawn entry point (InstanceSupervisor.TrySpawn is its
         //    only caller, for manual start / boot respawn-of-dead / crash-restart) — adopt
         //    (AdoptLive/AdoptFromHandoff) never calls Spawn, so a still-writing live game's log is

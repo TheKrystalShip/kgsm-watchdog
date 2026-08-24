@@ -12,8 +12,8 @@ using TheKrystalShip.KGSM.Watchdog.Supervision;
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
-/// Guards the spawn/adopt distinction the log-rotation fix (PLAN.md Increment 9 follow-up,
-/// <see cref="SpawnEngine.RotateLogFile"/>) depends on for correctness: rotation must run ONLY on a
+/// Guards the spawn/adopt distinction that log rotation
+/// (<see cref="SpawnEngine.RotateLogFile"/>) depends on for correctness: rotation must run ONLY on a
 /// genuine fresh spawn, NEVER on adopt (a daemon restart/hot-swap re-attaching to a game that is still
 /// running and still writing its own log) — truncating or moving that log out from under a live writer
 /// would destroy in-flight output. <see cref="InstanceSupervisor.AdoptFromHandoff"/> (same-PID hot-swap

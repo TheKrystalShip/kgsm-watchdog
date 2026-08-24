@@ -363,7 +363,8 @@ kgsm-watchdog/
       cgroups → fixes CPU/mem accuracy + PID-reuse fragility; `io.stat` still
       controller-gated; per-server net still uncovered).
 - [ ] Keystone: add the supervisor to the topology, **amend §4 statelessness**,
-      fix the §6 ledger + `kgsm-lib/docs/host-monitoring-inventory.md` native anchor.
+      fix the §6 ledger + the native anchor of the inventory/cgroup-path contract
+      (`kgsm-monitor/PLAN.md §6`).
 
 ### Increment 5 — boot persistence: desired-state restore across restarts  ◀ DONE (built 2026-06-12, root-verified 2026-06-13)
 

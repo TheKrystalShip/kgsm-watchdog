@@ -14,6 +14,7 @@
     "RestartMaxRetries": 5,
     "RestartStabilitySeconds": 300,
     "RestartGraceSeconds": 10,
+    "MaintenanceMaxMinutes": 60,
     "StateFile": "",
     "InstancesDir": "",
     "PlayerPresencePollMs": 1000,

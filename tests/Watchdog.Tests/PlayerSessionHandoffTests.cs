@@ -183,6 +183,7 @@ public sealed class PlayerSessionHandoffTests
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             sessions,
             TestMemoryGate.Disabled(),
+            options,
             NullLogger<InstanceSupervisor>.Instance);
     }
 }

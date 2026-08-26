@@ -74,6 +74,7 @@ FS perms on the socket are the only security boundary (auth lives in the surface
 S=/run/kgsm-watchdog/control.sock
 curl --unix-socket $S http://x/health            # readiness: 200 ready / 503 + {ready,detail}
 curl --unix-socket $S -X POST http://x/start/my-server   # 200 started / 507 no room / 409 failed
+curl --unix-socket $S -X POST 'http://x/maintenance/begin/my-server?origin=scheduler'  # park / release
 curl --unix-socket $S http://x/status/my-server  # ...also /list, /stop/{n}, /version
 curl --unix-socket $S http://x/players           # every instance: its detection + who is connected
 ```
@@ -83,6 +84,12 @@ anything else as "unavailable, retry". `start`/`restart` separate a **capacity r
 a failure (`409`) on the status line, because the kgsm CLI's transport reads the code and discards
 the body; the body says the same thing in `ActionResult.refusal` for callers that read JSON, and
 kgsm maps the `507` to `EC_INSUFFICIENT_MEMORY` so both engine halves refuse with one code.
+**`POST /maintenance/begin|end/{name}?origin=<leaf>`** is the park a leaf runs disruptive work behind:
+the normal graceful drain with desired-state left `running`, so crash-restart is suppressed by the
+phase (`maintenance`) and the failure streak and give-up latch come out as they went in. The work
+happens between the two calls and never inside the supervisor's gate. `Watchdog__MaintenanceMaxMinutes`
+releases a park nothing else releases, and a park predating this daemon's start is released at boot —
+so a leaf that dies mid-sequence costs a window, never a server.
 **`POST /start/{name}?force=true`** is the only way past that check — a person's override, carried
 from `kgsm start --force`; it still takes the reservation, and the autostart, the crash-restart and
 `/restart` never set it. The daemon supervises native-standalone instances only; it

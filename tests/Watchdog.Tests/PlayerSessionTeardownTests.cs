@@ -224,6 +224,7 @@ public sealed class PlayerSessionTeardownTests
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             sessions,
             TestMemoryGate.Disabled(),
+            options,
             NullLogger<InstanceSupervisor>.Instance);
     }
 

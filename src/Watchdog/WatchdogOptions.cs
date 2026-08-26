@@ -83,6 +83,18 @@ public sealed class WatchdogOptions
     public int RestartGraceSeconds { get; init; } = 10;
 
     /// <summary>
+    /// How long a parked instance may stay parked before the daemon respawns it by itself.
+    /// <c>Watchdog__MaintenanceMaxMinutes</c>. Default <c>60</c>, floored at 1. A leaf parks an
+    /// instance to run disruptive work against a stopped server and releases the park when it is done;
+    /// this deadline is what applies when the leaf never gets that far, so a leaf that dies mid-sequence
+    /// costs a maintenance window rather than a server.
+    /// </summary>
+    public int MaintenanceMaxMinutes { get; init; } = 60;
+
+    /// <summary>The unpark deadline as the supervision loop measures it.</summary>
+    public TimeSpan MaintenanceMaxDuration => TimeSpan.FromMinutes(MaintenanceMaxMinutes);
+
+    /// <summary>
     /// What counts as restartable. <c>Watchdog__RestartPolicy</c> = <c>always</c> (default) | <c>on-failure</c>.
     /// <c>always</c>: restart on any exit while desired-running (the only "stay down" is <c>stop</c>);
     /// <c>on-failure</c>: leave a clean (code 0) exit stopped, restart only crashes. See <see cref="RestartPolicyMode"/>.
@@ -186,6 +198,7 @@ public sealed class WatchdogOptions
             RestartMaxRetries = Floor(s.RestartMaxRetries ?? defaults.RestartMaxRetries, WatchdogSettings.Floors.Zero),
             RestartStabilitySeconds = Floor(s.RestartStabilitySeconds ?? defaults.RestartStabilitySeconds, WatchdogSettings.Floors.StabilitySeconds),
             RestartGraceSeconds = Floor(s.RestartGraceSeconds ?? defaults.RestartGraceSeconds, WatchdogSettings.Floors.Zero),
+            MaintenanceMaxMinutes = Floor(s.MaintenanceMaxMinutes ?? defaults.MaintenanceMaxMinutes, WatchdogSettings.Floors.MaintenanceMinutes),
             RestartPolicy = ParseRestartPolicy(s.RestartPolicy, defaults.RestartPolicy),
             StateFile = s.StateFile?.Trim() ?? string.Empty,
             InstancesDir = s.InstancesDir?.Trim() ?? string.Empty,
@@ -314,6 +327,7 @@ public sealed class WatchdogOptions
         Row("Watchdog__RestartMaxRetries", $"[{d.RestartMaxRetries}]", "consecutive failures before giving up (phase=failed)");
         Row("Watchdog__RestartStabilitySeconds", $"[{d.RestartStabilitySeconds}]", "uptime after which the failure streak resets");
         Row("Watchdog__RestartGraceSeconds", $"[{d.RestartGraceSeconds}]", "post-spawn window where crash-detection is suppressed");
+        Row("Watchdog__MaintenanceMaxMinutes", $"[{d.MaintenanceMaxMinutes}]", "how long a park may last before the daemon respawns the instance itself");
 
         Section("Boot persistence (auto-start across restarts — replaces systemd enable/WantedBy)");
         Row("Watchdog__StateFile", "[~/.local/share/kgsm-watchdog/desired-state.json]", "desired-running set restored on boot; default under the KGSM user's data dir");
@@ -340,6 +354,8 @@ public sealed class WatchdogOptions
         sb.AppendLine("  GET  /ready                     deprecated alias of /health (removed next release)");
         sb.AppendLine("  POST /start/{instance}          spawn into its cgroup, desired-state = running");
         sb.AppendLine("  POST /stop/{instance}           graceful stop -> drain -> cgroup.kill, desired-state = stopped");
+        sb.AppendLine("  POST /maintenance/begin/{inst}  park: graceful drain, desired-state stays running, no crash-restart");
+        sb.AppendLine("  POST /maintenance/end/{inst}    release the park and respawn, streak and give-up latch untouched");
         sb.AppendLine("  GET  /status/{instance}         desired/phase/populated/pid/restarts");
         sb.AppendLine("  GET  /list                      all supervised instances");
         sb.AppendLine("  GET  /console/{instance}?tail=N last <=N lines of stdout (native only; finite text/plain)");

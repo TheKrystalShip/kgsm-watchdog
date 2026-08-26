@@ -35,5 +35,6 @@ internal sealed class InstanceRestartState
     public string Phase { get; set; } = "";
     public DateTime? SpawnedAt { get; set; }
     public DateTime? NextRestartAt { get; set; }
+    public DateTime? MaintenanceSince { get; set; }
     public string LastReason { get; set; } = "";
 }

@@ -72,9 +72,13 @@ internal static class ControlEndpoints
         // makes it reachable: the CLI's transport builds a URL and reads the status back, with no body in
         // either direction. It is a QUERY rather than a header or a body field for the same reason the
         // status code carries the refusal — the caller that needs it is a curl invocation.
-        app.MapPost("/start/{name}", async (string name, string? force, InstanceSupervisor sup, CancellationToken ct) =>
+        //
+        // `?origin=` names the surface or leaf that asked. It reaches this daemon's own log and nothing
+        // else: a start is announced by the kgsm command layer with the asker's provenance, and a second
+        // event from here would put one bring-up in the audit trail twice under two different authors.
+        app.MapPost("/start/{name}", async (string name, string? force, string? origin, InstanceSupervisor sup, CancellationToken ct) =>
         {
-            var result = await sup.StartAsync(name, ct, IsTrue(force));
+            var result = await sup.StartAsync(name, ct, IsTrue(force), origin ?? string.Empty);
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
                 statusCode: StatusFor(result));
         });
@@ -85,9 +89,9 @@ internal static class ControlEndpoints
         // abort the stop mid-drain, leaving the instance killed but still tabled as Running, which the
         // crash path then read as a crash and restarted: the operator's stop became a start. Once a stop
         // begins it runs to completion; its internal waits are individually bounded, so it cannot hang.
-        app.MapPost("/stop/{name}", async (string name, InstanceSupervisor sup) =>
+        app.MapPost("/stop/{name}", async (string name, string? origin, InstanceSupervisor sup) =>
         {
-            var result = await sup.StopAsync(name, CancellationToken.None);
+            var result = await sup.StopAsync(name, CancellationToken.None, origin ?? string.Empty);
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
                 statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });
@@ -107,6 +111,38 @@ internal static class ControlEndpoints
             var result = await sup.RestartAsync(name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, CancellationToken.None);
             return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
                 statusCode: StatusFor(result));
+        });
+
+        // Park and release, the lifecycle transition a leaf runs a multi-minute disruptive sequence
+        // behind. The park drains the instance and leaves desired-state RUNNING, so crash-restart is
+        // suppressed rather than switched off and a leaf that dies holding the park costs a maintenance
+        // window instead of a server — the daemon's own unpark timeout brings it back. `origin` names the
+        // REQUESTING LEAF and the emitted events are attributed to it as system:<origin>, exactly as
+        // /restart does: an autonomous leaf's action attributed to a person is a trap this ecosystem has
+        // fallen into before.
+        //
+        // Two statuses only, and a capacity refusal on the release rides in the body rather than as a
+        // 507: the typed client reads the body on 200 and 409 and treats every other code as a transport
+        // failure, so a third status here would reach a caller as an exception instead of an answer.
+        // Uncancellable for the same reason as /stop — the park opens with a full graceful drain, and an
+        // aborted one leaves the instance killed but still tabled as running.
+        app.MapPost("/maintenance/begin/{name}", async (string name, string? origin, InstanceSupervisor sup) =>
+        {
+            var result = await sup.BeginMaintenanceAsync(
+                name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, CancellationToken.None);
+            return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
+                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+        });
+
+        // Idempotent: releasing an instance that is not parked is a 200 no-op, so a leaf can call it
+        // unconditionally whatever the work it parked for did. That is what makes "a window never leaves
+        // a server down" a property of the primitive rather than of the caller remembering.
+        app.MapPost("/maintenance/end/{name}", async (string name, string? origin, InstanceSupervisor sup) =>
+        {
+            var result = await sup.EndMaintenanceAsync(
+                name, string.IsNullOrWhiteSpace(origin) ? "scheduler" : origin, CancellationToken.None);
+            return Results.Json(result, WatchdogJsonContext.Default.ActionResult,
+                statusCode: result.Ok ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
         });
 
         app.MapGet("/status/{name}", (string name, InstanceSupervisor sup) =>

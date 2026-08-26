@@ -155,6 +155,7 @@ public sealed class MemoryReservationWiringTests
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),
             gate,
+            options,
             NullLogger<InstanceSupervisor>.Instance);
     }
 }

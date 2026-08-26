@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — a park a leaf runs disruptive work behind (`1.41.0`)
+
+`POST /maintenance/begin/{instance}` drains an instance the way a stop does and leaves desired-state
+`running`. `POST /maintenance/end/{instance}` respawns it. Both take `?origin=`, and the events they
+emit are attributed `system:<origin>` — the leaf that asked, never a person on the local host.
+
+What makes it a park rather than a stop is what it leaves alone. Desired-state stays `running`, so a
+leaf that dies holding one leaves an instance something still wants up; the failure streak and the
+give-up latch come out of the park as they went in, because the release does not route through the
+operator-override path a start takes; and the router lease and host firewall rule stay open, on the
+same rule a crash-restart follows.
+
+Crash detection is gated on the phase, not on intent alone. A parked instance is desired-running with
+an empty cgroup, which is the exact shape of a crash — `SupervisionPhase.Maintenance` is what tells the
+two apart, and crash classification lives in the running phase and nowhere else.
+
+Nothing waits inside the supervisor gate. The park returns as soon as the cgroup is empty and the work
+happens outside it; one semaphore held across a 20-minute download would freeze crash-restart for every
+instance on the host.
+
+Two deadlines stop a leaf from stranding a server. `Watchdog__MaintenanceMaxMinutes` (default 60)
+releases a park nothing else releases, and a park that predates this daemon's own start is released at
+boot — the daemon cannot know whether the leaf holding it is still working, and up is the safe answer.
+
+`?origin=` also reaches `POST /start` and `POST /stop`, where it names the caller in this daemon's own
+log and attributes nothing: a start is announced by the kgsm command layer with the asker's provenance,
+and a second event from here would put one bring-up in the trail twice.
+
 ### Added — a signal rung between the console and the kill (`1.40.0`)
 
 Stopping an instance asks its console, then sends SIGTERM, then takes the group down with

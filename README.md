@@ -76,7 +76,18 @@ curl --unix-socket $S -X POST 'http://x/start/my-server?force=true'   # start it
 curl --unix-socket $S http://x/status/my-server
 curl --unix-socket $S http://x/list
 curl --unix-socket $S -X POST http://x/stop/my-server
+curl --unix-socket $S -X POST 'http://x/maintenance/begin/my-server?origin=scheduler'  # park it
+curl --unix-socket $S -X POST 'http://x/maintenance/end/my-server?origin=scheduler'    # and release it
 ```
+
+A **park** is the transition a leaf runs disruptive work behind — an update, or a backup that needs a
+stopped server. It drains the instance the way a stop does, but leaves desired-state `running`: the
+failure streak and the give-up latch come out of the park as they went in, crash-restart is suppressed
+by the phase rather than switched off, and `/status` reports the phase as `maintenance`. The work
+happens between the two calls, outside the daemon, so nothing waits inside the supervisor's gate.
+
+Nothing a leaf does can strand a server: `Watchdog__MaintenanceMaxMinutes` releases a park nothing
+else releases, and a park that predates this daemon's own start is released at boot.
 
 `start` and `restart` answer **`507`** when the node has no room for the instance, and `409` for
 anything else that went wrong — a refusal is not a failure, so a caller can stop retrying one and
@@ -170,6 +181,7 @@ at startup. Only **`Watchdog__KgsmPath` is required**; everything else has a wor
 | `RestartMaxRetries` | `Watchdog__RestartMaxRetries` | `5` | consecutive failures before giving up (`phase=failed`) |
 | `RestartStabilitySeconds` | `Watchdog__RestartStabilitySeconds` | `300` | uptime after which the failure streak resets |
 | `RestartGraceSeconds` | `Watchdog__RestartGraceSeconds` | `10` | post-spawn window where crash-detection is suppressed |
+| `MaintenanceMaxMinutes` | `Watchdog__MaintenanceMaxMinutes` | `60` | how long a park may last before the daemon respawns the instance itself |
 | `StateFile` | `Watchdog__StateFile` | *(`~/.local/share/kgsm-watchdog/desired-state.json`)* | boot-autostart (enabled) set persisted here + restored on boot (replaces systemd `enable`/`WantedBy`) |
 | `InstancesDir` | `Watchdog__InstancesDir` | *(`~/.local/share/kgsm/instances`)* | kgsm instances dir watched for container event channels |
 | `PlayerPresencePollMs` | `Watchdog__PlayerPresencePollMs` | `1000` | how often presence channels are scanned and tailed |

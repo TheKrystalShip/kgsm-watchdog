@@ -239,6 +239,18 @@
       "risk": "safe"
     },
     {
+      "key": "maintenanceMaxMinutes",
+      "env": "Watchdog__MaintenanceMaxMinutes",
+      "label": "Maximum park duration",
+      "description": "How long a server may stay parked for maintenance before the watchdog brings it back on its own. A leaf parks a server to do disruptive work against it and releases the park when the work is done; this is the deadline that applies when the leaf never gets that far, so a crashed scheduler costs a maintenance window instead of leaving a server down.",
+      "group": "supervision",
+      "type": "int",
+      "default": "60",
+      "min": 1,
+      "unit": "min",
+      "risk": "safe"
+    },
+    {
       "key": "restartGraceSec",
       "env": "Watchdog__RestartGraceSeconds",
       "label": "Post-spawn grace period",

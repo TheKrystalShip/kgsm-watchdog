@@ -53,6 +53,12 @@ public sealed class WatchdogSettings
 
         /// <summary>An instance has to stay up for some non-zero time to count as healthy.</summary>
         public const int StabilitySeconds = 1;
+
+        /// <summary>
+        /// A park has to be allowed to last some non-zero time, or the safety net would fire before
+        /// the leaf that took it has done anything.
+        /// </summary>
+        public const int MaintenanceMinutes = 1;
     }
 
     /// <summary>
@@ -168,6 +174,18 @@ public sealed class WatchdogSettings
     [LeafField("restartStabilitySec", "Stability window", Group = "supervision",
         Min = Floors.StabilitySeconds, Unit = "s")]
     public int? RestartStabilitySeconds { get; set; }
+
+    /// <summary>
+    /// How long a parked instance may stay parked before the daemon brings it back by itself,
+    /// minutes. Floor 1.
+    /// </summary>
+    /// <panel>How long a server may stay parked for maintenance before the watchdog brings it back on
+    /// its own. A leaf parks a server to do disruptive work against it and releases the park when the
+    /// work is done; this is the deadline that applies when the leaf never gets that far, so a crashed
+    /// scheduler costs a maintenance window instead of leaving a server down.</panel>
+    [LeafField("maintenanceMaxMinutes", "Maximum park duration", Group = "supervision",
+        Min = Floors.MaintenanceMinutes, Unit = "min")]
+    public int? MaintenanceMaxMinutes { get; set; }
 
     /// <summary>Post-spawn grace window in which crash-detection is suppressed, seconds.
     /// Floor 0.</summary>

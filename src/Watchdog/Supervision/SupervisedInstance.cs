@@ -16,6 +16,16 @@ internal enum SupervisionPhase
 
     /// <summary>Crash-looped past the retry limit — terminal until a manual start clears the give-up latch.</summary>
     Failed,
+
+    /// <summary>
+    /// Parked: deliberately drained so a leaf can do disruptive work against a stopped server, while
+    /// <see cref="SupervisedInstance.DesiredRunning"/> stays true. Crash-restart is suppressed for as
+    /// long as the park holds, and the failure streak and give-up latch are left exactly as they were —
+    /// a park is not a crash and not a stop, so it neither punishes the instance nor forgives it.
+    /// Released by <c>maintenance/end</c>, by an operator's start, or by the daemon's own unpark
+    /// timeout.
+    /// </summary>
+    Maintenance,
 }
 
 /// <summary>
@@ -48,6 +58,13 @@ internal sealed class SupervisedInstance
     /// <summary>When a <see cref="SupervisionPhase.RestartPending"/> instance becomes due to respawn.</summary>
     public DateTime? NextRestartAt { get; set; }
 
+    /// <summary>
+    /// When the current park began, or null when the instance is not parked. The unpark timeout is
+    /// measured from here, which is what keeps a leaf that dies mid-sequence from costing a server
+    /// rather than a window.
+    /// </summary>
+    public DateTime? MaintenanceSince { get; set; }
+
     /// <summary>Human-readable last transition reason, surfaced on <c>/status</c>.</summary>
     public string LastReason { get; set; } = "";
 
@@ -59,6 +76,7 @@ internal sealed class SupervisedInstance
         SupervisionPhase.RestartPending => "restart-pending",
         SupervisionPhase.Stopped => "stopped",
         SupervisionPhase.Failed => "failed",
+        SupervisionPhase.Maintenance => "maintenance",
         _ => "unknown",
     };
 }

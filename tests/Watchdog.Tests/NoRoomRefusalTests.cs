@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Models;
+using TheKrystalShip.KGSM.Core.Models.Enums;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
@@ -135,6 +136,7 @@ public sealed class NoRoomRefusalTests
     private static Instance SpecFor(string name, int memoryCapMb) => new()
     {
         Name = name,
+        Runtime = InstanceRuntime.Native,
         SocketFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-nofifo-{Guid.NewGuid():N}.fifo"),
         MemoryCapMb = memoryCapMb,
     };
@@ -165,6 +167,7 @@ public sealed class NoRoomRefusalTests
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),
             gate,
+            options,
             NullLogger<InstanceSupervisor>.Instance);
     }
 }

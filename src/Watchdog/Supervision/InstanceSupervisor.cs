@@ -51,6 +51,7 @@ internal sealed class InstanceSupervisor(
     FirewallPortsService firewall,
     PlayerSessionStore sessions,
     MemoryGate memoryGate,
+    WatchdogOptions options,
     ILogger<InstanceSupervisor> logger) : IDisposable, IForwardedPortClaims
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
@@ -108,7 +109,12 @@ internal sealed class InstanceSupervisor(
     /// instance still reserves what it declared, so the next one is judged against what this one is
     /// about to take.
     /// </param>
-    public async Task<ActionResult> StartAsync(string name, CancellationToken ct = default, bool force = false)
+    /// <param name="origin">
+    /// The surface or leaf that asked, carried on the wire as <c>?origin=</c> and written into this
+    /// daemon's own log. It attributes nothing: a start is announced by the kgsm command layer with the
+    /// asker's provenance, and a second event from here would put one bring-up in the trail twice.
+    /// </param>
+    public async Task<ActionResult> StartAsync(string name, CancellationToken ct = default, bool force = false, string origin = "")
     {
         if (!state.Ready)
             return new ActionResult(name, false, $"supervisor not ready: {state.Detail}");
@@ -137,6 +143,9 @@ internal sealed class InstanceSupervisor(
             si.Spec = instance;
             si.DesiredRunning = true;
             si.Restart.Reset();
+            // A person asking for a start ends any park: they are the authority the park was holding the
+            // instance for.
+            si.MaintenanceSince = null;
 
             // NB: start is runtime-only — it does NOT touch the persisted boot-autostart set. Surviving a
             // reboot is a separate, explicit axis owned by enable/disable (systemctl-style); see
@@ -185,7 +194,7 @@ internal sealed class InstanceSupervisor(
             _instances[name] = si;
             OpenPortForwarding(si.Spec); // fresh bring-up → open UPnP (fire-and-forget, best-effort)
             OpenFirewallPorts(si.Spec);  // …and the host firewall rule, on the same edge
-            logger.LogInformation("started {Instance} (pid {Pid})", name, si.Current!.Pid);
+            logger.LogInformation("started {Instance} (pid {Pid}, origin {Origin})", name, si.Current!.Pid, OriginText(origin));
             return new ActionResult(name, true, $"started (pid {si.Current!.Pid})");
         }
         finally
@@ -207,7 +216,13 @@ internal sealed class InstanceSupervisor(
     /// wait here is separately bounded, so running to completion cannot hang.
     /// </para>
     /// </summary>
-    public async Task<ActionResult> StopAsync(string name, CancellationToken ct = default)
+    /// <param name="name">The instance to stop.</param>
+    /// <param name="ct">Cancels only up to the point the stop begins.</param>
+    /// <param name="origin">
+    /// The surface or leaf that asked, carried on the wire as <c>?origin=</c> and written into this
+    /// daemon's own log. It attributes nothing, for the same reason as <see cref="StartAsync"/>'s.
+    /// </param>
+    public async Task<ActionResult> StopAsync(string name, CancellationToken ct = default, string origin = "")
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -258,19 +273,9 @@ internal sealed class InstanceSupervisor(
                 string reason;
                 if (cgroups.IsPopulated(name))
                 {
-                    // An adopted instance has no FIFO to write to, so the signal is not a fallback here —
-                    // it IS this instance's graceful stop, and it gets the full stop budget accordingly.
-                    var budget = StopBudget(si.Spec.StopCommandTimeoutSeconds);
-                    bool signalDrained = await SignalAndDrainAsync(name, budget).ConfigureAwait(false);
-                    if (!signalDrained)
-                    {
-                        logger.LogWarning("{Instance} did not stop on SIGTERM in {Seconds}s; cgroup.kill",
-                            name, budget.TotalSeconds);
-                        cgroups.Kill(name);
-                        await WaitForDrainAsync(name, HardKillDrain, CancellationToken.None).ConfigureAwait(false);
-                    }
+                    (bool adoptedDrained, _) = await DrainAsync(si).ConfigureAwait(false);
                     cgroups.Remove(name);
-                    reason = signalDrained
+                    reason = adoptedDrained
                         ? "stopped (adopted instance signalled; console returns on its next respawn)"
                         : "stopped (adopted instance hard-killed; no graceful-stop channel until a respawn)";
                 }
@@ -288,50 +293,7 @@ internal sealed class InstanceSupervisor(
                 return new ActionResult(name, true, reason);
             }
 
-            // The stop ladder: ask the console, then signal, then force. Each rung runs only because the
-            // one above it did not empty the cgroup.
-            var timeout = StopBudget(si.Current.StopTimeoutSeconds);
-            bool hasConsoleCommand = !string.IsNullOrEmpty(si.Current.StopCommand);
-            bool drained;
-
-            if (hasConsoleCommand)
-            {
-                logger.LogInformation("stopping {Instance}: sending stop command", name);
-                si.Current.SendLine(si.Current.StopCommand);
-                drained = await WaitForDrainAsync(name, timeout, CancellationToken.None).ConfigureAwait(false);
-            }
-            else
-            {
-                // Nothing to say and nobody to say it to. Waiting out the budget first would only delay
-                // the rung that can actually end this instance.
-                drained = !cgroups.IsPopulated(name);
-            }
-
-            bool signalled = false;
-            if (!drained)
-            {
-                // The budget belongs to whichever mechanism is doing the graceful work. With no console
-                // command the signal is that mechanism and gets all of it; after a console has already
-                // had the full budget and produced nothing, the signal is a fallback and gets the short
-                // window — the instance has been given its patience once already.
-                var signalBudget = hasConsoleCommand ? SignalFallbackWindow : timeout;
-                if (hasConsoleCommand)
-                {
-                    logger.LogWarning("{Instance} did not answer its stop command in {Seconds}s; sending SIGTERM",
-                        name, timeout.TotalSeconds);
-                }
-
-                signalled = await SignalAndDrainAsync(name, signalBudget).ConfigureAwait(false);
-                drained = signalled;
-            }
-
-            if (!drained)
-            {
-                // Hard teardown: atomic whole-tree SIGKILL — no pgrep -P, nothing escapes.
-                logger.LogWarning("{Instance} did not stop gracefully; cgroup.kill", name);
-                cgroups.Kill(name);
-                await WaitForDrainAsync(name, HardKillDrain, CancellationToken.None).ConfigureAwait(false);
-            }
+            (bool drained, bool signalled) = await DrainAsync(si).ConfigureAwait(false);
 
             DisposeCurrent(si);
             cgroups.Remove(name);
@@ -344,7 +306,7 @@ internal sealed class InstanceSupervisor(
             PersistSupervisionState(); // deliberate stop — drop this instance's persisted counters
             RecordRunEnd(si, RunRecord.Stopped, exit: null);
 
-            logger.LogInformation("stopped {Instance}", name);
+            logger.LogInformation("stopped {Instance} (origin {Origin})", name, OriginText(origin));
             return new ActionResult(name, true, stopReason);
         }
         finally
@@ -416,6 +378,174 @@ internal sealed class InstanceSupervisor(
 
         logger.LogInformation("restarted {Instance} (requester={Requester})", name, requester);
         return new ActionResult(name, true, $"restarted (requester={requester})");
+    }
+
+    // ---- maintenance park --------------------------------------------------------------------
+    // The lifecycle transition a leaf runs a multi-minute disruptive sequence behind. Same class as
+    // RestartAsync — an atomic transition this daemon already owns, with provenance and without a
+    // streak increment. WHEN to park is the asking leaf's; this owns only what a park is.
+
+    /// <summary>
+    /// Park an instance: perform the normal graceful drain and leave it stopped with desired-state still
+    /// <c>running</c>, so a leaf can do disruptive work against a stopped server. Crash-restart is
+    /// suppressed by the phase for as long as the park holds, and the failure streak and the give-up
+    /// latch are left exactly where the park found them — a park is neither a crash nor an operator's
+    /// stop, so it neither punishes the instance nor forgives it.
+    /// <para>
+    /// <b>The work the park exists for happens outside this call.</b> It returns as soon as the cgroup is
+    /// empty and holds the gate for the transition alone: one semaphore held across a 20-minute steamcmd
+    /// download would freeze crash-restart for every instance on the host.
+    /// </para>
+    /// <para>
+    /// <b>Parks only what is up.</b> An instance that is not supervised, not wanted running, or has no
+    /// live process is refused rather than parked, because the release respawns whatever was parked —
+    /// and turning somebody's stop into a start is the one outcome this primitive must never produce.
+    /// </para>
+    /// </summary>
+    /// <param name="name">The instance to park.</param>
+    /// <param name="origin">
+    /// The leaf that asked, which the emitted event is ATTRIBUTED to (see <see cref="ProvenanceActor"/>),
+    /// so the trail names the leaf rather than this daemon — and never a person, which is what an
+    /// unprefixed actor reads as downstream.
+    /// </param>
+    /// <param name="ct">Cancels only up to the point the drain begins.</param>
+    public async Task<ActionResult> BeginMaintenanceAsync(string name, string origin = "scheduler", CancellationToken ct = default)
+    {
+        // Read the spec OUTSIDE the gate (it shells out to kgsm-lib and can be slow), and settle the
+        // scope question from it: a container instance is Docker's, and there is no park to offer for
+        // one whether or not it happens to be tabled here.
+        var instance = instances.GetInstanceInfo(name);
+        if (instance is null)
+            return new ActionResult(name, false, "unknown instance (kgsm-lib returned no info)");
+        if (instance.Runtime != InstanceRuntime.Native)
+            return new ActionResult(name, false,
+                $"out of scope: {instance.Runtime} — the watchdog only supervises native instances");
+
+        bool parking = false;
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!_instances.TryGetValue(name, out var si))
+                return new ActionResult(name, false, "not supervised — nothing to park");
+            if (si.Phase == SupervisionPhase.Maintenance)
+                return new ActionResult(name, false, "already parked for maintenance");
+            if (!si.DesiredRunning || !cgroups.IsPopulated(name))
+                return new ActionResult(name, false, "not running — nothing to park");
+
+            parking = true;
+            (bool drained, bool signalled) = await DrainAsync(si).ConfigureAwait(false);
+            DisposeCurrent(si);
+            cgroups.Remove(name);
+
+            // Intent is deliberately untouched. The instance is still wanted running, which is what makes
+            // the park recoverable when this daemon dies holding one; the phase is what suppresses
+            // crash-restart, and the counters stay where they were. The router lease and the host
+            // firewall rule stay open too, on the same rule a crash-restart follows: the instance is
+            // coming back, and only an intended stop closes a door.
+            si.Phase = SupervisionPhase.Maintenance;
+            si.MaintenanceSince = DateTime.UtcNow;
+            si.SpawnedAt = null;
+            si.NextRestartAt = null;
+            si.LastReason = drained
+                ? (signalled ? $"parked for maintenance ({origin}); stopped (SIGTERM)" : $"parked for maintenance ({origin})")
+                : $"parked for maintenance ({origin}); killed (timeout)";
+            PersistSupervisionState();
+            RecordRunEnd(si, RunRecord.Stopped, exit: null);
+
+            // The instance is down inside one longer operation, said out loud and attributed to the leaf
+            // that asked. Never instance-stopped — that one is the fact that somebody stopped a server,
+            // and nobody did.
+            journal.Instance(EventRestartStopped, name, ProvenanceActor(origin));
+
+            logger.LogInformation(
+                "parked {Instance} for maintenance (origin {Origin}); unparking by itself after {Minutes}min if nothing releases it",
+                name, OriginText(origin), options.MaintenanceMaxMinutes);
+            return new ActionResult(name, true, si.LastReason);
+        }
+        finally
+        {
+            // The process is gone, so no session it was tracking survives and the reservation this run
+            // took must not outlive it — the same edge and the same reasoning as a stop, and in the
+            // finally so a drain that throws still clears. The respawn takes a fresh reservation.
+            if (parking)
+            {
+                ForgetPlayerSessions(name);
+                memoryGate.Release(name);
+            }
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Release a park and bring the instance back. Idempotent: an instance that is not parked is a
+    /// no-op success, so a leaf can call this unconditionally whatever the work it parked for did —
+    /// which is what guarantees a maintenance sequence never leaves a server down.
+    /// </summary>
+    /// <param name="name">The instance to release.</param>
+    /// <param name="origin">The leaf that asked, attributed as in <see cref="BeginMaintenanceAsync"/>.</param>
+    /// <param name="ct">Cancels only up to the point the release begins.</param>
+    public async Task<ActionResult> EndMaintenanceAsync(string name, string origin = "scheduler", CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!_instances.TryGetValue(name, out var si) || si.Phase != SupervisionPhase.Maintenance)
+                return new ActionResult(name, true, "not parked");
+
+            return Unpark(si, DateTime.UtcNow, ProvenanceActor(origin), $"released from maintenance ({origin})");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Release a park and respawn, <b>without</b> the operator-override path: <see cref="StartAsync"/>
+    /// clears the give-up latch and the failure streak, and coming out of a park with a crash history
+    /// the instance never earned is precisely what this primitive exists to avoid.
+    /// </summary>
+    /// <remarks>
+    /// Every branch leaves the park released. A full node and a respawn that will not start are both
+    /// handed to the reconcile loop as a pending restart rather than left parked, because
+    /// <see cref="SupervisionPhase.Maintenance"/> is the one phase the loop brings nothing out of.
+    /// Always called under the gate.
+    /// </remarks>
+    private ActionResult Unpark(SupervisedInstance si, DateTime now, string actor, string what)
+    {
+        string name = si.Name;
+
+        if (TrySpawn(si, now, out string reason, out bool noRoom))
+        {
+            si.LastReason = $"{what}; {reason}";
+            PersistSupervisionState();
+            // The pair is one operation and the instance is back up: a park with work in its middle IS
+            // the restart, so there is no second bounce to announce.
+            journal.Instance(EventRestarted, name, actor);
+            logger.LogInformation("unparked {Instance}: {What} ({Reason})", name, what, reason);
+            return new ActionResult(name, true, si.LastReason);
+        }
+
+        si.MaintenanceSince = null;
+        si.Phase = SupervisionPhase.RestartPending;
+
+        if (noRoom)
+        {
+            si.NextRestartAt = now + NoRoomRecheckDelay;
+            si.LastReason = $"{what}; not restarted: {reason}";
+            PersistSupervisionState();
+            logger.LogWarning("{Instance} is out of maintenance but is not being restarted: {Reason}. Re-checking every {Delay}s.",
+                name, reason, (int)NoRoomRecheckDelay.TotalSeconds);
+            return new ActionResult(name, false, si.LastReason, ActionRefusal.NoRoom);
+        }
+
+        // Due immediately, so the next tick retries it through the restart machinery — which is what
+        // counts a genuinely failing spawn as the failure it is, and what this must not do itself.
+        si.NextRestartAt = now;
+        si.LastReason = $"{what}; respawn failed ({reason})";
+        PersistSupervisionState();
+        logger.LogError("unparking {Instance} failed to spawn ({Reason}); handed to the restart loop", name, reason);
+        return new ActionResult(name, false, si.LastReason);
     }
 
     // ---- UPnP read (external surface) -------------------------------------------------------
@@ -812,6 +942,12 @@ internal sealed class InstanceSupervisor(
     /// give-up/Failed latch is honored across the bounce rather than silently cleared.</item>
     /// <item><b>Prune.</b> Persisted entries with no matching live instance are dropped (the instance was
     /// stopped/removed while the daemon was down); the rewrite reflects only what is actually supervised.</item>
+    /// <item><b>A park that predates this daemon's start is released and the instance respawned.</b> The
+    /// daemon cannot know whether the leaf holding the park is still working — it cannot know the leaf is
+    /// still alive — and up is the safe answer to that. A parked instance is not running, so nothing was
+    /// live for the adopt to find and only the persisted counters remember it at all; an enabled one the
+    /// boot restore already spawned keeps that fresh <c>Running</c> phase and the stale park simply does
+    /// not come back.</item>
     /// </list>
     /// Runs under the gate, like every other table mutation; <paramref name="ct"/> is accepted for
     /// symmetry with the other restore steps (the work itself is synchronous and brief).
@@ -825,11 +961,20 @@ internal sealed class InstanceSupervisor(
         _gate.Wait(ct);
         try
         {
-            int restored = 0, latched = 0;
+            var now = DateTime.UtcNow;
+            int restored = 0, latched = 0, unparked = 0;
             foreach (var (name, snap) in persisted.Instances)
             {
+                bool wasParked = string.Equals(snap.Phase, nameof(SupervisionPhase.Maintenance), StringComparison.Ordinal);
+
                 if (!_instances.TryGetValue(name, out var si))
-                    continue; // pruned below — nothing live to rehydrate onto
+                {
+                    // Pruned below — unless it was parked, in which case there is a server down that
+                    // nothing else on this daemon remembers.
+                    if (wasParked && RespawnStalePark(name, snap, now))
+                        unparked++;
+                    continue;
+                }
 
                 // (1) Counters carry unconditionally — the core honesty fix.
                 si.Restart.Restore(snap.ConsecutiveFailures, snap.GaveUp);
@@ -839,16 +984,26 @@ internal sealed class InstanceSupervisor(
                 //     freshly-respawned game keeps its Running phase but a pre-crash give-up/Failed latch
                 //     is honored across the bounce.
                 bool liveNow = si.Current is not null || cgroups.IsPopulated(name);
-                if (!liveNow)
+                if (liveNow)
+                    continue;
+
+                // (3) A park does not survive the bounce. The counters restored just above ride through
+                //     the respawn untouched, which is the whole difference between this and a start.
+                if (wasParked)
                 {
-                    if (Enum.TryParse<SupervisionPhase>(snap.Phase, ignoreCase: false, out var phase))
-                        si.Phase = phase;
-                    si.SpawnedAt = snap.SpawnedAt;
-                    si.NextRestartAt = snap.NextRestartAt;
-                    if (!string.IsNullOrEmpty(snap.LastReason))
-                        si.LastReason = snap.LastReason;
-                    latched++;
+                    si.MaintenanceSince = null;
+                    Unpark(si, now, WatchdogJournal.ActorWatchdog, "unparked across a daemon restart");
+                    unparked++;
+                    continue;
                 }
+
+                if (Enum.TryParse<SupervisionPhase>(snap.Phase, ignoreCase: false, out var phase))
+                    si.Phase = phase;
+                si.SpawnedAt = snap.SpawnedAt;
+                si.NextRestartAt = snap.NextRestartAt;
+                if (!string.IsNullOrEmpty(snap.LastReason))
+                    si.LastReason = snap.LastReason;
+                latched++;
             }
 
             // (3) The just-rebuilt table is now authoritative — persist it (drops entries for instances
@@ -856,13 +1011,46 @@ internal sealed class InstanceSupervisor(
             PersistSupervisionState();
 
             logger.LogInformation(
-                "rehydrated supervision counters: {Restored} restored ({Latched} also re-latched phase/timing), {Persisted} on disk, {Live} live",
-                restored, latched, persisted.Instances.Count, _instances.Count);
+                "rehydrated supervision counters: {Restored} restored ({Latched} also re-latched phase/timing), " +
+                "{Unparked} released from a stale maintenance park, {Persisted} on disk, {Live} live",
+                restored, latched, unparked, persisted.Instances.Count, _instances.Count);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Bring back an instance a previous daemon left parked and that the boot restore did not cover.
+    /// A parked instance holds no process, so there is no live cgroup for the orphan adopt to find, and
+    /// one that was started but never enabled is in no persisted set either — the supervision counters
+    /// are the only record that it is down on purpose, and the purpose died with the daemon.
+    /// </summary>
+    /// <remarks>
+    /// The counters come back with it, so an instance that was crash-looping before it was parked
+    /// resumes with the streak it had. Always called under the gate.
+    /// </remarks>
+    private bool RespawnStalePark(string name, InstanceRestartState snap, DateTime now)
+    {
+        Instance? spec = null;
+        try { spec = instances.GetInstanceInfo(name); }
+        catch (Exception ex) { logger.LogWarning(ex, "unpark-restore: kgsm-lib threw reading {Instance}", name); }
+
+        if (spec is null || spec.Runtime != InstanceRuntime.Native)
+        {
+            logger.LogWarning(
+                "unpark-restore: {Instance} was parked for maintenance but is no longer a native instance this daemon " +
+                "can spawn — leaving it down", name);
+            return false;
+        }
+
+        var si = new SupervisedInstance { Name = name, Spec = spec, DesiredRunning = true };
+        si.Restart.Restore(snap.ConsecutiveFailures, snap.GaveUp);
+        _instances[name] = si;
+
+        Unpark(si, now, WatchdogJournal.ActorWatchdog, "unparked across a daemon restart");
+        return true;
     }
 
     // ---- self-re-exec hot-swap (Inc 7 / Option 3) -------------------------------------------
@@ -1425,6 +1613,9 @@ internal sealed class InstanceSupervisor(
             return;
         }
 
+        // THE PHASE IS THE SECOND GATE. A parked instance is desired-running with no process, so intent
+        // alone reads it as a crash and would restart straight through the park. Crash detection lives in
+        // ReconcileRunning and nowhere else, which is what keeps a park out of its reach.
         switch (si.Phase)
         {
             case SupervisionPhase.Running:
@@ -1432,6 +1623,9 @@ internal sealed class InstanceSupervisor(
                 break;
             case SupervisionPhase.RestartPending:
                 ReconcileRestartPending(si, now);
+                break;
+            case SupervisionPhase.Maintenance:
+                ReconcileMaintenance(si, now);
                 break;
             // Stopped / Failed are terminal until a manual start.
         }
@@ -1470,6 +1664,31 @@ internal sealed class InstanceSupervisor(
 
         logger.LogInformation(
             "{Instance} exited under a pending stop — completing the teardown, not restarting (intent: stopped)", si.Name);
+    }
+
+    /// <summary>
+    /// A parked instance, one tick at a time. Nothing here reads the cgroup for a crash — the park is
+    /// what emptied it, and a park is not a run that ended.
+    /// </summary>
+    /// <remarks>
+    /// The only thing watched is the clock. A leaf takes a park and releases it; when one dies holding
+    /// one, this deadline is what brings the server back, so a leaf that never gets that far costs a
+    /// maintenance window rather than a server nobody notices is down. A park carrying no start time
+    /// cannot be aged and is due at once: leaving it would strand the instance in the one phase nothing
+    /// else releases.
+    /// </remarks>
+    private void ReconcileMaintenance(SupervisedInstance si, DateTime now)
+    {
+        if (si.MaintenanceSince is DateTime since && now - since < options.MaintenanceMaxDuration)
+            return;
+
+        logger.LogWarning(
+            "{Instance} has been parked for maintenance past the {Minutes}min limit with nothing releasing it; unparking",
+            si.Name, options.MaintenanceMaxMinutes);
+        // This daemon decided it, so this daemon is who it is attributed to — the leaf that parked asked
+        // for nothing of the sort, and naming it here would put a decision in its trail it never made.
+        Unpark(si, now, WatchdogJournal.ActorWatchdog,
+            $"unparked after {options.MaintenanceMaxMinutes}min with no release");
     }
 
     private void ReconcileRunning(SupervisedInstance si, DateTime now)
@@ -1745,6 +1964,13 @@ internal sealed class InstanceSupervisor(
     /// <c>system:&lt;name&gt;</c>, because an unprefixed actor is read downstream as a person on the local
     /// host. A blank requester is this daemon — the honest fallback, never an invented name.
     /// </summary>
+    /// <summary>
+    /// How a caller's origin reads in this daemon's log. A caller that named itself is named; one that
+    /// did not is <c>unnamed</c>, never a guess at which surface it might have been.
+    /// </summary>
+    private static string OriginText(string origin) =>
+        string.IsNullOrWhiteSpace(origin) ? "unnamed" : origin;
+
     private static string ProvenanceActor(string requester) =>
         string.IsNullOrWhiteSpace(requester) ? WatchdogJournal.ActorWatchdog
             : requester.Contains(':') ? requester
@@ -1770,6 +1996,7 @@ internal sealed class InstanceSupervisor(
                 Phase = si.Phase.ToString(),
                 SpawnedAt = si.SpawnedAt,
                 NextRestartAt = si.NextRestartAt,
+                MaintenanceSince = si.MaintenanceSince,
                 LastReason = si.LastReason,
             };
         }
@@ -1887,6 +2114,7 @@ internal sealed class InstanceSupervisor(
             si.Phase = SupervisionPhase.Running;
             si.SpawnedAt = now;
             si.NextRestartAt = null;
+            si.MaintenanceSince = null; // a running instance is not a parked one
             reason = $"pid {ri.Pid}";
             return true;
         }
@@ -2010,6 +2238,67 @@ internal sealed class InstanceSupervisor(
     /// this rung the only thing below a console is SIGKILL, which ends whatever the game had not yet
     /// written to disk.
     /// </remarks>
+    /// <summary>
+    /// Take a tracked instance's live cgroup down: ask its console, then SIGTERM, then <c>cgroup.kill</c>.
+    /// Each rung runs only because the one above it left the cgroup populated.
+    /// </summary>
+    /// <remarks>
+    /// The budget belongs to whichever mechanism is doing the graceful work. An instance with no console
+    /// to ask — one adopted after a daemon restart with no FIFO recovered, or one declaring no
+    /// <c>stop_command</c> — spends the whole of it on the signal; a console that was asked and answered
+    /// nothing has had that patience already, so the signal behind it gets the short fallback window.
+    /// <para>
+    /// Uncancellable by construction: every wait is separately bounded, and abandoning a teardown
+    /// mid-drain is what leaves an instance killed but still tabled as running.
+    /// </para>
+    /// </remarks>
+    /// <returns>
+    /// Whether the group emptied short of the kill, and whether SIGTERM is what emptied it — the two
+    /// facts each caller words its own result from.
+    /// </returns>
+    private async Task<(bool Drained, bool Signalled)> DrainAsync(SupervisedInstance si)
+    {
+        string name = si.Name;
+        TimeSpan budget = StopBudget(si.Current?.StopTimeoutSeconds ?? si.Spec.StopCommandTimeoutSeconds);
+        bool hasConsoleCommand = si.Current is not null && !string.IsNullOrEmpty(si.Current.StopCommand);
+        bool drained;
+
+        if (hasConsoleCommand)
+        {
+            logger.LogInformation("stopping {Instance}: sending stop command", name);
+            si.Current!.SendLine(si.Current.StopCommand);
+            drained = await WaitForDrainAsync(name, budget, CancellationToken.None).ConfigureAwait(false);
+        }
+        else
+        {
+            // Nothing to say and nobody to say it to. Waiting out the budget first would only delay the
+            // rung that can actually end this instance.
+            drained = !cgroups.IsPopulated(name);
+        }
+
+        bool signalled = false;
+        if (!drained)
+        {
+            TimeSpan signalBudget = hasConsoleCommand ? SignalFallbackWindow : budget;
+            if (hasConsoleCommand)
+                logger.LogWarning("{Instance} did not answer its stop command in {Seconds}s; sending SIGTERM",
+                    name, budget.TotalSeconds);
+
+            signalled = await SignalAndDrainAsync(name, signalBudget).ConfigureAwait(false);
+            drained = signalled;
+        }
+
+        if (!drained)
+        {
+            // Hard teardown: atomic whole-tree SIGKILL — no pgrep -P, nothing escapes.
+            logger.LogWarning("{Instance} did not stop gracefully; cgroup.kill", name);
+            cgroups.Kill(name);
+            await WaitForDrainAsync(name, HardKillDrain, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        return (drained, signalled);
+    }
+
     private async Task<bool> SignalAndDrainAsync(string name, TimeSpan budget)
     {
         if (!cgroups.IsPopulated(name))

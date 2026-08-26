@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — a signal rung between the console and the kill (`1.40.0`)
+
+Stopping an instance asks its console, then sends SIGTERM, then takes the group down with
+`cgroup.kill`. Each rung runs only because the one above it left the cgroup populated.
+
+A game that never reads its console still handles signals, and the Source engine's dedicated server
+is the case that shows it: `srcds_run` runs a binary whose stdin nothing reads, so a command written
+into the FIFO reaches nobody. With only a console above `cgroup.kill`, such a game is killed outright
+along with whatever it had not yet written to disk.
+
+The budget belongs to whichever mechanism is doing the graceful work. An instance that declares no
+`stop_command` skips the console rung outright and spends its whole `stop_command_timeout_seconds` on
+the signal. One whose console was asked and answered nothing has had that patience already, so the
+signal gets a ten-second window before the group is forced.
+
+cgroup v2 carries an atomic whole-subtree kill for SIGKILL alone, so SIGTERM is delivered per-PID over
+`cgroup.procs`. The group is frozen around the sweep, and the freeze is waited for because writing
+`cgroup.freeze` only requests one: a launcher that supervises its own child — `srcds_run` respawns on
+a non-zero exit — can otherwise start a replacement after its child is signalled and before the
+launcher itself is, leaving a process the sweep never saw.
+
+Two paths with no console to ask reach the signal rung as well: an adopted instance, re-attached after
+a daemon restart with no FIFO recovered, and an untracked cgroup a previous daemon left live.
+
+`CgroupManager.PathFor` rejects any name that is not a single path segment. The daemon lives in the
+base cgroup, and the control files written through that path are teardown writes.
+
 ### Changed — a packaged install enables and starts the supervisor (`1.39.0`)
 
 `packaging/kgsm-watchdog.install` applies kgsm-base's `50-kgsm.preset` to this project's units in

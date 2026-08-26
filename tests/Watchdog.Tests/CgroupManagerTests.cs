@@ -213,4 +213,80 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
             try { if (Directory.Exists(cg)) Directory.Delete(cg); } catch { /* best effort */ }
         }
     }
+
+    [Fact]
+    public void PathFor_rejects_anything_that_is_not_one_segment()
+    {
+        // The daemon lives in the base cgroup, and the control files written through this path are
+        // teardown writes. A name that escapes its segment could aim them at the daemon's own group.
+        var mgr = Make(Defaults());
+        Assert.Throws<ArgumentException>(() => mgr.PathFor(".."));
+        Assert.Throws<ArgumentException>(() => mgr.PathFor("."));
+        Assert.Throws<ArgumentException>(() => mgr.PathFor("../supervisor"));
+        Assert.Throws<ArgumentException>(() => mgr.PathFor("a/b"));
+    }
+
+    [Fact]
+    public void TermAll_signals_nothing_when_the_cgroup_is_absent()
+    {
+        var mgr = Make(new WatchdogOptions { CgroupBaseName = $"kgsm-nonexistent-{Guid.NewGuid():N}.slice" });
+        Assert.Equal(0, mgr.TermAll("whatever"));
+    }
+
+    [Fact]
+    public void TermAll_delivers_a_catchable_signal_to_every_process_in_the_cgroup()
+    {
+        var mgr = Make(Defaults());
+
+        if (!mgr.Supported())
+        {
+            output.WriteLine("skip: no delegated cgroup base (run 'kgsm system setup-cgroups')");
+            return;
+        }
+
+        string inst = $"kgsm-termtest-{Environment.ProcessId}-{Guid.NewGuid():N}";
+        string cg = mgr.PathFor(inst);
+
+        Assert.True(mgr.Create(inst), "create should succeed on a delegated base");
+
+        Process? helper = null;
+        try
+        {
+            // sleep(1) dies on SIGTERM without handling it, so its exit is evidence the signal was
+            // delivered — and it would outlive a rung that only knew how to SIGKILL.
+            helper = Process.Start(new ProcessStartInfo("/bin/sleep", "60") { UseShellExecute = false });
+            Assert.NotNull(helper);
+
+            if (!mgr.Attach(inst, helper.Id))
+            {
+                output.WriteLine("skip: cannot enter delegated base from this cgroup context (needs root or a systemd user session)");
+                return;
+            }
+
+            Assert.True(mgr.IsPopulated(inst), "a cgroup with a live process must read populated");
+
+            Assert.Equal(1, mgr.TermAll(inst));
+
+            // Bounded drain (<= ~5s); never an unbounded wait.
+            for (int i = 0; i < 50 && mgr.IsPopulated(inst); i++)
+                Thread.Sleep(100);
+
+            Assert.False(mgr.IsPopulated(inst), "SIGTERM should have emptied the cgroup");
+
+            // The group must be left thawed whatever happened, or a survivor would be stopped dead
+            // in a way nothing downstream would explain.
+            string freeze = Path.Combine(cg, "cgroup.freeze");
+            if (File.Exists(freeze))
+                Assert.Equal("0", File.ReadAllText(freeze).Trim());
+
+            Assert.True(mgr.Remove(inst), "cgroup remove should succeed");
+        }
+        finally
+        {
+            try { helper?.Kill(true); } catch { /* already gone */ }
+            try { helper?.WaitForExit(2000); } catch { /* ignore */ }
+            helper?.Dispose();
+            try { if (Directory.Exists(cg)) Directory.Delete(cg); } catch { /* best effort */ }
+        }
+    }
 }

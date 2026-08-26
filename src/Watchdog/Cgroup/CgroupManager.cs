@@ -59,6 +59,13 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
         string name = instanceName.EndsWith(".ini", StringComparison.Ordinal)
             ? instanceName[..^4]
             : instanceName;
+
+        // The path must land on a child of the base and nowhere else. The daemon itself lives in the
+        // base cgroup, so a name carrying a separator or a dot-segment could resolve the control files
+        // to the daemon's own group — and the writes here are teardown writes.
+        if (name is "." or ".." || name.Contains('/', StringComparison.Ordinal))
+            throw new ArgumentException($"instance name must be a single path segment: '{instanceName}'", nameof(instanceName));
+
         return $"{Base}/{name}";
     }
 
@@ -284,6 +291,98 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
             // absent / teardown race -> unknown
         }
         return null;
+    }
+
+    /// <summary>
+    /// SIGTERM every process in the instance cgroup, returning how many were signalled.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// cgroup v2 has an atomic whole-subtree kill for SIGKILL only, so a catchable signal is delivered
+    /// by hand: read <c>cgroup.procs</c>, signal each pid. The group is frozen around the sweep because
+    /// a bare read-then-signal races anything that forks. A launcher that supervises its own child — the
+    /// Source engine's <c>srcds_run</c> is one, and it respawns on a non-zero exit — can otherwise start a
+    /// replacement after its child is signalled but before the launcher itself is, leaving a process the
+    /// sweep never saw. Frozen, the set cannot change; each process handles the signal on the thaw.
+    /// </para>
+    /// <para>
+    /// Returns 0 when the cgroup is empty or unreadable, which callers read as nothing to do. ESRCH on an
+    /// individual pid is ordinary — a process that exited between the read and the signal has already done
+    /// what was being asked of it.
+    /// </para>
+    /// </remarks>
+    public int TermAll(string instanceName)
+    {
+        string cg = PathFor(instanceName);
+        string procs = Path.Combine(cg, "cgroup.procs");
+        string freeze = Path.Combine(cg, "cgroup.freeze");
+
+        // Writing cgroup.freeze only REQUESTS the freeze; the kernel applies it asynchronously and
+        // reports it in cgroup.events. Sweeping before it lands would leave the race this is here to
+        // close, so wait briefly for the state — and sweep anyway if it does not arrive, since an
+        // unfrozen sweep is still better than none.
+        bool frozen = File.Exists(freeze) && TryWrite(freeze, "1");
+        if (frozen)
+            WaitForFrozen(cg, TimeSpan.FromMilliseconds(250));
+
+        try
+        {
+            int signalled = 0;
+            foreach (var line in ReadPids(procs))
+            {
+                if (NativeMethods.kill(line, NativeMethods.SIGTERM) == 0)
+                    signalled++;
+            }
+            return signalled;
+        }
+        finally
+        {
+            // Always thaw, including when the sweep threw: a cgroup left frozen is a game stopped dead
+            // in a way nothing else here would explain.
+            if (frozen)
+                TryWrite(freeze, "0");
+        }
+    }
+
+    /// <summary>Poll <c>cgroup.events</c> until it reports <c>frozen 1</c>, or the budget runs out.</summary>
+    private static void WaitForFrozen(string cgDir, TimeSpan budget)
+    {
+        string events = Path.Combine(cgDir, "cgroup.events");
+        var deadline = DateTime.UtcNow + budget;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                foreach (var line in File.ReadLines(events))
+                    if (line.StartsWith("frozen ", StringComparison.Ordinal))
+                    {
+                        if (line.AsSpan("frozen ".Length).Trim().SequenceEqual("1"))
+                            return;
+                        break;
+                    }
+            }
+            catch
+            {
+                return; // torn down under us — nothing left to freeze
+            }
+            Thread.Sleep(10);
+        }
+    }
+
+    private IReadOnlyList<int> ReadPids(string procsFile)
+    {
+        var pids = new List<int>();
+        try
+        {
+            foreach (var line in File.ReadLines(procsFile))
+                if (int.TryParse(line.Trim(), out int pid))
+                    pids.Add(pid);
+        }
+        catch
+        {
+            // absent / teardown race -> nothing to signal
+        }
+        return pids;
     }
 
     /// <summary>Atomically SIGKILL every process in the instance cgroup (whole subtree) via <c>cgroup.kill</c>.</summary>

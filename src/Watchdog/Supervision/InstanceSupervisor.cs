@@ -221,10 +221,18 @@ internal sealed class InstanceSupervisor(
                 // Not tracked — but a previous daemon (or a crash window) may have left a live cgroup.
                 if (cgroups.IsPopulated(name))
                 {
-                    cgroups.Kill(name);
-                    await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+                    // Nothing is tabled here, so there is no stop budget to read: the signal rung gets
+                    // the fallback window before the group is taken down by force.
+                    bool signalDrained = await SignalAndDrainAsync(name, SignalFallbackWindow).ConfigureAwait(false);
+                    if (!signalDrained)
+                    {
+                        cgroups.Kill(name);
+                        await WaitForDrainAsync(name, HardKillDrain, CancellationToken.None).ConfigureAwait(false);
+                    }
                     cgroups.Remove(name);
-                    return new ActionResult(name, true, "stopped (untracked live cgroup torn down)");
+                    return new ActionResult(name, true, signalDrained
+                        ? "stopped (untracked live cgroup signalled)"
+                        : "stopped (untracked live cgroup torn down)");
                 }
                 return new ActionResult(name, true, "not running");
             }
@@ -250,10 +258,21 @@ internal sealed class InstanceSupervisor(
                 string reason;
                 if (cgroups.IsPopulated(name))
                 {
-                    cgroups.Kill(name);
-                    await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+                    // An adopted instance has no FIFO to write to, so the signal is not a fallback here —
+                    // it IS this instance's graceful stop, and it gets the full stop budget accordingly.
+                    var budget = StopBudget(si.Spec.StopCommandTimeoutSeconds);
+                    bool signalDrained = await SignalAndDrainAsync(name, budget).ConfigureAwait(false);
+                    if (!signalDrained)
+                    {
+                        logger.LogWarning("{Instance} did not stop on SIGTERM in {Seconds}s; cgroup.kill",
+                            name, budget.TotalSeconds);
+                        cgroups.Kill(name);
+                        await WaitForDrainAsync(name, HardKillDrain, CancellationToken.None).ConfigureAwait(false);
+                    }
                     cgroups.Remove(name);
-                    reason = "stopped (adopted instance hard-killed; no graceful-stop channel until a respawn)";
+                    reason = signalDrained
+                        ? "stopped (adopted instance signalled; console returns on its next respawn)"
+                        : "stopped (adopted instance hard-killed; no graceful-stop channel until a respawn)";
                 }
                 else
                 {
@@ -269,29 +288,58 @@ internal sealed class InstanceSupervisor(
                 return new ActionResult(name, true, reason);
             }
 
-            // Graceful: write the stop command into the FIFO, then drain up to the instance's timeout.
-            if (!string.IsNullOrEmpty(si.Current.StopCommand))
+            // The stop ladder: ask the console, then signal, then force. Each rung runs only because the
+            // one above it did not empty the cgroup.
+            var timeout = StopBudget(si.Current.StopTimeoutSeconds);
+            bool hasConsoleCommand = !string.IsNullOrEmpty(si.Current.StopCommand);
+            bool drained;
+
+            if (hasConsoleCommand)
             {
                 logger.LogInformation("stopping {Instance}: sending stop command", name);
                 si.Current.SendLine(si.Current.StopCommand);
+                drained = await WaitForDrainAsync(name, timeout, CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                // Nothing to say and nobody to say it to. Waiting out the budget first would only delay
+                // the rung that can actually end this instance.
+                drained = !cgroups.IsPopulated(name);
             }
 
-            var timeout = TimeSpan.FromSeconds(Math.Max(1, si.Current.StopTimeoutSeconds));
-            bool drained = await WaitForDrainAsync(name, timeout, CancellationToken.None).ConfigureAwait(false);
+            bool signalled = false;
+            if (!drained)
+            {
+                // The budget belongs to whichever mechanism is doing the graceful work. With no console
+                // command the signal is that mechanism and gets all of it; after a console has already
+                // had the full budget and produced nothing, the signal is a fallback and gets the short
+                // window — the instance has been given its patience once already.
+                var signalBudget = hasConsoleCommand ? SignalFallbackWindow : timeout;
+                if (hasConsoleCommand)
+                {
+                    logger.LogWarning("{Instance} did not answer its stop command in {Seconds}s; sending SIGTERM",
+                        name, timeout.TotalSeconds);
+                }
+
+                signalled = await SignalAndDrainAsync(name, signalBudget).ConfigureAwait(false);
+                drained = signalled;
+            }
 
             if (!drained)
             {
                 // Hard teardown: atomic whole-tree SIGKILL — no pgrep -P, nothing escapes.
-                logger.LogWarning("{Instance} did not stop gracefully in {Seconds}s; cgroup.kill", name, timeout.TotalSeconds);
+                logger.LogWarning("{Instance} did not stop gracefully; cgroup.kill", name);
                 cgroups.Kill(name);
-                await WaitForDrainAsync(name, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+                await WaitForDrainAsync(name, HardKillDrain, CancellationToken.None).ConfigureAwait(false);
             }
 
             DisposeCurrent(si);
             cgroups.Remove(name);
             _instances.TryRemove(name, out _);
 
-            string stopReason = drained ? "stopped gracefully" : "killed (timeout)";
+            string stopReason = drained
+                ? (signalled ? "stopped (SIGTERM)" : "stopped gracefully")
+                : "killed (timeout)";
             si.LastReason = stopReason;
             PersistSupervisionState(); // deliberate stop — drop this instance's persisted counters
             RecordRunEnd(si, RunRecord.Stopped, exit: null);
@@ -1935,6 +1983,49 @@ internal sealed class InstanceSupervisor(
             await Task.Delay(100, ct).ConfigureAwait(false);
         }
         return cgroups.IsPopulated(name);
+    }
+
+    /// <summary>
+    /// How long the signal rung waits when it is a fallback — the console was asked, had the instance's
+    /// whole stop budget, and produced nothing. Where the signal is instead the only graceful mechanism
+    /// the instance has, it gets that budget itself rather than this window.
+    /// </summary>
+    private static readonly TimeSpan SignalFallbackWindow = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long to wait for the cgroup to empty after a SIGKILL, which nothing can catch.</summary>
+    private static readonly TimeSpan HardKillDrain = TimeSpan.FromSeconds(5);
+
+    /// <summary>An instance's graceful stop budget, floored at a second so a bad value cannot mean "never wait".</summary>
+    private static TimeSpan StopBudget(int stopTimeoutSeconds)
+        => TimeSpan.FromSeconds(Math.Max(1, stopTimeoutSeconds));
+
+    /// <summary>
+    /// The signal rung of the stop ladder: SIGTERM every process in the instance cgroup and wait for it
+    /// to empty. Returns true when the instance is gone.
+    /// </summary>
+    /// <remarks>
+    /// This is a real graceful stop, not a softer kill. A game that never reads its console still handles
+    /// signals, and the whole Source-engine family is in that position: the launcher and the server both
+    /// exit on SIGTERM in milliseconds while a command written to their stdin is read by nobody. Without
+    /// this rung the only thing below a console is SIGKILL, which ends whatever the game had not yet
+    /// written to disk.
+    /// </remarks>
+    private async Task<bool> SignalAndDrainAsync(string name, TimeSpan budget)
+    {
+        if (!cgroups.IsPopulated(name))
+            return true;
+
+        int signalled = cgroups.TermAll(name);
+        if (signalled == 0)
+        {
+            // Nothing to signal: either it drained in the moment between the two reads, or the control
+            // files are unreadable and the rung below has to settle it.
+            return !cgroups.IsPopulated(name);
+        }
+
+        logger.LogInformation("stopping {Instance}: SIGTERM to {Count} process(es), waiting up to {Seconds}s",
+            name, signalled, budget.TotalSeconds);
+        return await WaitForDrainAsync(name, budget, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task<bool> WaitForDrainAsync(string name, TimeSpan timeout, CancellationToken ct)

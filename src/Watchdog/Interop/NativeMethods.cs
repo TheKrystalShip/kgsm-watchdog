@@ -111,6 +111,19 @@ internal static partial class NativeMethods
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int waitpid(int pid, out int wstatus, int options);
 
+    /// <summary>SIGTERM — the signal a process can catch to shut itself down.</summary>
+    internal const int SIGTERM = 15;
+
+    /// <summary>
+    /// kill(2) — send a signal to one process. The watchdog uses it for the signal rung of the stop
+    /// ladder: cgroup v2 offers an atomic whole-subtree kill for SIGKILL alone (<c>cgroup.kill</c>), so a
+    /// catchable signal has to be delivered per-PID, over the pids read from <c>cgroup.procs</c>.
+    /// Returns 0 on success, -1 with errno on failure — ESRCH (the process already exited) is the
+    /// ordinary case during a teardown and is not an error worth reporting.
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int kill(int pid, int sig);
+
     /// <summary>
     /// execv(3) — replace the current process image with the program at <paramref name="path"/>.
     /// <para>

@@ -4,6 +4,8 @@ using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Lifecycle;
 using TheKrystalShip.KGSM.Watchdog.Events;
 
+using TheKrystalShip.KGSM.Events;
+
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
@@ -101,7 +103,8 @@ public sealed class RecordingJournal
         public string Producer => "kgsm-watchdog";
 
         public ValueTask<bool> AppendAsync(
-            string eventType, JsonElement data, string? actor = null, string? origin = null,
+            EventName eventType, JsonElement data, string? actor = null, string? origin = null,
+            EventSeverity? severity = null, EventOutcome? outcome = null, string? summary = null,
             CancellationToken token = default)
         {
             Recorded.Add(new RecordedEvent(eventType, actor, origin, data.Clone()));

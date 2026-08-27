@@ -161,7 +161,19 @@ public sealed class WatchdogJournal(IEventJournalWriter writer, ILogger<Watchdog
     /// </remarks>
     private void Write(string eventType, string instanceName, string? actor, Action<Utf8JsonWriter> data)
     {
-        if (Record(eventType, data, actor))
-            logger.LogDebug("recorded {Event} for {Instance}", NormalizeType(eventType), instanceName);
+        // Parsed here rather than declared as a constant, because several of these names arrive from a
+        // parser reading a container's own output — the one place in this daemon where the name is not
+        // known until it is read. A name that is not a name is dropped loudly: writing it would put a
+        // line on the journal that no consumer matches, which fails silently everywhere downstream.
+        if (!EventName.TryParse(eventType, out EventName name))
+        {
+            logger.LogError(
+                "'{Event}' is not a valid event name; the line for {Instance} was not written",
+                eventType, instanceName);
+            return;
+        }
+
+        if (Record(name, data, actor))
+            logger.LogDebug("recorded {Event} for {Instance}", name.Value, instanceName);
     }
 }

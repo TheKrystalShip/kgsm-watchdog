@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — an event is named by a type (`1.42.0`)
+
+An event's name is a type rather than a string, so a name that is not a name cannot reach the journal.
+Where this producer chooses a name at run time, the name is read at that boundary and a value that is
+not one is reported and dropped — a line no consumer matches fails silently everywhere downstream,
+which is the failure this refuses to write.
+
 ### Fixed — readiness belongs to a run, and an uptime is the run's own (`1.41.1`)
 
 `instance-ready` fires once per RUN, on every daemon that supervises it, rather than once per daemon.

@@ -519,14 +519,15 @@ internal sealed class NativePlayerPresenceIngester(
     }
 
     /// <summary>
-    /// Emit one presence event through kgsm-lib, stamped <c>actor="system" / origin="system"</c> — an
-    /// autonomous observation no human drove, identical to the container ingester and the supervisor's
-    /// system/system emits. <b>Why not <c>actor:null</c>:</b> a null actor makes kgsm-lib omit
-    /// <c>KGSM_EVENT_ACTOR</c> and kgsm's payload builder then falls back to the daemon's OS user — a
-    /// fabricated human identity on an autonomous event. Null fields pass as empty string (a string-based
-    /// emit can't carry a literal JSON null mid-args; kgsm maps empty→null); <paramref name="parameters"/>
-    /// is pre-built by <see cref="EmitJoined"/>/<see cref="EmitLeft"/> so each event carries exactly its
-    /// contract arity. Best-effort: a failed emit is logged and swallowed, never crashes the ingester.
+    /// Record one presence event in this daemon's own journal — an autonomous observation no human
+    /// drove, so it carries the producer's derived <c>system:watchdog</c> actor
+    /// (<c>JournalProducer.SystemActorFor</c>) rather than one this call names. A bare <c>system</c>
+    /// would read as an OS user of that name, which is why the actor is qualified and why it is derived
+    /// from the producer id instead of being a second spelling of it here. Null fields pass as empty
+    /// string (a string-based emit can't carry a literal JSON null mid-args; empty maps to null);
+    /// <paramref name="parameters"/> is pre-built by <see cref="EmitJoined"/>/<see cref="EmitLeft"/> so
+    /// each event carries exactly its contract arity. Best-effort: a failed emit is logged and
+    /// swallowed, never crashes the ingester.
     /// </summary>
     private void Emit(
         string eventName, string instanceName, string sessionKey, string detail,

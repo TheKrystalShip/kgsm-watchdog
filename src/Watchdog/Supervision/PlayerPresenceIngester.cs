@@ -164,13 +164,11 @@ internal sealed class PlayerPresenceIngester(
     }
 
     /// <summary>
-    /// Emit one presence event through kgsm-lib, stamped <c>actor="system" / origin="system"</c> — an
-    /// autonomous observation no human drove, mirroring the supervisor's existing system/system emits
-    /// (<c>instance-crashed</c>/<c>-restarted</c>/<c>-started</c>). <b>Why not <c>actor:null</c>:</b> a
-    /// null actor makes kgsm-lib omit <c>KGSM_EVENT_ACTOR</c>, and kgsm's payload builder then falls back
-    /// to the daemon's OS user — a <em>fabricated</em> human identity on an autonomous event, violating
-    /// the never-fabricate-provenance doctrine. Passing <c>"system"</c> explicitly suppresses that
-    /// fallback (frozen-contract §A/§3, corrected 2026-06-19).
+    /// Record one presence event in this daemon's own journal — an autonomous observation no human
+    /// drove, so it carries the producer's derived <c>system:watchdog</c> actor
+    /// (<c>JournalProducer.SystemActorFor</c>), the same stamp the supervisor's lifecycle events carry.
+    /// A bare <c>system</c> would read as an OS user of that name, which is why the actor is qualified
+    /// and why it is derived from the producer id rather than restated here.
     /// <para>
     /// The positional params are <c>instance, player_id, player_name</c>; a null id/name is passed as an
     /// empty string (a string-based emit cannot carry a literal JSON null in a middle positional arg, and

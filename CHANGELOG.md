@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — an event carries the weight the catalog gives it (`1.43.0`)
+
+An event this daemon records carries how much it matters and how it went, taken from the engine's own
+catalog rather than tagged at each call site — so the weight of an event lives in the same place as
+its payload type, and this daemon states one it was told rather than one it invented.
+
+⚠ Only for a type the catalog recognises. Stamping the defaults onto an event nobody has classified
+would assert a weight nothing established, and absent is how unknown is spelled.
+
 ### Changed — an event is named by a type (`1.42.0`)
 
 An event's name is a type rather than a string, so a name that is not a name cannot reach the journal.

@@ -173,7 +173,18 @@ public sealed class WatchdogJournal(IEventJournalWriter writer, ILogger<Watchdog
             return;
         }
 
-        if (Record(name, data, actor))
+        // How much the event matters and how it went come from the engine's own catalog, which is
+        // where its payload type and its fields are already declared — so this daemon states a weight
+        // it was told rather than one it invented, and an event gains its weight in one place.
+        //
+        // ⚠ Only for a type the catalog recognises. Stamping the defaults onto an event nobody has
+        // classified would assert a weight nothing established, and absent is what "unknown" is
+        // spelled as.
+        EventDescriptor descriptor = KgsmEventCatalog.Describe(name.Value);
+        EventSeverity? severity = descriptor.Known ? descriptor.Severity : null;
+        EventOutcome? outcome = descriptor.Known ? descriptor.Outcome : null;
+
+        if (Record(name, data, actor, severity: severity, outcome: outcome))
             logger.LogDebug("recorded {Event} for {Instance}", name.Value, instanceName);
     }
 }

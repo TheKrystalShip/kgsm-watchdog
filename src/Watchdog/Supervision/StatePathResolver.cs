@@ -35,6 +35,9 @@ internal sealed class StatePathResolver(WatchdogOptions options, ILogger<StatePa
     /// <summary>The restart counters and give-up latch, so they survive any daemon death.</summary>
     public const string SupervisionStateFile = "supervision-state.json";
 
+    /// <summary>Which run of each instance has already been announced ready.</summary>
+    public const string ReadinessStateFile = "readiness-state.json";
+
     /// <summary>How each run of each instance ended.</summary>
     public const string RunHistoryFile = "run-history.json";
 

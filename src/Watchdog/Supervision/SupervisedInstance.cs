@@ -52,8 +52,22 @@ internal sealed class SupervisedInstance
     /// <summary>Backoff/give-up state; survives respawns by living here, not on <see cref="Current"/>.</summary>
     public RestartTracker Restart { get; } = new();
 
-    /// <summary>When <see cref="Current"/> was last spawned — drives the grace window and stability reset.</summary>
+    /// <summary>
+    /// When THIS daemon took charge of the current run — drives the grace window and the stability
+    /// reset. A spawn and an adoption both set it, because both are the moment supervision starts and
+    /// both need the window; it is therefore a supervision clock, not the run's age.
+    /// </summary>
     public DateTime? SpawnedAt { get; set; }
+
+    /// <summary>
+    /// When the current run's leader process actually started, measured from the kernel
+    /// (<see cref="ProcessStartClock.StartedAtUtc"/>); null when nothing is running or the leader could
+    /// not be read. This is the run's age — what an uptime is — and it is deliberately separate from
+    /// <see cref="SpawnedAt"/>, whose clock restarts every time this daemon re-attaches to a run that
+    /// never stopped. Reporting the supervision clock as an uptime would date a days-old server to the
+    /// last deploy.
+    /// </summary>
+    public DateTime? RunStartedAt { get; set; }
 
     /// <summary>When a <see cref="SupervisionPhase.RestartPending"/> instance becomes due to respawn.</summary>
     public DateTime? NextRestartAt { get; set; }

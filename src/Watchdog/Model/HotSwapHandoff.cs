@@ -79,6 +79,11 @@ internal sealed class HotSwapEntry
     public string Phase { get; set; } = "";
 
     public DateTime? SpawnedAt { get; set; }
+
+    /// <summary>The measured start of the run being handed over — carried so the successor reports the
+    /// game's own age rather than re-dating it to the swap.</summary>
+    public DateTime? RunStartedAt { get; set; }
+
     public DateTime? NextRestartAt { get; set; }
     public string LastReason { get; set; } = "";
     public bool DesiredRunning { get; set; }

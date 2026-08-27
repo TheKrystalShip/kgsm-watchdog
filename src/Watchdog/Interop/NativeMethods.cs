@@ -23,6 +23,13 @@ internal static partial class NativeMethods
     // access(2) mode bits.
     internal const int W_OK = 2;
 
+    /// <summary>
+    /// sysconf(3) name for the number of clock ticks in a second — the unit
+    /// <c>/proc/&lt;pid&gt;/stat</c> counts a process's <c>starttime</c> in. Without it that field is a
+    /// bare tick count that no arithmetic can turn into an instant.
+    /// </summary>
+    internal const int _SC_CLK_TCK = 2;
+
     // fcntl(2) commands + the close-on-exec flag. Used by the self-re-exec hot-swap (Inc 7): a FIFO
     // write-fd is opened O_CLOEXEC in steady state (so a spawned game never inherits sibling fds), but
     // must shed FD_CLOEXEC for the instant of the execv so it survives into the new daemon image.
@@ -51,6 +58,14 @@ internal static partial class NativeMethods
     /// </summary>
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int access(string pathname, int mode);
+
+    /// <summary>
+    /// sysconf(3) — read a system configuration value; the watchdog asks only for
+    /// <see cref="_SC_CLK_TCK"/>. Returns -1 for a name the C library does not know, which the caller
+    /// reads as "the tick rate is unknown" rather than substituting a conventional one.
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial long sysconf(int name);
 
     /// <summary>
     /// statx(2) — fetch an inode (and only an inode, via <see cref="STATX_INO"/>) for a path,

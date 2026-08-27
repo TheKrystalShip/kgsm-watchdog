@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — readiness belongs to a run, and an uptime is the run's own (`1.41.1`)
+
+`instance-ready` fires once per RUN, on every daemon that supervises it, rather than once per daemon.
+
+The ingester reads a start from its own first sight of a populated cgroup, and for a server that is
+already up that sight arrives on the first tick after each daemon start. An adopt does not rotate the
+game's log, so the running server's own ready line is still in it for the whole-file late-attach scan
+to find. The latch that stops a second announcement now lives in `readiness-state.json`, keyed to the
+run itself — the leader's pid and the kernel tick it started on, read via `ProcessStartClock` — so it
+outlives the daemon that set it. A run whose leader cannot be read has no key, and is announced rather
+than silently swallowed.
+
+An instance's reported start is the run's, measured from the kernel, and no longer the moment this
+daemon took charge of it. `SupervisedInstance.SpawnedAt` stays the supervision clock the grace window
+and the stability reset are measured from, and it restarts at every adoption because supervision does;
+`RunStartedAt` carries the game's own age across a hot-swap handoff, the persisted supervision state,
+and `/status` + `/runtimes`. It is null — an honest unknown — when the leader cannot be read, never
+the adoption stamped in its place. The run ledger dates a run the same way.
+
 ### Added — a park a leaf runs disruptive work behind (`1.41.0`)
 
 `POST /maintenance/begin/{instance}` drains an instance the way a stop does and leaves desired-state

@@ -21,6 +21,21 @@ internal static class TestState
     public static SupervisionStateStore Supervision(WatchdogOptions options) =>
         new(Resolver(options), NullLogger<SupervisionStateStore>.Instance);
 
+    public static ReadinessStateStore Readiness(WatchdogOptions options) =>
+        new(Resolver(options), NullLogger<ReadinessStateStore>.Instance);
+
+    /// <summary>
+    /// A readiness store for a test that does not exercise the cross-daemon latch. Pinned to a
+    /// throwaway directory that is only created if something writes to it, so a test that never
+    /// announces readiness for a nameable run leaves nothing behind.
+    /// </summary>
+    public static ReadinessStateStore Readiness() =>
+        Readiness(new WatchdogOptions
+        {
+            StateFile = Path.Combine(
+                Path.GetTempPath(), "kgsm-wd-ready-" + Guid.NewGuid().ToString("N"), "desired-state.json"),
+        });
+
     public static RunHistoryStore RunHistory(WatchdogOptions options) =>
         new(Resolver(options), NullLogger<RunHistoryStore>.Instance);
 

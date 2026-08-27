@@ -64,11 +64,20 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// "observed started", never a fabricated delay); a non-empty valid pattern first does a one-shot
 /// whole-file scan (<see cref="NativeReadinessMatcher.MatchesExistingContent"/>) to catch a late attach
 /// where the ready line already went by (daemon hot-swap mid-boot, or attaching to an already-running
-/// instance) — safe now that a fresh spawn's log only ever contains the CURRENT run's content (the log
-/// rotation fix; see <see cref="SpawnEngine.RotateLogFile"/>), so this scan can no longer resurrect a
-/// STALE prior-run ready line on the instance's 2nd+ start — then the normal tail matches every new line
-/// going forward. Exactly one <c>instance-ready</c> fires per run (<c>ReadyFired</c> latch), re-armed
-/// only by the next start edge.
+/// instance) — a fresh spawn's log holds only the CURRENT run's content (<see cref="SpawnEngine.RotateLogFile"/>
+/// rotates it), so the scan cannot resurrect a STALE prior-run ready line on the instance's 2nd+ start —
+/// then the normal tail matches every new line going forward.
+/// </para>
+/// <para>
+/// <b>Exactly one <c>instance-ready</c> per RUN, not per daemon.</b> The two are different, and a start
+/// edge alone cannot tell them apart: an adopt does not rotate the log, so an instance that has been up
+/// for days still has its own ready line sitting in it, and every daemon start would re-read that line
+/// and announce a boot that did not happen. The <c>ReadyFired</c> latch answers the question inside one
+/// daemon; the run's own name — leader pid plus the tick it started on, see
+/// <see cref="ProcessStartClock.RunKeyFor"/> — answers it across every daemon, recorded in
+/// <see cref="ReadinessStateStore"/> when the announcement goes out and checked on every start edge
+/// before one does. A run whose leader cannot be read has no name, and is announced rather than
+/// silently swallowed: a repeated announcement is a smaller lie than a missing one.
 /// </para>
 /// </summary>
 internal sealed class NativePlayerPresenceIngester(
@@ -78,6 +87,7 @@ internal sealed class NativePlayerPresenceIngester(
     PlayerSessionStore sessionStore,
     CgroupManager cgroups,
     MemoryGate memoryGate,
+    ReadinessStateStore readinessStore,
     ILogger<NativePlayerPresenceIngester> logger) : BackgroundService
 {
     /// <summary>
@@ -107,6 +117,12 @@ internal sealed class NativePlayerPresenceIngester(
         /// <summary>Latched true once <c>instance-ready</c> has fired for the CURRENT run; cleared only on
         /// the next start edge (see <see cref="NativePlayerPresenceIngester.ProcessReadiness"/>).</summary>
         public bool ReadyFired { get; set; }
+
+        /// <summary>The run occupying the cgroup as of the last start edge, named by
+        /// <see cref="ProcessStartClock.RunKeyFor"/>; null when the leader could not be read. It is what
+        /// an announcement is recorded against, so a readiness line matched minutes into a run is still
+        /// attributed to the run that started it.</summary>
+        public string? RunKey { get; set; }
     }
 
     // name -> live watch (native + something to detect: player patterns, readiness pattern, or the
@@ -215,7 +231,7 @@ internal sealed class NativePlayerPresenceIngester(
                 if (watch.Readiness.Enabled && !watch.ReadyFired && watch.Readiness.IsMatch(line))
                 {
                     watch.ReadyFired = true;
-                    EmitReady(name);
+                    EmitReady(name, watch.RunKey);
                 }
             }
         }
@@ -227,7 +243,8 @@ internal sealed class NativePlayerPresenceIngester(
     /// <c>instance-ready</c> either immediately (empty <c>startup_success_regex</c>) or via a one-shot
     /// whole-file scan that catches a ready line already logged before this edge was observed. Never
     /// re-fires within the same run — <see cref="NativeWatch.ReadyFired"/> is the latch, re-armed only
-    /// here (or by the tail's own session-reset, see <see cref="IngestOnce"/>).
+    /// here (or by the tail's own session-reset, see <see cref="IngestOnce"/>) — and never re-fires for a
+    /// run a previous daemon already announced, which <see cref="ReadinessStateStore"/> is what remembers.
     /// </summary>
     private void ProcessReadiness(string name, NativeWatch watch, bool populated)
     {
@@ -238,13 +255,28 @@ internal sealed class NativePlayerPresenceIngester(
             return;
 
         watch.ReadyFired = false; // a fresh run (or the first-ever observation) — re-arm
+        watch.RunKey = ProcessStartClock.RunKeyFor(cgroups.FirstPid(name) ?? 0);
+
+        // A start edge is this daemon's first sight of a populated cgroup, which is not the same fact as
+        // a run having started: an instance that was already up produces one every time the daemon does.
+        // The run the cgroup holds carries its own name, so a run some daemon has already announced is
+        // recognised here and latched WITHOUT a second announcement — readiness is a transition, and
+        // repeating it would report a boot that did not happen. An unreadable leader leaves the run
+        // unnamed, and an unnamed run is announced rather than silently swallowed.
+        if (watch.RunKey is string runKey && readinessStore.AlreadyAnnounced(name, runKey))
+        {
+            watch.ReadyFired = true;
+            logger.LogDebug(
+                "{Instance} is already on record as ready for the run it is in ({RunKey}); not announcing it again", name, runKey);
+            return;
+        }
 
         if (watch.Readiness.IsImmediate)
         {
             // Honest fallback (req. 3): no distinct readiness signal configured for this blueprint, so
             // "ready" == "observed started" — never a fabricated delay.
             watch.ReadyFired = true;
-            EmitReady(name);
+            EmitReady(name, watch.RunKey);
             return;
         }
 
@@ -255,7 +287,7 @@ internal sealed class NativePlayerPresenceIngester(
             // hot-swap/restart mid-boot, or attaching to an already-running instance) — a one-shot scan
             // independent of the tail's own offset, so it never disturbs its bookkeeping.
             watch.ReadyFired = true;
-            EmitReady(name);
+            EmitReady(name, watch.RunKey);
         }
         // else: pattern-based and not yet matched — the normal per-line check in IngestOnce catches it
         // the moment the game appends its ready line.
@@ -471,9 +503,14 @@ internal sealed class NativePlayerPresenceIngester(
     /// double-attempted on the next tick; a genuinely missed emit is exactly as recoverable as a missed
     /// player-presence emit today).
     /// </summary>
-    private void EmitReady(string instanceName)
+    private void EmitReady(string instanceName, string? runKey)
     {
         journal.Instance(EventReady, instanceName);
+        // Put the announcement on record against the run it describes, so the next daemon to attach to
+        // this same run recognises it instead of announcing the boot a second time. A run that could not
+        // be named records nothing — there would be nothing for a later check to compare against.
+        if (runKey is not null)
+            readinessStore.NoteAnnounced(instanceName, runKey, DateTime.UtcNow);
         // Readiness is what discharges the memory reservation the spawn took: from here the instance's
         // declared memory is in the node's own MemAvailable reading, so continuing to subtract it would
         // double-count. Covers both readiness rules — the pattern match and the immediate fallback

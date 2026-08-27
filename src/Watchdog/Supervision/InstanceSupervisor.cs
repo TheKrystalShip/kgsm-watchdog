@@ -445,6 +445,7 @@ internal sealed class InstanceSupervisor(
             si.Phase = SupervisionPhase.Maintenance;
             si.MaintenanceSince = DateTime.UtcNow;
             si.SpawnedAt = null;
+            si.RunStartedAt = null;
             si.NextRestartAt = null;
             si.LastReason = drained
                 ? (signalled ? $"parked for maintenance ({origin}); stopped (SIGTERM)" : $"parked for maintenance ({origin})")
@@ -834,7 +835,7 @@ internal sealed class InstanceSupervisor(
             Spec = spec,
             DesiredRunning = true,
             Phase = SupervisionPhase.Running,
-            SpawnedAt = now, // treat as freshly (re)spawned so the grace window applies
+            SpawnedAt = now, // supervision starts now, so the grace window applies from here
             LastReason = "re-adopted live cgroup after daemon restart",
         };
 
@@ -844,6 +845,9 @@ internal sealed class InstanceSupervisor(
         // we are not the parent. If the FIFO is gone (an instance spawned by a pre-fix daemon that deleted
         // it on exit), fall back to cgroup-only supervision until the next respawn rebuilds the channel.
         int? pid = cgroups.FirstPid(name);
+        // The run is older than this daemon, so its age is only knowable from the kernel. Null when the
+        // leader cannot be read — an honest unknown, never this moment standing in for a start time.
+        si.RunStartedAt = pid is int leader ? ProcessStartClock.StartedAtUtc(leader) : null;
         int fd = spawnEngine.ReopenFifo(spec.SocketFile);
         if (fd >= 0)
         {
@@ -1000,6 +1004,7 @@ internal sealed class InstanceSupervisor(
                 if (Enum.TryParse<SupervisionPhase>(snap.Phase, ignoreCase: false, out var phase))
                     si.Phase = phase;
                 si.SpawnedAt = snap.SpawnedAt;
+                si.RunStartedAt = snap.RunStartedAt;
                 si.NextRestartAt = snap.NextRestartAt;
                 if (!string.IsNullOrEmpty(snap.LastReason))
                     si.LastReason = snap.LastReason;
@@ -1110,6 +1115,7 @@ internal sealed class InstanceSupervisor(
                     GaveUp = si.Restart.GaveUp,
                     Phase = si.Phase.ToString(),
                     SpawnedAt = si.SpawnedAt,
+                    RunStartedAt = si.RunStartedAt,
                     NextRestartAt = si.NextRestartAt,
                     LastReason = si.LastReason,
                     DesiredRunning = si.DesiredRunning,
@@ -1345,6 +1351,10 @@ internal sealed class InstanceSupervisor(
             SpawnedAt = entry.SpawnedAt ?? now,
             NextRestartAt = entry.NextRestartAt,
         };
+        // The predecessor's measurement of this run, or a fresh one if it carried none — the game came
+        // across the exec untouched, so its age did not change with the daemon around it.
+        si.RunStartedAt = entry.RunStartedAt
+            ?? (cgroups.FirstPid(entry.Name) is int leader ? ProcessStartClock.StartedAtUtc(leader) : null);
         // Restore phase (forward-compat: an unknown name leaves the default Running) and counters.
         if (Enum.TryParse<SupervisionPhase>(entry.Phase, ignoreCase: false, out var phase))
             si.Phase = phase;
@@ -1544,7 +1554,7 @@ internal sealed class InstanceSupervisor(
             // A spawn time is reported only for a tracked instance whose cgroup is actually populated —
             // the same rule ToState applies, so the two surfaces cannot disagree about what is running.
             DateTime? spawned = _instances.TryGetValue(name, out SupervisedInstance? si) && cgroups.IsPopulated(name)
-                ? si.SpawnedAt
+                ? si.RunStartedAt
                 : null;
             rows.Add(new InstanceRunTimes(
                 name,
@@ -1566,9 +1576,11 @@ internal sealed class InstanceSupervisor(
         si.PhaseText,
         si.Restart.ConsecutiveFailures,
         si.LastReason,
-        // Only meaningful while something is actually running: a stopped instance keeps its last
-        // SpawnedAt in the table, and reporting it would read as an uptime for a process that is gone.
-        SpawnedAt: cgroups.IsPopulated(si.Name) ? si.SpawnedAt : null,
+        // The run's own start, not the moment this daemon took charge of it — an adopted game is older
+        // than its supervisor and reporting the handover would date it to the last deploy. Only
+        // meaningful while something is actually running: a stopped instance keeps its last value in the
+        // table, and reporting it would read as an uptime for a process that is gone.
+        SpawnedAt: cgroups.IsPopulated(si.Name) ? si.RunStartedAt : null,
         LastExitedAt: lastExited);
 
     // ---- the supervision loop ---------------------------------------------------------------
@@ -1995,6 +2007,7 @@ internal sealed class InstanceSupervisor(
                 GaveUp = si.Restart.GaveUp,
                 Phase = si.Phase.ToString(),
                 SpawnedAt = si.SpawnedAt,
+                RunStartedAt = si.RunStartedAt,
                 NextRestartAt = si.NextRestartAt,
                 MaintenanceSince = si.MaintenanceSince,
                 LastReason = si.LastReason,
@@ -2043,7 +2056,7 @@ internal sealed class InstanceSupervisor(
 
         runHistory.Record(si.Name, new RunRecord(
             EndedAt: endedAt,
-            StartedAt: si.SpawnedAt,
+            StartedAt: si.RunStartedAt,
             Outcome: outcome,
             ExitCode: exit,
             RestartCount: si.Restart.ConsecutiveFailures,
@@ -2113,6 +2126,9 @@ internal sealed class InstanceSupervisor(
             si.Current = ri;
             si.Phase = SupervisionPhase.Running;
             si.SpawnedAt = now;
+            // This daemon started it, so `now` already dates the run; the kernel's own value is the same
+            // instant read more precisely, and is preferred where the leader is readable.
+            si.RunStartedAt = (ri.Pid is int pid ? ProcessStartClock.StartedAtUtc(pid) : null) ?? now;
             si.NextRestartAt = null;
             si.MaintenanceSince = null; // a running instance is not a parked one
             reason = $"pid {ri.Pid}";

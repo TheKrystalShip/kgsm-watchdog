@@ -173,6 +173,7 @@ builder.Services.AddSingleton<DesiredStateStore>();
 // Inc 7 Phase 2 — companion supervision-state.json: persists restart counters / give-up latch so they
 // survive ANY daemon death (OOM/SIGKILL), not just a planned hot-swap. Injected into InstanceSupervisor.
 builder.Services.AddSingleton<SupervisionStateStore>();
+builder.Services.AddSingleton<ReadinessStateStore>();
 // The run ledger: how each run ended, keyed by the console file's mtime so a consumer can find the
 // run that holds a crash instead of guessing from timestamps.
 builder.Services.AddSingleton<RunHistoryStore>();

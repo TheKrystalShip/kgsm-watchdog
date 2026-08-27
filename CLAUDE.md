@@ -31,7 +31,7 @@ warning means something reaches for reflection and will fail at runtime, not com
 project (and its kgsm-lib dependency) is `IsAotCompatible` with no reflection fallback.
 
 > The test project hand-rolls `IInstanceService` fakes (e.g. `HotSwapCoordinatorTests.EmptyInstances`,
-> `NativePlayerPresenceIngesterTests.FakeInstanceService`) that implement the *whole* interface, so a
+> the shared `FakeInstanceService`) that implement the *whole* interface, so a
 > kgsm-lib bump that adds an interface member breaks test compilation until each fake gains the new
 > member (the daemon source can build clean meanwhile). The kgsm-lib source is at `../kgsm-lib`.
 
@@ -162,7 +162,10 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   `run-history.json` (`RunHistoryStore`) records how each run ended, so a crash can be joined to the
   console file that holds its output; `player-names.json` (`PlayerNameStore`) holds each instance's
   `accountId → display name`, which is what lets a join event carry a name on a game that prints one
-  only on disconnect. All four resolve their location through `StatePathResolver`.
+  only on disconnect. `readiness-state.json` (`ReadinessStateStore`) records which RUN each instance was
+  last announced ready for, because `instance-ready` is a transition and the daemon infers it from its
+  own first sight of a populated cgroup — an inference that repeats on every daemon start for a server
+  that never stopped. All resolve their location through `StatePathResolver`.
 
 ## Project-specific invariants
 
@@ -176,7 +179,11 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   `Model/WatchdogJsonContext.cs` (source-gen). An unregistered type throws `NotSupportedException` at
   runtime — there is no reflection fallback. This is what lets the daemon ship as AOT.
 - **Never fabricate state.** A status is measured (cgroup / `/proc`) or explicitly "unknown" — never
-  invented.
+  invented. A run's age is one of these: `SupervisedInstance.SpawnedAt` is when THIS daemon took charge
+  (the grace window and stability reset are measured from it, so it restarts at every adoption), while
+  `RunStartedAt` is the leader's own start read from `/proc` via `ProcessStartClock`. `/status`,
+  `/runtimes` and the run ledger report the latter, and report null when the leader cannot be read —
+  reporting the supervision clock as an uptime would date a days-old server to the last deploy.
 - **GC is tuned for an idle supervisor, deliberately.** `Watchdog.csproj` forces **Workstation,
   non-concurrent GC** (overriding the Web SDK's Server-GC default, which reserved a heap per core →
   ~100 MB idle RSS). `MemoryTrimmer` (hosted service) hands free pages back to the OS after activity

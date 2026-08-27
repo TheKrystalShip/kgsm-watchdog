@@ -104,7 +104,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
 
-        File.AppendAllText(channel, """{"type":"server.started","ts":"t"}""" + "\n");
+        File.AppendAllText(channel, """{"type":"instance_started","ts":"t"}""" + "\n");
         await ingester.IngestOnceAsync(_root);
         Assert.Equal(1, fake.CallCount); // resolved exactly once for the new line
 
@@ -116,7 +116,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
     [Fact]
     public async Task Appended_lines_are_not_redelivered_on_a_second_pass()
     {
-        string channel = MakeChannel("vrising", "vr-2", """{"type":"server.started","ts":"t"}""" + "\n");
+        string channel = MakeChannel("vrising", "vr-2", """{"type":"instance_started","ts":"t"}""" + "\n");
         var fake = new FakeInstanceService();
         fake.Add(Container("vr-2"));
 
@@ -145,7 +145,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
 
-        File.AppendAllText(channel, """{"type":"server.started","ts":"t"}""" + "\n");
+        File.AppendAllText(channel, """{"type":"instance_started","ts":"t"}""" + "\n");
         await ingester.IngestOnceAsync(_root);
 
         Assert.Equal(1, fake.CallCount); // still resolved (to learn the runtime), just not acted on
@@ -159,7 +159,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
 
-        File.AppendAllText(channel, """{"type":"server.started","ts":"t"}""" + "\n");
+        File.AppendAllText(channel, """{"type":"instance_started","ts":"t"}""" + "\n");
         await ingester.IngestOnceAsync(_root);
 
         Assert.Equal(1, fake.CallCount); // attempted, then honestly gave up (retried next tick, not cached)

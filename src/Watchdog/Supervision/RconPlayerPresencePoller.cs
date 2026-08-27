@@ -51,8 +51,8 @@ internal sealed class RconPlayerPresencePoller(
     InstanceSupervisor supervisor,
     ILogger<RconPlayerPresencePoller> logger) : BackgroundService
 {
-    private const string EventJoined = "instance-player-joined";
-    private const string EventLeft = "instance-player-left";
+    private const string EventJoined = "player.joined";
+    private const string EventLeft = "player.left";
 
     private static readonly TimeSpan MinPollInterval = TimeSpan.FromSeconds(5);
     private const int MetadataCacheSeconds = 60;

@@ -89,11 +89,11 @@ internal sealed class InstanceSupervisor(
     // (Boot-autostart is a fresh bring-up, not a crash recovery: downstream it is audited but
     // deliberately NOT linked as an alert's resolution.actionId — see kgsm-api
     // KgsmAuditConsumer.IsRecoveryAction, which excludes the system-origin start specifically.)
-    private const string EventCrashed = "instance-crashed";
-    private const string EventFailed = "instance-failed";
-    private const string EventRestarted = "instance-restarted";
-    private const string EventStarted = "instance-started";
-    private const string EventRestartStopped = "instance-restart-stopped";
+    private const string EventCrashed = "server.crashed";
+    private const string EventFailed = "server.crash.exhausted";
+    private const string EventRestarted = "server.restarted";
+    private const string EventStarted = "server.started";
+    private const string EventRestartStopped = "server.restart.stopped";
 
     // ---- control verbs ----------------------------------------------------------------------
 
@@ -1516,7 +1516,7 @@ internal sealed class InstanceSupervisor(
     /// actually missing, never the instance's whole configured set.
     /// </summary>
     public void NoteUpnpReasserted(string name, IReadOnlyList<PortMapping> restored) =>
-        journal.Ports("instance-upnp-reasserted", name, restored);
+        journal.Ports("network.upnp.reasserted", name, restored);
 
     public InstanceState[] List()
     {
@@ -1910,7 +1910,7 @@ internal sealed class InstanceSupervisor(
     private void OpenPortForwarding(Instance spec)
         => FireAndForget("UPnP open", spec,
             async () => await upnp.OpenAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied,
-            "instance-upnp-opened");
+            "network.upnp.opened");
 
     /// <summary>
     /// Best-effort UPnP close on a deliberate stop. Same posture as <see cref="OpenPortForwarding"/>;
@@ -1937,7 +1937,7 @@ internal sealed class InstanceSupervisor(
 
         FireAndForget("UPnP close", spec,
             async () => await upnp.CloseAsync(spec, retain).ConfigureAwait(false) == UpnpOutcome.Applied,
-            "instance-upnp-closed", released);
+            "network.upnp.closed", released);
     }
 
     /// <summary>

@@ -18,7 +18,7 @@ public sealed class PlayerPresenceParserTests
 
         Assert.True(r.Emit);
         Assert.Equal(PlayerPresenceParser.EventPlayerJoined, r.EventName);
-        Assert.Equal("instance-player-joined", r.EventName); // the literal dash form kgsm normalises
+        Assert.Equal("player.joined", r.EventName); // the literal dash form kgsm normalises
         Assert.Equal("76561198000000000", r.PlayerId);
         Assert.Equal("Alice", r.PlayerName);
     }
@@ -30,7 +30,7 @@ public sealed class PlayerPresenceParserTests
             """{"type":"player_left","id":"u-1","name":"Bob","ts":"2026-06-19T12:05:00Z"}""");
 
         Assert.True(r.Emit);
-        Assert.Equal("instance-player-left", r.EventName);
+        Assert.Equal("player.left", r.EventName);
         Assert.Equal("u-1", r.PlayerId);
         Assert.Equal("Bob", r.PlayerName);
     }

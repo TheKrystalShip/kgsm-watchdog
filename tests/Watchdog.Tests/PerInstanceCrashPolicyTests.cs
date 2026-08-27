@@ -50,7 +50,7 @@ public sealed class PerInstanceCrashPolicyTests
         Assert.Equal("stopped", state.Phase);                 // no auto-recovery
         Assert.Equal(0, state.Restarts);                   // no retry slot consumed
         Assert.True(events.WaitFor(EventCrashed), "crash_restart=false must still emit instance-crashed for alert visibility");
-        Assert.DoesNotContain("instance-restarted", events.Snapshot());
+        Assert.DoesNotContain("server.restarted", events.Snapshot());
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class PerInstanceCrashPolicyTests
         // Dropped from the table exactly as a completed stop would leave it — nothing left to restart.
         Assert.Empty(supervisor.List());
         Assert.DoesNotContain(EventCrashed, events.Snapshot());
-        Assert.DoesNotContain("instance-restarted", events.Snapshot());
+        Assert.DoesNotContain("server.restarted", events.Snapshot());
     }
 
     [Fact]
@@ -145,8 +145,8 @@ public sealed class PerInstanceCrashPolicyTests
 
     // ---- helpers -------------------------------------------------------------------------------
 
-    private const string EventCrashed = "instance-crashed";
-    private const string EventFailed = "instance-failed";
+    private const string EventCrashed = "server.crashed";
+    private const string EventFailed = "server.crash.exhausted";
 
     private static DateTime Old() => DateTime.UtcNow - TimeSpan.FromMinutes(5); // past both grace + stability windows
 

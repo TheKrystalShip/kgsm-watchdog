@@ -63,7 +63,7 @@ public sealed class ReadinessSurvivesDaemonRestartTests : IDisposable
         NewIngester(first, fake).IngestOnce(_root);
 
         Assert.Single(first.Calls);
-        Assert.Equal("instance_ready", first.Calls[0].Type);
+        Assert.Equal("server.ready", first.Calls[0].Type);
 
         // The daemon restarts. Same game, same pid, same log, same ready line still in it — and nothing
         // about that is a boot.
@@ -98,7 +98,7 @@ public sealed class ReadinessSurvivesDaemonRestartTests : IDisposable
         NewIngester(second, fake).IngestOnce(_root);
 
         Assert.Single(second.Calls);
-        Assert.Equal("instance_ready", second.Calls[0].Type);
+        Assert.Equal("server.ready", second.Calls[0].Type);
         Assert.Equal("ketchup", second.Calls[0].String("InstanceName"));
     }
 
@@ -131,7 +131,7 @@ public sealed class ReadinessSurvivesDaemonRestartTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.All(rec.Calls, c => Assert.Equal("instance_ready", c.Type));
+        Assert.All(rec.Calls, c => Assert.Equal("server.ready", c.Type));
     }
 
     [Fact]

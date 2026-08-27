@@ -151,7 +151,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
         Assert.Equal(2, rec.Calls.Count);
 
         var join = rec.Calls[0];
-        Assert.Equal("instance_player_joined", join.Type);
+        Assert.Equal("player.joined", join.Type);
         Assert.Equal("system:watchdog", join.Actor);   // autonomous: actor=system:watchdog, NOT null (null → OS-user fallback on the wire)
         Assert.Equal("system", join.Origin);
         Assert.Equal("factorio-test", join.String("InstanceName"));
@@ -162,7 +162,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
         Assert.Equal(string.Empty, join.String("SessionKey"));
 
         var left = rec.Calls[1];
-        Assert.Equal("instance_player_left", left.Type);
+        Assert.Equal("player.left", left.Type);
         Assert.Equal("system:watchdog", left.Actor);
         Assert.Equal("system", left.Origin);
         // null id → empty positional arg, name preserved, instance first.
@@ -201,7 +201,7 @@ public sealed class PlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count); // only the new line emitted on pass 2 (no redelivery)
-        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("player.left", rec.Calls[1].Type);
     }
 
     // ---- helpers ------------------------------------------------------------------------------

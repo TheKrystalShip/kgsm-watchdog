@@ -96,7 +96,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         Assert.Single(rec.Calls);
         var join = rec.Calls[0];
-        Assert.Equal("instance_player_joined", join.Type);
+        Assert.Equal("player.joined", join.Type);
         Assert.Equal("system:watchdog", join.Actor);
         Assert.Equal("system", join.Origin);
         Assert.Equal("factorio-test", join.String("InstanceName"));
@@ -116,7 +116,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         Assert.Equal(2, rec.Calls.Count);
         var left = rec.Calls[1];
-        Assert.Equal("instance_player_left", left.Type);
+        Assert.Equal("player.left", left.Type);
         // Identity resolved via the session map (the join's captures); this pattern has no reason group,
         // so the leave carries the field as an explicit null.
         Assert.Equal("factorio-test", left.String("InstanceName"));
@@ -231,7 +231,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("player.joined", rec.Calls[0].Type);
         Assert.Equal("stationeers-test", rec.Calls[0].String("InstanceName"));
         Assert.Equal("76561198144397568", rec.Calls[0].String("PlayerId"));
         Assert.Equal("Heisen", rec.Calls[0].String("PlayerName"));
@@ -243,7 +243,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("player.left", rec.Calls[1].Type);
         // Resolved via the map (self-identifying here, so it matches what the leave line itself carries).
         Assert.Equal("stationeers-test", rec.Calls[1].String("InstanceName"));
         Assert.Equal("76561198144397568", rec.Calls[1].String("PlayerId"));
@@ -285,7 +285,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(3, rec.Calls.Count);
-        Assert.Equal("instance_player_left", rec.Calls[2].Type);
+        Assert.Equal("player.left", rec.Calls[2].Type);
         Assert.Equal("romestead-test", rec.Calls[2].String("InstanceName"));
         Assert.True(rec.Calls[2].IsNull("PlayerId"));
         Assert.Equal("Aelia", rec.Calls[2].String("PlayerName"));
@@ -320,7 +320,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls); // the doubled line dedups to exactly one join
-        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("player.joined", rec.Calls[0].Type);
         Assert.Equal("valheim-test", rec.Calls[0].String("InstanceName"));
         Assert.True(rec.Calls[0].IsNull("PlayerId"));
         Assert.Equal("Test", rec.Calls[0].String("PlayerName"));
@@ -333,7 +333,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count); // exactly one left; the other 5 deduped via evict
-        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("player.left", rec.Calls[1].Type);
         Assert.Equal("valheim-test", rec.Calls[1].String("InstanceName"));
         Assert.True(rec.Calls[1].IsNull("PlayerId"));
         Assert.Equal("Test", rec.Calls[1].String("PlayerName"));
@@ -369,7 +369,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("player.left", rec.Calls[1].Type);
         Assert.Equal("corekeeper-test", rec.Calls[1].String("InstanceName"));
         Assert.True(rec.Calls[1].IsNull("PlayerId"));
         Assert.Equal("Woltah", rec.Calls[1].String("PlayerName"));
@@ -402,7 +402,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         // The UUID line and the chat broadcast are not the pair — exactly one join.
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("player.joined", rec.Calls[0].Type);
         Assert.Equal("minecraft-test", rec.Calls[0].String("InstanceName"));
         Assert.True(rec.Calls[0].IsNull("PlayerId"));
         Assert.Equal("Flysenberg", rec.Calls[0].String("PlayerName"));
@@ -416,7 +416,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
 
         // The leave carries no address of its own — the map supplies the one captured at join.
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance_player_left", rec.Calls[1].Type);
+        Assert.Equal("player.left", rec.Calls[1].Type);
         Assert.Equal("minecraft-test", rec.Calls[1].String("InstanceName"));
         Assert.True(rec.Calls[1].IsNull("PlayerId"));
         Assert.Equal("Flysenberg", rec.Calls[1].String("PlayerName"));
@@ -507,7 +507,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("server.ready", rec.Calls[0].Type);
         Assert.Equal("system:watchdog", rec.Calls[0].Actor);
         Assert.Equal("system", rec.Calls[0].Origin);
         Assert.Equal("factorio-immediate", rec.Calls[0].String("InstanceName"));
@@ -538,7 +538,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         File.AppendAllText(log, "1234.567 Hosting game at IP ADDR:34197\n");
         ingester.IngestOnce(_root);
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("server.ready", rec.Calls[0].Type);
         Assert.Equal("factorio-ready", rec.Calls[0].String("InstanceName"));
 
         // Further lines (even matching ones, e.g. a save-then-relog message) must not re-fire within
@@ -555,7 +555,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count); // re-armed — a second instance-ready for the new run
-        Assert.Equal("instance_ready", rec.Calls[1].Type);
+        Assert.Equal("server.ready", rec.Calls[1].Type);
     }
 
     [Fact]
@@ -578,7 +578,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("server.ready", rec.Calls[0].Type);
         Assert.Equal("mc-ready", rec.Calls[0].String("InstanceName"));
     }
 
@@ -601,7 +601,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root); // first-ever tick: start edge (null -> true) + whole-file scan
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("server.ready", rec.Calls[0].Type);
         Assert.Equal("factorio-late", rec.Calls[0].String("InstanceName"));
 
         // Steady state — no re-fire, and the tail itself still primes at EOF (no replayed presence lines
@@ -632,7 +632,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls); // presence still fires...
-        Assert.Equal("instance_player_joined", rec.Calls[0].Type); // ...but never instance-ready
+        Assert.Equal("player.joined", rec.Calls[0].Type); // ...but never instance-ready
     }
 
     [Fact]
@@ -659,7 +659,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         SetPopulated("factorio-rotate", populated: true);
         ingester.IngestOnce(_root);
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("server.ready", rec.Calls[0].Type);
 
         // Run 1 ends: the cgroup drains.
         SetPopulated("factorio-rotate", populated: false);
@@ -685,7 +685,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Equal(2, rec.Calls.Count);
-        Assert.Equal("instance_ready", rec.Calls[1].Type);
+        Assert.Equal("server.ready", rec.Calls[1].Type);
     }
 
     [Fact]
@@ -712,7 +712,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_player_joined", rec.Calls[0].Type);
+        Assert.Equal("player.joined", rec.Calls[0].Type);
         Assert.Equal("FreshFromRun2", rec.Calls[0].String("PlayerName"));
     }
 
@@ -848,7 +848,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         ingester.IngestOnce(_root);
 
         Assert.Single(rec.Calls);
-        Assert.Equal("instance_ready", rec.Calls[0].Type);
+        Assert.Equal("server.ready", rec.Calls[0].Type);
     }
 
     private static Instance Native(string name, string log, string joined, string left, string ready = "") => new()

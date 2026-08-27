@@ -132,7 +132,7 @@ internal sealed class NativePlayerPresenceIngester(
     // The "finished booting / joinable" signal the Control Panel uses to flip a server from "Starting"
     // to "Running". Dash form to match this repo's existing event constants (mirrors
     // InstanceSupervisor.EventStarted etc.); kgsm's `events emit` normalises dashes→underscores.
-    private const string EventReady = "instance-ready";
+    private const string EventReady = "server.ready";
 
     // Names decided to be out of scope (container, no patterns, or no log path) — static config, so never
     // re-fetched. A transient fetch failure / not-yet-resolvable name is in NEITHER set, so it retries.

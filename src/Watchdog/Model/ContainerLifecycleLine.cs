@@ -8,7 +8,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 /// <see cref="PlayerPresenceLine"/>'s <c>events.ndjson</c>, though it shares the same bind-mounted
 /// <c>/run/kgsm</c> channel dir). Schema:
 /// <code>
-/// {"type":"instance_started","ts":"&lt;ISO-8601-UTC&gt;"}
+/// {"type":"server.started","ts":"&lt;ISO-8601-UTC&gt;"}
 /// {"type":"instance_stopping","ts":"&lt;ISO-8601-UTC&gt;"}
 /// </code>
 /// <para>

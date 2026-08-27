@@ -58,7 +58,7 @@ public sealed class MaintenanceParkTests
         await supervisor.BeginMaintenanceAsync(spec.Name, "scheduler");
 
         var recorded = Assert.Single(events.Recorded);
-        Assert.Equal("instance_restart_stopped", recorded.Type);
+        Assert.Equal("server.restart.stopped", recorded.Type);
         // An unprefixed actor reads downstream as a person on the local host, which is what a leaf's
         // own action must never be recorded as.
         Assert.Equal("system:scheduler", recorded.Actor);
@@ -82,8 +82,8 @@ public sealed class MaintenanceParkTests
         var state = Single(supervisor);
         Assert.Equal("maintenance", state.Phase);
         Assert.Equal(2, state.Restarts);                       // the streak the park found
-        Assert.DoesNotContain("instance-crashed", events.Snapshot());
-        Assert.DoesNotContain("instance-restarted", events.Snapshot());
+        Assert.DoesNotContain("server.crashed", events.Snapshot());
+        Assert.DoesNotContain("server.restarted", events.Snapshot());
     }
 
     [Fact]

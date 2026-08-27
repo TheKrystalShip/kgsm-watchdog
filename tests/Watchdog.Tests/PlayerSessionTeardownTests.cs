@@ -101,8 +101,8 @@ public sealed class PlayerSessionTeardownTests
 
         supervisor.Reconcile();
 
-        Assert.True(events.WaitFor("instance-crashed"));
-        Assert.DoesNotContain("instance-player-left", events.Snapshot());
+        Assert.True(events.WaitFor("server.crashed"));
+        Assert.DoesNotContain("player.left", events.Snapshot());
         Assert.Empty(sessions.GetSessions(spec.Name));
     }
 

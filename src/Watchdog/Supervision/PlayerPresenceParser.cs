@@ -16,15 +16,15 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </summary>
 internal static class PlayerPresenceParser
 {
-    // The two schema-B line types and the kgsm wire events they map to. The wire names are written in
-    // DASH form to match this repo's existing event constants (InstanceSupervisor.EventRestarted =
-    // "instance-restarted"); kgsm's `events emit` normalises dashes→underscores
-    // (__logic_event_name_to_type does ${name//-/_}, idempotent for the already-underscore canonical
-    // EVENT_CONFIGS keys), so "instance-player-joined" resolves to the canonical "instance_player_joined".
+    // The two schema-B line types, and the events they map to.
+    //
+    // ⚠ The two are different vocabularies and only one of them is ours. A line type is what the
+    // in-container shim writes to its own channel, so it is whatever that shim spells — it does not
+    // move when the journal's vocabulary does. The event name is what this daemon then records.
     internal const string LineTypeJoined = "player_joined";
     internal const string LineTypeLeft = "player_left";
-    internal const string EventPlayerJoined = "instance-player-joined";
-    internal const string EventPlayerLeft = "instance-player-left";
+    internal const string EventPlayerJoined = "player.joined";
+    internal const string EventPlayerLeft = "player.left";
 
     /// <summary>
     /// The outcome of parsing one line: either an event to emit (<see cref="Emit"/> true) with its

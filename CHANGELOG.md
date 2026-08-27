@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — events speak the one dotted vocabulary (`1.44.0`)
+
+Events are named the way a reader groups them — domain first, past tense, an outcome as its own
+segment. One vocabulary, so nothing translates between an engine name and a display one.
+
+⚠ The container channel is a different protocol and does not move with it. A line the in-container
+shim writes is spelled however that shim spells it, and the event this daemon records from it is a
+separate name.
+
 ### Changed — an event carries the weight the catalog gives it (`1.43.0`)
 
 An event this daemon records carries how much it matters and how it went, taken from the engine's own

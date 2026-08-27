@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — a crash is stamped danger (`1.45.0`)
+
+`server.crashed` carries the weight the engine's catalog declares for it, which is now `danger` — the
+same as the give-up it may lead to. A server going down unasked is the fleet losing a service, and
+this daemon being on its way to bring it back does not make that routine.
+
 ### Changed — events speak the one dotted vocabulary (`1.44.0`)
 
 Events are named the way a reader groups them — domain first, past tense, an outcome as its own

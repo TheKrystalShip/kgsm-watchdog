@@ -699,7 +699,7 @@ The pipeline (monitor → api `MetricsMapping` 1:1 → `MetricsPump` ~1s push on
 | `daemon-reload` with the bare `kgsm.slice` | `subtree_control` `[cpu io memory pids]`→`[]`; `memory.current` vanishes. Reproducible. |
 | `kgsm.slice` unit with `Delegate=yes` but **no tracked member** | Does **NOT** help — still wiped. |
 | Base **not** named `*.slice` (e.g. `/sys/fs/cgroup/kgsm`) | Survives `daemon-reload` ×N (this was "Option B"). |
-| **Delegated service, instances UNDER the service cgroup** (this increment) | systemd enables `[cpuset cpu io memory pids]` on the slice, **chowns the service cgroup + its `subtree_control` to the kgsm user**, and **leaves everything below the service untouched** across `daemon-reload` ×2. Robust. ✅ |
+| **Delegated service, instances UNDER the service cgroup** (this increment) | systemd enables `[cpuset cpu io memory pids]` on the slice, **chowns the service cgroup + its `subtree_control` to the kgsm user**, and **leaves everything below the service untouched** across `daemon-reload` ×2. Robust. |
 
 **Secondary nuance (must design around it):** enabling the memory controller on a
 cgroup that *already* has a running process does **not** retroactively charge its

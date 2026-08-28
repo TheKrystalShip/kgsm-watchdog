@@ -1139,7 +1139,7 @@ internal sealed class InstanceSupervisor(
             //    swap aborts mid-flight and the successor has to fall back to the normal restore.
             PersistSupervisionState();
 
-            // Say goodbye as a RELOAD, before the execve that never returns. ⚠ This is the only chance:
+            // Say goodbye as a RELOAD, before the execve that never returns. This is the only chance:
             // the image is replaced in place, so ApplicationStopping never runs and the successor cannot
             // know what happened to its predecessor. A consumer reading `reload` knows the process id is
             // the same and that not one supervised game restarted — which is indistinguishable from an
@@ -1948,7 +1948,7 @@ internal sealed class InstanceSupervisor(
     /// on <c>enable_firewall_management</c>.
     /// </summary>
     /// <remarks>
-    /// ⚠ <b>Records nothing.</b> kgsm-firewall performs the change and writes the
+    /// <b>Records nothing.</b> kgsm-firewall performs the change and writes the
     /// <c>instance_ports_opened</c> line to its own journal — this daemon asked, which is not the same
     /// as having done it. Journaling here as well would put one firewall edge in the trail twice, under
     /// two different authors.
@@ -1960,7 +1960,7 @@ internal sealed class InstanceSupervisor(
     /// <summary>
     /// Best-effort host-firewall close on a deliberate stop, releasing the ports the instance held.
     /// </summary>
-    /// <remarks>⚠ Records nothing, for the same reason as <see cref="OpenFirewallPorts"/>.</remarks>
+    /// <remarks>Records nothing, for the same reason as <see cref="OpenFirewallPorts"/>.</remarks>
     private void CloseFirewallPorts(Instance spec)
         => AskAndForget("firewall close", spec,
             () => firewall.CloseAsync(spec, WatchdogJournal.ActorWatchdog, OriginSystem));

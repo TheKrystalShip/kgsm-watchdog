@@ -18,7 +18,7 @@ this daemon being on its way to bring it back does not make that routine.
 Events are named the way a reader groups them — domain first, past tense, an outcome as its own
 segment. One vocabulary, so nothing translates between an engine name and a display one.
 
-⚠ The container channel is a different protocol and does not move with it. A line the in-container
+The container channel is a different protocol and does not move with it. A line the in-container
 shim writes is spelled however that shim spells it, and the event this daemon records from it is a
 separate name.
 
@@ -28,7 +28,7 @@ An event this daemon records carries how much it matters and how it went, taken 
 catalog rather than tagged at each call site — so the weight of an event lives in the same place as
 its payload type, and this daemon states one it was told rather than one it invented.
 
-⚠ Only for a type the catalog recognises. Stamping the defaults onto an event nobody has classified
+Only for a type the catalog recognises. Stamping the defaults onto an event nobody has classified
 would assert a weight nothing established, and absent is how unknown is spelled.
 
 ### Changed — an event is named by a type (`1.42.0`)
@@ -313,7 +313,7 @@ rewrite **detectable** — a reference carrying both finds the line by position 
 right one by id, where before a shifted offset resolved to a real, parseable event of the wrong kind
 with nothing to notice.
 
-⚠ Optional and optional forever: lines written before this are on disk for as long as retention holds
+Optional and optional forever: lines written before this are on disk for as long as retention holds
 them, and **absent means unknown, never a mismatch**. Authority: `journal-entry-id-plan.md`.
 
 ### Fixed — a first setup on a host where nothing is installed yet completes
@@ -330,7 +330,7 @@ plus one `manage-units` call on this project's own service — `start` when the 
 is not running). Both are dispatched as the same `manage-units` action, so a host without the grant is
 refused either way and the probe measures the grant rather than the unit.
 
-⚠ Measured in the positive direction only. The deploying user on the development host is in
+Measured in the positive direction only. The deploying user on the development host is in
 `wheel`, and two pre-existing polkit rules there grant that group every
 `org.freedesktop.systemd1.*` action outright, so no systemctl call by that user can be refused
 and the negative path cannot be exercised on it. That `try-restart` consults polkit before it
@@ -353,15 +353,15 @@ logging:
   spawns; what stops is accounting, so a game runs and its memory reads as zero. That looks like a
   monitoring fault from every surface and is a supervision one.
 - `cgroup-kill` — checked once at boot against the delegated base rather than discovered on the first
-  stop, because the file is per-cgroup but the capability is per-kernel. ⚠ Without it a stop cannot
+  stop, because the file is per-cgroup but the capability is per-kernel. Without it a stop cannot
   atomically kill the whole process tree, so a game that forked may leave survivors holding its port.
 
-⚠ **`StartupMs` is anchored to the top of `Program.cs`, not to the process start.** A hot-swap
+**`StartupMs` is anchored to the top of `Program.cs`, not to the process start.** A hot-swap
 `execve`s a new image into the same process id, so the OS goes on reporting the original start — the
 first swap of this daemon reported a startup time of four hours. Measured, and still the wrong clock
 for an image that replaced itself.
 
-⚠ **A hot-swap says goodbye as `reload`, before the `execve` that never returns.** It is the only
+**A hot-swap says goodbye as `reload`, before the `execve` that never returns.** It is the only
 chance: the image is replaced in place, so `ApplicationStopping` never runs and the successor cannot
 know what happened to its predecessor. A consumer reading `reload` knows the process id is unchanged
 and that not one supervised game restarted — indistinguishable from an outage without it, and it would
@@ -387,7 +387,7 @@ its group access, and warns when it does not. A directory cannot be entered with
 directory above it, so a state directory closed to the group hides the journal inside it however
 permissive the journal's own mode is.
 
-⚠ **That failure is silent.** A reader that cannot traverse in gets `Directory.Exists == false`, not a
+**That failure is silent.** A reader that cannot traverse in gets `Directory.Exists == false`, not a
 permission error — so discovery concludes this producer has recorded nothing, which is exactly what a
 genuinely idle leaf looks like. This unit declares `0750` and names the shared `kgsm` group, so the
 check stays quiet here; it exists for the leaf that ships `0700` and disappears.
@@ -396,7 +396,7 @@ check stays quiet here; it exists for the leaf that ships `0700` and disappears.
 ### Added — this producer prunes its own journal
 
 Segments older than **90 days** are removed, matching the engine's own retention window
-(`TheKrystalShip.KGSM.Journal` 1.4.0). ⚠ **Before this, only the engine pruned anything** — its daily
+(`TheKrystalShip.KGSM.Journal` 1.4.0). **Before this, only the engine pruned anything** — its daily
 timer covers its own directory alone, and every leaf journal grew without bound.
 
 Pruning runs at startup and again when the segment date rolls over, so a resident daemon prunes daily
@@ -410,7 +410,7 @@ which a restore or a backup tool moves without any event moving.
 ### Fixed — federation cannot be registered in the wrong order
 
 kgsm-lib 4.30.0 makes `AddKgsmServices` and `AddKgsmJournalFederation` register the same resolution
-rule, so either call order yields a federated reader. ⚠ **The bug it removes had no symptom**: a
+rule, so either call order yields a federated reader. **The bug it removes had no symptom**: a
 consumer that federated too early kept reading the engine's journal *successfully* — healthy journal,
 quiet host, nothing to catch — while every other producer's events sat in files it never opened.
 `JournalDiscovery` also scans once per process now, instead of once for the history reader and again
@@ -426,7 +426,7 @@ for the parts every producer answers the same way.
 - **`ActorWatchdog` is derived from `ProducerId`**, not spelled out. Still `system:watchdog`,
   byte-for-byte, and still exposed: the supervisor hands it to the firewall authority as the
   provenance of a change it asked for.
-- **⚠ The journal no longer follows `StatePathResolver`.** The other three state files go wherever
+- **The journal no longer follows `StatePathResolver`.** The other three state files go wherever
   that resolver lands, which can be a home-directory layout — and a journal there is one **no reader
   on this host would ever find**, because discovery scans state directories under `/var/lib`. Under
   systemd both answers are `/var/lib/kgsm-watchdog`, so nothing moves; a daemon run from a home
@@ -569,7 +569,7 @@ start. Authority: `../event-journal-federation-plan.md` (Phase 4).
   `WatchdogJournal` over an in-memory writer, so they assert the JSON a consumer will actually
   deserialize rather than a list of call arguments.
 
-⚠ kgsm's own `instance-ready` watchers (`watcher.logs.sh`, `watcher.ports.sh`) emit the same event from
+kgsm's own `instance-ready` watchers (`watcher.logs.sh`, `watcher.ports.sh`) emit the same event from
 the engine's journal when `enable_watcher=true`. It defaults to **false**, so the watchdog's readiness
 matcher is normally the only emitter — but turning it on now yields two rows for one fact, in two
 journals.
@@ -606,7 +606,7 @@ also independent of `User=`, which `setup.sh` templates per host, and of whether
 home directory at all. `Watchdog__StateFile` still outranks it; a daemon run outside systemd still
 falls back to the XDG data home.
 
-⚠ **This needs a `--cold` deploy** — `StateDirectory=` is a unit-level directive and a hot-swap
+**This needs a `--cold` deploy** — `StateDirectory=` is a unit-level directive and a hot-swap
 cannot apply it. State written under the home directory is carried over on first use of the systemd
 directory (copied, then removed), because `desired-state.json` is the only record of which instances
 return after a reboot and leaving it behind would start nothing at the next boot without erroring.

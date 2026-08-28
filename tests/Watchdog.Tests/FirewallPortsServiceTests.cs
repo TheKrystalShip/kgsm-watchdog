@@ -17,7 +17,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// it, and an authority that could not be reached.
 /// </para>
 /// <para>
-/// ⚠ Nothing here records an event. kgsm-firewall performs the change and writes
+/// Nothing here records an event. kgsm-firewall performs the change and writes
 /// <c>instance_ports_opened</c> to its own journal; this daemon asks, and asking is not doing.
 /// </para>
 /// </summary>

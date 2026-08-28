@@ -11,7 +11,7 @@
 # packaging time is a unit nobody tested.
 
 pkgname=kgsm-watchdog
-pkgver=1.39.0
+pkgver=1.45.0
 pkgrel=1
 pkgdesc="KGSM watchdog — resident supervisor for native game-server instances"
 arch=('x86_64')

@@ -10,7 +10,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Events;
 /// fault twice and recover from neither.
 /// </para>
 /// <para>
-/// ⚠ <b>Bounded, and deliberately not per-instance.</b> A component named after the instance it was
+/// <b>Bounded, and deliberately not per-instance.</b> A component named after the instance it was
 /// observed on would grow without limit and never recover. These name the capability; the instance goes
 /// in the detail.
 /// </para>
@@ -39,7 +39,7 @@ internal static class WatchdogComponents
     /// <c>cgroup.kill</c>, the atomic whole-subtree kill.
     /// </summary>
     /// <remarks>
-    /// ⚠ Without it a stop cannot guarantee it took the whole process tree with it, so a game that
+    /// Without it a stop cannot guarantee it took the whole process tree with it, so a game that
     /// forked leaves survivors holding the port. A kernel gains no features while running, so this
     /// degradation is for the life of the process and recovers only across a reboot.
     /// </remarks>

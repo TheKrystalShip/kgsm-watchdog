@@ -80,7 +80,7 @@ public sealed class WatchdogLifecycleTests : IDisposable
     [Fact]
     public void A_hot_swap_says_goodbye_as_a_reload_and_a_later_signal_does_not_overwrite_it()
     {
-        // ⚠ The distinction the whole reason field exists for. A swap replaces the image in place with
+        // The distinction the whole reason field exists for. A swap replaces the image in place with
         // the same process id and not one supervised game restarted; reporting it as a stop would page
         // somebody on a successful deploy. MarkStopping writing once is what guarantees the reload
         // wins, since the swap always says it first.

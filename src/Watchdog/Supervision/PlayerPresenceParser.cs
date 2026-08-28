@@ -18,7 +18,7 @@ internal static class PlayerPresenceParser
 {
     // The two schema-B line types, and the events they map to.
     //
-    // ⚠ The two are different vocabularies and only one of them is ours. A line type is what the
+    // The two are different vocabularies and only one of them is ours. A line type is what the
     // in-container shim writes to its own channel, so it is whatever that shim spells — it does not
     // move when the journal's vocabulary does. The event name is what this daemon then records.
     internal const string LineTypeJoined = "player_joined";

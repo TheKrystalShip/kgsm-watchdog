@@ -14,7 +14,7 @@ using TheKrystalShip.KGSM.Lifecycle;
 
 // When THIS IMAGE began, captured before anything else runs.
 //
-// ⚠ Not the process start, which is what LeafLifecycle reads by default and what every other leaf
+// Not the process start, which is what LeafLifecycle reads by default and what every other leaf
 // wants. A hot-swap `execve`s a new image into the SAME process id, so the OS keeps reporting the
 // original start — and a swap of a daemon that had been up four hours reported a four-hour startup
 // time. The process really did start then; it is simply the wrong clock for an image that replaced
@@ -155,7 +155,7 @@ builder.Services.AddSingleton<StatePathResolver>();
 // which cost a bash bootstrap, a sourced library and a jq call per event.
 //
 // The producer id is the only input: it decides the directory a reader scans for, the version stamped
-// on every event, and the derived system:watchdog actor. ⚠ Deliberately NOT StatePathResolver's answer,
+// on every event, and the derived system:watchdog actor. Deliberately NOT StatePathResolver's answer,
 // which the other three state files use — that resolver can land on a home-directory layout, and a
 // journal there is one no reader on this host would ever find. A journal has to sit where it can be
 // read; KGSM_JOURNAL_STATE_ROOT moves it for a run that must not touch this host's record.
@@ -302,7 +302,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
         lifecycle.MarkDegraded(WatchdogComponents.Delegation, supervisor.Detail);
 });
 
-// The last thing this daemon says. ⚠ A hot-swap has already said it with reason `reload` by the time
+// The last thing this daemon says. A hot-swap has already said it with reason `reload` by the time
 // this runs, and MarkStopping only writes once — so a swap that keeps every supervised game running is
 // never reported as a stop, which is the distinction a consumer needs and cannot recover afterwards.
 app.Lifetime.ApplicationStopping.Register(() =>

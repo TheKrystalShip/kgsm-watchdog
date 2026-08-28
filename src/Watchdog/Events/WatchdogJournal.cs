@@ -177,7 +177,7 @@ public sealed class WatchdogJournal(IEventJournalWriter writer, ILogger<Watchdog
         // where its payload type and its fields are already declared — so this daemon states a weight
         // it was told rather than one it invented, and an event gains its weight in one place.
         //
-        // ⚠ Only for a type the catalog recognises. Stamping the defaults onto an event nobody has
+        // Only for a type the catalog recognises. Stamping the defaults onto an event nobody has
         // classified would assert a weight nothing established, and absent is what "unknown" is
         // spelled as.
         EventDescriptor descriptor = KgsmEventCatalog.Describe(name.Value);

@@ -13,7 +13,7 @@
     },
     {
       "kind": "systemd-unit",
-      "path": "/etc/kgsm-watchdog/systemd/kgsm-watchdog.service"
+      "path": "kgsm-watchdog.service"
     },
     {
       "kind": "env-file",

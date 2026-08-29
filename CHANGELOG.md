@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the descriptor names this leaf's unit, not a path to it (1.45.1)
+
+The `systemd-unit` floor source names `kgsm-watchdog.service`. Where that file sits is a property of how the host was
+provisioned — `/usr/lib/systemd/system` when a package installed it, `/etc` when a deploy script placed
+it — and this leaf cannot know which, so naming one of them made the Control Panel report every value
+this unit sets as unknown on the other kind of host.
+
 ### Changed — a crash is stamped danger (`1.45.0`)
 
 `server.crashed` carries the weight the engine's catalog declares for it, which is now `danger` — the

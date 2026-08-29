@@ -23,7 +23,7 @@ using TheKrystalShip.KGSM.LeafConfig;
 
 // Lowest precedence first — the same order the daemon resolves them in.
 [assembly: LeafFloorSource("appsettings", "/opt/kgsm-watchdog/kgsm-watchdog.settings.json")]
-[assembly: LeafFloorSource("systemd-unit", "/etc/kgsm-watchdog/systemd/kgsm-watchdog.service")]
+[assembly: LeafFloorSource("systemd-unit", "kgsm-watchdog.service")]
 [assembly: LeafFloorSource("env-file", "/etc/kgsm-watchdog/kgsm-watchdog.env")]
 
 [assembly: LeafFrameworkNamespace("Logging__",

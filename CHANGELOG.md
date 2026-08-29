@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the packaged binary is executable again (1.45.2)
+
+The release workflow hands the build job's publish output to the packaging job as a GitHub artifact,
+and an artifact is a zip. A zip records no unix mode, so every file arrived at 0644 and the package
+shipped a binary nothing could execute: a node installed cleanly and the unit died with 203/EXEC
+before it logged a line. The stage crosses inside a tar now, which carries the modes with it.
+
 ### Fixed — the descriptor names this leaf's unit, not a path to it (1.45.1)
 
 The `systemd-unit` floor source names `kgsm-watchdog.service`. Where that file sits is a property of how the host was

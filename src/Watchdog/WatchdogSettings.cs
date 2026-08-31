@@ -1,4 +1,4 @@
-using TheKrystalShip.KGSM.LeafConfig;
+using TheKrystalShip.KGSM.ComponentConfig;
 
 namespace TheKrystalShip.KGSM.Watchdog;
 
@@ -31,7 +31,7 @@ namespace TheKrystalShip.KGSM.Watchdog;
 /// typing it at all.
 /// </para>
 /// </remarks>
-[LeafSection(Section)]
+[ConfigSection(Section)]
 public sealed class WatchdogSettings
 {
     /// <summary>The configuration section this binds from.</summary>
@@ -69,15 +69,15 @@ public sealed class WatchdogSettings
     /// <panel>Path to the KGSM executable. Required: the watchdog reads each instance's spawn
     /// configuration through it before forking the game, so it has nothing to supervise without
     /// one.</panel>
-    [LeafField("kgsmPath", "KGSM executable", Group = "kgsm", Type = LeafType.Path,
-        Risk = LeafRisk.Wiring, NoDefault = true)]
+    [ConfigField("kgsmPath", "KGSM executable", Group = "kgsm", Type = ConfigType.Path,
+        Risk = ConfigRisk.Wiring, NoDefault = true)]
     public string KgsmPath { get; set; } = string.Empty;
 
     /// <summary>Control unix domain socket the daemon listens on.</summary>
     /// <panel>Unix socket the watchdog serves its control plane on. Every surface that starts or stops
     /// a native server reaches it here.</panel>
-    [LeafField("socketPath", "Control socket", Group = "socket", Type = LeafType.Path,
-        Risk = LeafRisk.Wiring, PairedApiKey = "Api__WatchdogSocketPath")]
+    [ConfigField("socketPath", "Control socket", Group = "socket", Type = ConfigType.Path,
+        Risk = ConfigRisk.Wiring, PairedApiKey = "Api__WatchdogSocketPath")]
     public string SocketPath { get; set; } = "/run/kgsm-watchdog/control.sock";
 
     /// <summary>
@@ -89,29 +89,29 @@ public sealed class WatchdogSettings
     /// <panel>Octal permission bits applied to the control socket. These are the whole security
     /// boundary — the socket can start and kill game servers, and the daemon does no authentication of
     /// its own.</panel>
-    [LeafField("socketMode", "Control socket permissions", Group = "socket", Risk = LeafRisk.Wiring)]
+    [ConfigField("socketMode", "Control socket permissions", Group = "socket", Risk = ConfigRisk.Wiring)]
     public string SocketMode { get; set; } = "660";
 
     /// <summary>cgroup v2 mount point.</summary>
     /// <panel>Where the cgroup v2 hierarchy is mounted. Everything the watchdog supervises lives below
     /// this path.</panel>
-    [LeafField("cgroupMount", "Cgroup v2 mount point", Group = "cgroup", Type = LeafType.Path,
-        Risk = LeafRisk.Wiring)]
+    [ConfigField("cgroupMount", "Cgroup v2 mount point", Group = "cgroup", Type = ConfigType.Path,
+        Risk = ConfigRisk.Wiring)]
     public string CgroupMountPoint { get; set; } = "/sys/fs/cgroup";
 
     /// <summary>Fallback cgroup base only; the real base is discovered from <c>/proc/self/cgroup</c>
     /// (systemd delegation).</summary>
     /// <panel>Fallback name for KGSM's delegated cgroup base. The real base is discovered from the
     /// daemon's own cgroup, so this is used only when that discovery finds nothing.</panel>
-    [LeafField("cgroupBase", "Cgroup base (fallback)", Group = "cgroup", Risk = LeafRisk.Wiring)]
+    [ConfigField("cgroupBase", "Cgroup base (fallback)", Group = "cgroup", Risk = ConfigRisk.Wiring)]
     public string CgroupBaseName { get; set; } = "kgsm.slice";
 
     /// <summary>Controllers to enable on the base subtree so per-instance children inherit them.
     /// Space- or comma-separated.</summary>
     /// <panel>Controllers enabled on the base subtree so each per-instance cgroup inherits them.
     /// Dropping one removes the matching per-server metric.</panel>
-    [LeafField("cgroupControllers", "Cgroup controllers", Group = "cgroup", Type = LeafType.Csv,
-        Risk = LeafRisk.Wiring)]
+    [ConfigField("cgroupControllers", "Cgroup controllers", Group = "cgroup", Type = ConfigType.Csv,
+        Risk = ConfigRisk.Wiring)]
     public string CgroupControllers { get; set; } = "cpu,memory,io,pids";
 
     /// <summary>
@@ -122,7 +122,7 @@ public sealed class WatchdogSettings
     /// <panel>Name of the cgroup the daemon itself sits in, a sibling of every instance cgroup. It has
     /// to be a leaf, because cgroup v2 forbids enabling controllers on a cgroup that holds
     /// processes.</panel>
-    [LeafField("supervisorLeaf", "Supervisor leaf cgroup", Group = "cgroup", Risk = LeafRisk.Wiring)]
+    [ConfigField("supervisorLeaf", "Supervisor leaf cgroup", Group = "cgroup", Risk = ConfigRisk.Wiring)]
     public string SupervisorLeaf { get; set; } = "supervisor";
 
     /// <summary>How often the crash watcher polls each instance's <c>cgroup.events</c> for
@@ -130,7 +130,7 @@ public sealed class WatchdogSettings
     /// crash-detection latency tighter.</summary>
     /// <panel>How often each supervised instance is checked for liveness. This bounds how quickly a
     /// crash is noticed.</panel>
-    [LeafField("pollIntervalMs", "Supervision poll interval", Group = "supervision",
+    [ConfigField("pollIntervalMs", "Supervision poll interval", Group = "supervision",
         Min = Floors.PollMs, Unit = "ms")]
     public int? PollIntervalMs { get; set; }
 
@@ -143,35 +143,35 @@ public sealed class WatchdogSettings
     /// <panel>What counts as restartable. 'always' restarts any exit while the instance is meant to be
     /// running; 'on-failure' leaves a clean exit stopped. Many games exit 0 on a crash, which is why
     /// 'always' is the default.</panel>
-    [LeafField("restartPolicy", "Restart policy", Group = "supervision", Type = LeafType.Enum,
+    [ConfigField("restartPolicy", "Restart policy", Group = "supervision", Type = ConfigType.Enum,
         Values = ["always", "on-failure"])]
     public string RestartPolicy { get; set; } = "always";
 
     /// <summary>First-restart delay; doubles each consecutive failure. Floor 0.</summary>
     /// <panel>How long to wait before the first restart attempt. The delay doubles with each
     /// consecutive failure.</panel>
-    [LeafField("restartBaseDelayMs", "First restart delay", Group = "supervision",
+    [ConfigField("restartBaseDelayMs", "First restart delay", Group = "supervision",
         Min = Floors.Zero, Unit = "ms")]
     public int? RestartBaseDelayMs { get; set; }
 
     /// <summary>Ceiling on the exponential restart delay. Floor 0.</summary>
     /// <panel>Ceiling on the doubling restart delay, so a long failure streak still retries at a
     /// predictable rate.</panel>
-    [LeafField("restartMaxDelayMs", "Maximum restart delay", Group = "supervision",
+    [ConfigField("restartMaxDelayMs", "Maximum restart delay", Group = "supervision",
         Min = Floors.Zero, Unit = "ms")]
     public int? RestartMaxDelayMs { get; set; }
 
     /// <summary>Max consecutive restarts before giving up (<c>phase=failed</c>). Floor 0.</summary>
     /// <panel>How many consecutive failures to tolerate before giving up on an instance and marking it
     /// failed. Zero means never restart.</panel>
-    [LeafField("restartMaxRetries", "Maximum consecutive restarts", Group = "supervision", Min = Floors.Zero)]
+    [ConfigField("restartMaxRetries", "Maximum consecutive restarts", Group = "supervision", Min = Floors.Zero)]
     public int? RestartMaxRetries { get; set; }
 
     /// <summary>Uptime after which an instance is "healthy" and its failure counter resets,
     /// seconds. Floor 1.</summary>
     /// <panel>How long an instance must stay up before it counts as healthy and its failure streak
     /// resets.</panel>
-    [LeafField("restartStabilitySec", "Stability window", Group = "supervision",
+    [ConfigField("restartStabilitySec", "Stability window", Group = "supervision",
         Min = Floors.StabilitySeconds, Unit = "s")]
     public int? RestartStabilitySeconds { get; set; }
 
@@ -183,7 +183,7 @@ public sealed class WatchdogSettings
     /// its own. A leaf parks a server to do disruptive work against it and releases the park when the
     /// work is done; this is the deadline that applies when the leaf never gets that far, so a crashed
     /// scheduler costs a maintenance window instead of leaving a server down.</panel>
-    [LeafField("maintenanceMaxMinutes", "Maximum park duration", Group = "supervision",
+    [ConfigField("maintenanceMaxMinutes", "Maximum park duration", Group = "supervision",
         Min = Floors.MaintenanceMinutes, Unit = "min")]
     public int? MaintenanceMaxMinutes { get; set; }
 
@@ -191,7 +191,7 @@ public sealed class WatchdogSettings
     /// Floor 0.</summary>
     /// <panel>How long after spawning an instance crash detection stays suppressed, so a slow-starting
     /// game is not mistaken for a crash.</panel>
-    [LeafField("restartGraceSec", "Post-spawn grace period", Group = "supervision",
+    [ConfigField("restartGraceSec", "Post-spawn grace period", Group = "supervision",
         Min = Floors.Zero, Unit = "s")]
     public int? RestartGraceSeconds { get; set; }
 
@@ -206,8 +206,8 @@ public sealed class WatchdogSettings
     /// <panel>File holding the set of instances that should come back up after a restart or reboot.
     /// Empty derives it under the KGSM user's data directory. Pointing it elsewhere orphans the existing
     /// set, and those instances stop being started at boot.</panel>
-    [LeafField("stateFile", "Desired-state file", Group = "persistence", Type = LeafType.Path,
-        Risk = LeafRisk.Destructive, NoDefault = true)]
+    [ConfigField("stateFile", "Desired-state file", Group = "persistence", Type = ConfigType.Path,
+        Risk = ConfigRisk.Destructive, NoDefault = true)]
     public string StateFile { get; set; } = string.Empty;
 
     /// <summary>
@@ -219,15 +219,15 @@ public sealed class WatchdogSettings
     /// <panel>KGSM's instances directory, watched for the per-instance event channels that drive player
     /// presence and container lifecycle. Empty derives it under the KGSM user's data directory; set it
     /// only to relocate it.</panel>
-    [LeafField("instancesDir", "Instances directory", Group = "kgsm", Type = LeafType.Path,
-        Risk = LeafRisk.Wiring, NoDefault = true)]
+    [ConfigField("instancesDir", "Instances directory", Group = "kgsm", Type = ConfigType.Path,
+        Risk = ConfigRisk.Wiring, NoDefault = true)]
     public string InstancesDir { get; set; } = string.Empty;
 
     /// <summary>How often the player-presence ingester scans for channels and tails them. Floor 50.
     /// Presence latency is bounded by this; cheap at this scale, so 1 Hz is plenty.</summary>
     /// <panel>How often the player-presence channels are scanned and tailed. This bounds how quickly a
     /// join or leave is reported.</panel>
-    [LeafField("playerPresencePollMs", "Player presence poll interval", Group = "ingesters",
+    [ConfigField("playerPresencePollMs", "Player presence poll interval", Group = "ingesters",
         Min = Floors.PollMs, Unit = "ms")]
     public int? PlayerPresencePollMs { get; set; }
 
@@ -236,7 +236,7 @@ public sealed class WatchdogSettings
     /// start/stop. Floor 50.</summary>
     /// <panel>How often a container's self-reported lifecycle channel is scanned and tailed. This drives
     /// port forwarding open and closed as a container starts and stops.</panel>
-    [LeafField("containerLifecyclePollMs", "Container lifecycle poll interval", Group = "ingesters",
+    [ConfigField("containerLifecyclePollMs", "Container lifecycle poll interval", Group = "ingesters",
         Min = Floors.PollMs, Unit = "ms")]
     public int? ContainerLifecyclePollMs { get; set; }
 
@@ -245,15 +245,15 @@ public sealed class WatchdogSettings
     /// stream live, so latency matters; still cheap (one stat plus a short read per client).</summary>
     /// <panel>How often a followed console polls a native instance's log for new lines. Tighter than the
     /// other pollers because someone is watching the output live.</panel>
-    [LeafField("consolePollMs", "Console follow interval", Group = "ingesters",
+    [ConfigField("consolePollMs", "Console follow interval", Group = "ingesters",
         Min = Floors.PollMs, Unit = "ms")]
     public int? ConsolePollMs { get; set; }
 
     /// <panel>Control socket of the kgsm-firewall authority, which the supervisor asks to open an
     /// instance's ports when it starts and to close them when it stops. An unreachable authority is
     /// logged and never blocks a start.</panel>
-    [LeafField("firewallSocket", "Firewall socket", Group = "firewall", Type = LeafType.Path,
-        Risk = LeafRisk.Wiring)]
+    [ConfigField("firewallSocket", "Firewall socket", Group = "firewall", Type = ConfigType.Path,
+        Risk = ConfigRisk.Wiring)]
     public string FirewallSocketPath { get; set; } = "/run/kgsm-firewall/firewall.sock";
 
     /// <summary>How often the UPnP sweep compares the router's table against the running instances'
@@ -262,7 +262,7 @@ public sealed class WatchdogSettings
     /// need, and restore any it dropped. A router can accept a forward, call the lease permanent, and
     /// discard it anyway — leaving a server running but unreachable from the internet with nothing to
     /// announce it. This interval is how long that can go unnoticed. Set to 0 to stop checking.</panel>
-    [LeafField("upnpReconcileSec", "Router forward check interval", Group = "network",
+    [ConfigField("upnpReconcileSec", "Router forward check interval", Group = "network",
         Min = Floors.Zero, Unit = "s")]
     public int? UpnpReconcileSeconds { get; set; }
 }

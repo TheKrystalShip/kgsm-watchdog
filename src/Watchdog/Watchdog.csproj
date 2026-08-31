@@ -47,14 +47,14 @@
     <!-- The leaf config descriptor is generated from WatchdogSettings. These name the two files the
          generator works between; the attribute source, the documentation file the <panel> tags travel
          in, and the build step all come with the package below. -->
-    <LeafSettingsFile>kgsm-watchdog.settings.json</LeafSettingsFile>
-    <LeafDescriptorFile>$(MSBuildProjectDirectory)/../../deploy/kgsm-watchdog.leaf.json</LeafDescriptorFile>
+    <ComponentSettingsFile>kgsm-watchdog.settings.json</ComponentSettingsFile>
+    <ComponentDescriptorFile>$(MSBuildProjectDirectory)/../../deploy/kgsm-watchdog.leaf.json</ComponentDescriptorFile>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Build-only: the descriptor attributes arrive as source and the generator as a tool, and the
          package declares no dependencies, so nothing here reaches the AOT publish. -->
-    <PackageReference Include="TheKrystalShip.KGSM.LeafConfig" Version="2.2.0" PrivateAssets="all" />
+    <PackageReference Include="TheKrystalShip.KGSM.ComponentConfig" Version="3.0.0" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

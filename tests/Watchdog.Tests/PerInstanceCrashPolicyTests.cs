@@ -143,6 +143,68 @@ public sealed class PerInstanceCrashPolicyTests
         Assert.DoesNotContain(EventFailed, events.Snapshot());
     }
 
+    // ---- a cgroup that cannot be read --------------------------------------------------------------
+    // Measured on hotrod: with the daemon out of file descriptors every cgroup.events read failed, and
+    // reading that as "exited" declared two live servers crashed and respawned them on top of themselves.
+
+    [Fact]
+    public void An_unreadable_cgroup_is_not_a_crash_and_leaves_the_streak_alone()
+    {
+        var events = new RecordingJournal();
+        var spec = SpecFor("unreadable");
+        string mount = Path.Combine(Path.GetTempPath(), $"kgsm-wd-cg-{Guid.NewGuid():N}");
+        string eventsFile = UnreadableEvents(mount, spec.Name);
+        var supervisor = NewSupervisor(events, spec, mount);
+
+        try
+        {
+            AdoptRunning(supervisor, spec.Name, spawnedAt: Old(), consecutiveFailures: 2);
+            supervisor.Reconcile();
+            supervisor.Reconcile();
+
+            var state = Single(supervisor);
+            Assert.Equal("running", state.Phase);
+            Assert.Equal(2, state.Restarts);
+            Assert.DoesNotContain(EventCrashed, events.Snapshot());
+            Assert.True(Directory.Exists(Path.GetDirectoryName(eventsFile)), "the cgroup must not be purged");
+        }
+        finally
+        {
+            File.SetUnixFileMode(eventsFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Fact]
+    public void Once_the_cgroup_reads_empty_the_exit_is_judged_as_usual()
+    {
+        var events = new RecordingJournal();
+        var spec = SpecFor("readable-again");
+        string mount = Path.Combine(Path.GetTempPath(), $"kgsm-wd-cg-{Guid.NewGuid():N}");
+        string eventsFile = UnreadableEvents(mount, spec.Name);
+        var supervisor = NewSupervisor(events, spec, mount);
+
+        AdoptRunning(supervisor, spec.Name, spawnedAt: Old(), consecutiveFailures: 0);
+        supervisor.Reconcile();
+
+        File.SetUnixFileMode(eventsFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        supervisor.Reconcile();
+
+        Assert.Equal("restart-pending", Single(supervisor).Phase);
+        Assert.True(events.WaitFor(EventCrashed));
+    }
+
+    /// <summary>An instance cgroup under <paramref name="mount"/> whose events file says it is empty and
+    /// cannot be opened — the same failure a daemon with no descriptors left meets.</summary>
+    private static string UnreadableEvents(string mount, string name)
+    {
+        string dir = Path.Combine(mount, new WatchdogOptions().CgroupBaseName, name);
+        Directory.CreateDirectory(dir);
+        string file = Path.Combine(dir, "cgroup.events");
+        File.WriteAllText(file, "populated 0\nfrozen 0\n");
+        File.SetUnixFileMode(file, UnixFileMode.None);
+        return file;
+    }
+
     // ---- helpers -------------------------------------------------------------------------------
 
     private const string EventCrashed = "server.crashed";
@@ -199,12 +261,12 @@ public sealed class PerInstanceCrashPolicyTests
         CrashMaxRestarts = crashMaxRestarts,
     };
 
-    private static InstanceSupervisor NewSupervisor(RecordingJournal events, Instance spec)
+    private static InstanceSupervisor NewSupervisor(RecordingJournal events, Instance spec, string? cgroupMount = null)
     {
         var options = new WatchdogOptions
         {
             // Empty temp cgroup base → no instance cgroup ever populated → the reconcile pass sees "exited".
-            CgroupMountPoint = Path.Combine(Path.GetTempPath(), $"kgsm-wd-cg-{Guid.NewGuid():N}"),
+            CgroupMountPoint = cgroupMount ?? Path.Combine(Path.GetTempPath(), $"kgsm-wd-cg-{Guid.NewGuid():N}"),
             StateFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-crash-{Guid.NewGuid():N}", "desired-state.json"),
         };
         var cgroups = new CgroupManager(options, NullLogger<CgroupManager>.Instance);

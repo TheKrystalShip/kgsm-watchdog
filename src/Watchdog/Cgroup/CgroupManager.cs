@@ -227,25 +227,64 @@ internal sealed class CgroupManager(WatchdogOptions options, ILogger<CgroupManag
     }
 
     /// <summary>
-    /// Liveness: true if the instance cgroup still has live processes, false if empty/absent.
-    /// Reads <c>cgroup.events</c> <c>populated</c> — child-inclusive and race-free, unlike a PID check.
+    /// Whether the instance cgroup could be occupied: true when it holds live processes <em>or</em> when
+    /// that could not be read, false only when it is measured empty or absent.
     /// </summary>
-    public bool IsPopulated(string instanceName)
+    /// <remarks>
+    /// <para>
+    /// <b>An unreadable cgroup is assumed occupied, because every decision that acts on emptiness
+    /// destroys or duplicates something.</b> Emptiness is what lets a running instance be declared
+    /// crashed and respawned, a stop be concluded, a start proceed over a cgroup, a boot restore spawn
+    /// rather than adopt. Measured on hotrod: with the daemon out of file descriptors, every read of
+    /// <c>cgroup.events</c> failed, two live servers read as exited, and each was respawned on top of
+    /// itself until the restart limit gave up on both. Read as occupied, the same moment makes a start
+    /// refuse, a drain wait, and a restore adopt — all of which a later readable tick corrects.
+    /// </para>
+    /// <para>
+    /// A caller that needs to tell "occupied" from "cannot tell" asks <see cref="ReadPopulation"/>.
+    /// </para>
+    /// </remarks>
+    public bool IsPopulated(string instanceName) => ReadPopulation(instanceName) != CgroupPopulation.Empty;
+
+    /// <summary>
+    /// Liveness as measured: the instance cgroup's <c>cgroup.events</c> <c>populated</c> line —
+    /// child-inclusive and race-free, unlike a PID check — or <see cref="CgroupPopulation.Unknown"/> when
+    /// it could not be read.
+    /// </summary>
+    /// <remarks>
+    /// Only a cgroup that is not there reads as empty: the directory absent, or the file vanishing under a
+    /// teardown between the check and the read. Any other failure — no file descriptor to read it with, a
+    /// permission refusal, a file with no <c>populated</c> line — is a reading not taken, and says nothing
+    /// about whether a process is inside.
+    /// </remarks>
+    public CgroupPopulation ReadPopulation(string instanceName)
     {
-        string events = Path.Combine(PathFor(instanceName), "cgroup.events");
-        if (!File.Exists(events))
-            return false;
+        string cg = PathFor(instanceName);
+        string events = Path.Combine(cg, "cgroup.events");
+
+        // stat, not open: answers even when the daemon has no descriptor left to read the file with.
+        if (!Directory.Exists(cg))
+            return CgroupPopulation.Empty;
+
         try
         {
             foreach (var line in File.ReadLines(events))
                 if (line.StartsWith("populated ", StringComparison.Ordinal))
-                    return line.AsSpan("populated ".Length).Trim().SequenceEqual("1");
+                    return line.AsSpan("populated ".Length).Trim().SequenceEqual("1")
+                        ? CgroupPopulation.Populated
+                        : CgroupPopulation.Empty;
         }
-        catch
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            // teardown race: the file vanished between Exists and read -> treat as empty.
+            return CgroupPopulation.Empty; // torn down between the check and the read
         }
-        return false;
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "could not read {Events}", events);
+            return CgroupPopulation.Unknown;
+        }
+
+        return CgroupPopulation.Unknown;
     }
 
     /// <summary>

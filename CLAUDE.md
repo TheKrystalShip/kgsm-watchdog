@@ -186,7 +186,11 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   `Model/WatchdogJsonContext.cs` (source-gen). An unregistered type throws `NotSupportedException` at
   runtime — there is no reflection fallback. This is what lets the daemon ship as AOT.
 - **Never fabricate state.** A status is measured (cgroup / `/proc`) or explicitly "unknown" — never
-  invented. A run's age is one of these: `SupervisedInstance.SpawnedAt` is when THIS daemon took charge
+  invented. A cgroup read that fails is `CgroupPopulation.Unknown`, never empty: `IsPopulated` treats it
+  as occupied (every act on emptiness — a crash, a purge, a spawn — destroys or duplicates something),
+  and the reconcile tick decides nothing on it. The daemon raises its soft open-file limit to the hard
+  limit at startup, because exhausting it is what makes every read fail; games are put back to 1024 by
+  the spawn launcher. A run's age is one of these: `SupervisedInstance.SpawnedAt` is when THIS daemon took charge
   (the grace window and stability reset are measured from it, so it restarts at every adoption), while
   `RunStartedAt` is the leader's own start read from `/proc` via `ProcessStartClock`. `/status`,
   `/runtimes` and the run ledger report the latter, and report null when the leader cannot be read —

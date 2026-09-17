@@ -98,6 +98,11 @@ if (string.IsNullOrEmpty(options.KgsmPath))
     return 1;
 }
 
+// Before anything opens a descriptor: the default soft limit of 1024 is what a burst of control-plane
+// clients exhausted, taking every cgroup read and spawn down with it. Spawned games are put back to 1024
+// by the launcher. See FileDescriptorLimit.
+(ulong Before, ulong After)? fdLimit = TheKrystalShip.KGSM.Watchdog.Interop.FileDescriptorLimit.RaiseSoftToHard();
+
 // ContentRootPath is pinned to the binary's own directory rather than left to default to the
 // process working directory. The unit starts the daemon with no WorkingDirectory, so that default
 // is "/", and the builder installs its own appsettings.json providers with reloadOnChange:true —
@@ -272,6 +277,12 @@ builder.WebHost.ConfigureKestrel(kestrel =>
 });
 
 var app = builder.Build();
+
+if (fdLimit is { } limit)
+    app.Logger.LogInformation("open-file soft limit {After} (inherited {Before}); games run under {Game}",
+        limit.After, limit.Before, TheKrystalShip.KGSM.Watchdog.Interop.FileDescriptorLimit.GameSoftLimit);
+else
+    app.Logger.LogWarning("could not raise the open-file soft limit; running under the inherited one");
 
 // Boot sequence runs BEFORE the socket binds (app.Run): under systemd delegation it discovers the
 // daemon's own delegated cgroup base (/proc/self/cgroup), enters the supervisor leaf, and enables

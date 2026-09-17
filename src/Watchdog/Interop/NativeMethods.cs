@@ -188,4 +188,19 @@ internal static partial class NativeMethods
     /// </summary>
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int malloc_trim(nuint pad);
+
+    /// <summary>getrlimit(2)/setrlimit(2) resource number for the open file descriptor limit.</summary>
+    internal const int RLIMIT_NOFILE = 7;
+
+    /// <summary>
+    /// getrlimit(2). <paramref name="rlim"/> is a two-element <c>struct rlimit</c> — soft limit, then hard
+    /// limit, each a 64-bit <c>rlim_t</c> on x86-64 and aarch64. Returns 0 on success, -1 with errno.
+    /// </summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int getrlimit(int resource, ulong[] rlim);
+
+    /// <summary>setrlimit(2), same layout as <see cref="getrlimit"/>. Raising a soft limit up to the hard
+    /// limit needs no privilege.</summary>
+    [LibraryImport("libc", SetLastError = true)]
+    internal static partial int setrlimit(int resource, ulong[] rlim);
 }

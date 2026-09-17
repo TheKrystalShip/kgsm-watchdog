@@ -55,6 +55,10 @@ internal sealed class InstanceSupervisor(
     ILogger<InstanceSupervisor> logger) : IDisposable, IForwardedPortClaims
 {
     private readonly ConcurrentDictionary<string, SupervisedInstance> _instances = new(StringComparer.Ordinal);
+
+    // Instances whose cgroup the reconcile tick could not read, so the warning is written once per episode.
+    // Touched only under the gate, by Reconcile.
+    private readonly HashSet<string> _unreadable = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
@@ -1706,8 +1710,25 @@ internal sealed class InstanceSupervisor(
     private void ReconcileRunning(SupervisedInstance si, DateTime now)
     {
         string name = si.Name;
+        CgroupPopulation population = cgroups.ReadPopulation(name);
 
-        if (cgroups.IsPopulated(name))
+        // A reading not taken concludes nothing: not a crash, and not a stretch of health either, so the
+        // failure streak is left where it is too. Measured on hotrod with the daemon out of file
+        // descriptors — every read failed, two live servers were declared crashed and respawned on top
+        // of themselves until the restart limit gave up on both. Said once per episode, since this runs
+        // every second.
+        if (population == CgroupPopulation.Unknown)
+        {
+            if (_unreadable.Add(name))
+                logger.LogWarning(
+                    "{Instance}: cannot read whether its cgroup is populated; not judging it until a read succeeds", name);
+            return;
+        }
+
+        if (_unreadable.Remove(name))
+            logger.LogInformation("{Instance}: cgroup readable again", name);
+
+        if (population == CgroupPopulation.Populated)
         {
             // Healthy. Once it's been up past the stability threshold, clear the failure streak so a
             // later isolated crash starts backoff from scratch (and never wrongly counts toward give-up).

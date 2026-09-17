@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a cgroup that cannot be read is no longer a crash, and the daemon has the descriptors it needs (1.46.1)
+
+On hotrod a burst of control-plane clients exhausted the daemon's 1024-descriptor soft limit. Every read
+of `cgroup.events` then failed, `IsPopulated` swallowed the failure as "empty", and valheim and Ketchup —
+both running — were declared crashed, respawned on top of their live processes (two PalServers on 8211),
+and given up on at the restart limit.
+
+- **`CgroupManager.ReadPopulation` returns `Empty`, `Populated` or `Unknown`.** Only an absent cgroup, or
+  a file torn down mid-read, is empty; any other failure is unknown. `IsPopulated` treats unknown as
+  occupied, because every decision that acts on emptiness destroys or duplicates something: a start
+  refuses, a drain waits, a restore adopts.
+- **The reconcile tick judges nothing on an unknown read** — no crash, no stability reset — and logs once
+  per episode until a read succeeds.
+- **The soft open-file limit is raised to the hard limit at startup** (no privilege needed). Games are
+  spawned with a soft limit of 1024, set by the launcher with `ulimit -Sn`, so `select()`-based servers
+  keep the limit they get from any systemd service.
+
 ### Added — a router that stops answering UPnP is reported, and reached directly where it can be (1.46.0)
 
 On hotrod the Livebox's UPnP service went silent after a WAN reconnect while the router kept routing:

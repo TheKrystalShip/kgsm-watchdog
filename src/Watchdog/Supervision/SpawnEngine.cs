@@ -12,7 +12,9 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// (FIFO stdin, logfile stdout) but with the supervisor as the in-slice parent.
 /// <para>
 /// The spawn uses a tiny <c>/bin/sh -c</c> launcher that <b>self-moves before exec</b>:
-/// <c>echo $$ &gt; &lt;inst&gt;/cgroup.procs ; cd &lt;launchdir&gt; ; exec &lt;exe&gt; &lt;args&gt; &lt; fifo &gt;&gt; log</c>.
+/// <c>ulimit -Sn 1024 ; echo $$ &gt; &lt;inst&gt;/cgroup.procs ; cd &lt;launchdir&gt; ; exec &lt;exe&gt; &lt;args&gt; &lt; fifo &gt;&gt; log</c>.
+/// The <c>ulimit</c> gives the game the default soft open-file limit rather than the daemon's raised one
+/// (<see cref="FileDescriptorLimit"/>).
 /// Because the daemon already lives in <c>kgsm.slice/&lt;supervisor&gt;</c>, the launcher is born
 /// in-slice and the move to the instance cgroup is an allowed intra-slice migration. Doing the
 /// move <em>in the child, before the game exists</em> is the load-bearing detail: every process the
@@ -42,8 +44,10 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> logger)
 {
     // $0=sh $1=cgroup.procs $2=launchdir $3=exe $4=args(unquoted: word-split+glob, faithful) $5=fifo $6=log
+    // $7=the game's soft open-file limit. -S sets only the soft limit (a bare -n in bash lowers the hard
+    // limit too, which the game could never raise back), and a refusal is not a reason to not start.
     private const string LauncherBody =
-        "echo $$ > \"$1\" && cd \"$2\" && exec \"$3\" $4 < \"$5\" >> \"$6\" 2>&1";
+        "ulimit -Sn \"$7\" 2>/dev/null; echo $$ > \"$1\" && cd \"$2\" && exec \"$3\" $4 < \"$5\" >> \"$6\" 2>&1";
 
     /// <summary>
     /// Create the instance cgroup + FIFO, then fork the game into it. Returns a live handle on
@@ -138,6 +142,7 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
         psi.ArgumentList.Add(args);        // $4
         psi.ArgumentList.Add(fifo);        // $5
         psi.ArgumentList.Add(log);         // $6
+        psi.ArgumentList.Add(FileDescriptorLimit.GameSoftLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)); // $7
 
         Process proc;
         try

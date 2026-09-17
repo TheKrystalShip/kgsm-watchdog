@@ -83,6 +83,47 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void ReadPopulation_reports_a_read_it_could_not_take_as_unknown_and_IsPopulated_assumes_occupied()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"wd-cg-{Guid.NewGuid():N}");
+        string baseDir = Path.Combine(root, "kgsm.slice");
+        WritePopulated(baseDir, "unreadable", populated: false);
+        string file = Path.Combine(baseDir, "unreadable", "cgroup.events");
+        File.SetUnixFileMode(file, UnixFileMode.None);
+        try
+        {
+            var mgr = Make(new WatchdogOptions { CgroupMountPoint = root, CgroupBaseName = "kgsm.slice" });
+
+            Assert.Equal(CgroupPopulation.Unknown, mgr.ReadPopulation("unreadable"));
+            Assert.True(mgr.IsPopulated("unreadable"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Fact]
+    public void ReadPopulation_distinguishes_empty_populated_absent_and_unparseable()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"wd-cg-{Guid.NewGuid():N}");
+        string baseDir = Path.Combine(root, "kgsm.slice");
+        WritePopulated(baseDir, "live", populated: true);
+        WritePopulated(baseDir, "empty", populated: false);
+        Directory.CreateDirectory(Path.Combine(baseDir, "garbled"));
+        File.WriteAllText(Path.Combine(baseDir, "garbled", "cgroup.events"), "frozen 0\n");
+        Directory.CreateDirectory(Path.Combine(baseDir, "torn-down"));
+
+        var mgr = Make(new WatchdogOptions { CgroupMountPoint = root, CgroupBaseName = "kgsm.slice" });
+
+        Assert.Equal(CgroupPopulation.Populated, mgr.ReadPopulation("live"));
+        Assert.Equal(CgroupPopulation.Empty, mgr.ReadPopulation("empty"));
+        Assert.Equal(CgroupPopulation.Empty, mgr.ReadPopulation("never-created"));
+        Assert.Equal(CgroupPopulation.Empty, mgr.ReadPopulation("torn-down"));   // directory left, file gone
+        Assert.Equal(CgroupPopulation.Unknown, mgr.ReadPopulation("garbled"));
+    }
+
+    [Fact]
     public void Remove_absent_cgroup_is_success()
     {
         var mgr = Make(new WatchdogOptions { CgroupBaseName = $"kgsm-nonexistent-{Guid.NewGuid():N}.slice" });

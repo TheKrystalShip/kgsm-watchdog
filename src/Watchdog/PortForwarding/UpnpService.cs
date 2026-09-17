@@ -32,9 +32,22 @@ internal enum UpnpOutcome { Skipped, Applied, Failed }
 /// matching the management script's "continuing without port forwarding". Shells out as the daemon's
 /// (unprivileged) uid — UPnP needs no root. AOT-safe: <see cref="Process"/> only, no reflection.
 /// </para>
+/// <para>
+/// Every call goes to the router through <see cref="RunAgainstRouterAsync"/>, which is where two things
+/// happen once for all of them: whether a router answered is reported to <see cref="UpnpRouterHealth"/>,
+/// and a call whose discovery got no answer is retried at the address the router last answered from
+/// (<see cref="UpnpGatewayMemory"/>).
+/// </para>
 /// </summary>
-internal sealed class UpnpService(ILogger<UpnpService> logger)
+internal sealed class UpnpService(
+    ILogger<UpnpService> logger,
+    UpnpRouterHealth health,
+    UpnpGatewayMemory gateway)
 {
+    // Whether the last call reached the router only at its remembered address. Held so the warning is
+    // written when that starts and not on every sweep for as long as it lasts.
+    private volatile bool _directOnly;
+
     // upnpc must answer (or fail) within this budget. A slow/absent router or a hung SOAP call must
     // never block the reconcile/start path — we always fire this off the supervisor thread, but the
     // cap is the second line of defence (and bounds the work the thread-pool task holds).
@@ -156,7 +169,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     /// </summary>
     public async Task<UpnpListResult> ListAsync(string instanceName, CancellationToken ct = default)
     {
-        UpnpcRun run = await RunUpnpcRawAsync(["-l"], ct).ConfigureAwait(false);
+        UpnpcRun run = await RunAgainstRouterAsync(["-l"], ct).ConfigureAwait(false);
         if (!run.Launched)
             logger.LogWarning("UPnP list for {Instance}: could not launch upnpc (is miniupnpc installed?)", instanceName);
         else if (run.TimedOut)
@@ -179,7 +192,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     /// </summary>
     public async Task<UpnpTable> ListAllAsync(CancellationToken ct = default)
     {
-        UpnpcRun run = await RunUpnpcRawAsync(["-l"], ct).ConfigureAwait(false);
+        UpnpcRun run = await RunAgainstRouterAsync(["-l"], ct).ConfigureAwait(false);
         if (!run.Launched)
             logger.LogWarning("UPnP sweep: could not launch upnpc (is miniupnpc installed?)");
         else if (run.TimedOut)
@@ -220,14 +233,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
         if (!launched || timedOut)
             return new UpnpTable(false, []);
 
-        // upnpc prints "No IGD UPnP Device found on the network !" AND exits 0 when no router answers —
-        // so the exit code is not a reliable signal; the text is. "Found valid IGD" is upnpc's definitive
-        // "the router answered" marker (it precedes the redirection table on every -l against a real IGD,
-        // regardless of miniupnpc version). Require it, and the absence of the no-IGD banner.
-        bool noIgd = stdout.Contains("No IGD", StringComparison.OrdinalIgnoreCase)
-                     || stdout.Contains("No valid UPNP", StringComparison.OrdinalIgnoreCase);
-        bool reached = stdout.Contains("Found valid IGD", StringComparison.OrdinalIgnoreCase);
-        if (noIgd || !reached)
+        if (!RouterAnswered(stdout, stderr: ""))
             return new UpnpTable(false, []);
 
         var mappings = new List<UpnpMapping>();
@@ -362,7 +368,7 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     {
         string action = open ? "open" : "close";
 
-        UpnpcRun run = await RunUpnpcRawAsync(args, ct).ConfigureAwait(false);
+        UpnpcRun run = await RunAgainstRouterAsync(args, ct).ConfigureAwait(false);
 
         if (!run.Launched)
         {
@@ -417,6 +423,154 @@ internal sealed class UpnpService(ILogger<UpnpService> logger)
     /// interpretation — so the open/close outcome mapping and the list parse share the exact same
     /// spawn/timeout/pipe-drain plumbing.</summary>
     private readonly record struct UpnpcRun(bool Launched, bool TimedOut, int ExitCode, string Stdout, string Stderr);
+
+    /// <summary>
+    /// Runs one <c>upnpc</c> call against the router, reporting whether a router answered and retrying at
+    /// the router's last known address when discovery got no answer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The retry carries the same arguments behind <c>-u &lt;url&gt;</c>, which makes upnpc skip discovery
+    /// and talk to that description URL directly. It is attempted only when upnpc ran and no router
+    /// answered — a missing binary is not something another address fixes. When the direct call is not
+    /// answered either, the discovery run is what the caller gets, so its failure is reported as the one
+    /// that happened first.
+    /// </para>
+    /// <para>
+    /// A router reached only directly counts as answering: the forward is opened, which is the job.
+    /// That the discovery half is down is still worth a line, once when it starts and once when discovery
+    /// answers again.
+    /// </para>
+    /// </remarks>
+    private async Task<UpnpcRun> RunAgainstRouterAsync(IReadOnlyList<string> args, CancellationToken ct)
+    {
+        UpnpcRun run = await RunUpnpcRawAsync(args, ct).ConfigureAwait(false);
+
+        if (!run.Launched)
+        {
+            health.Unanswered("upnpc could not be launched");
+            return run;
+        }
+
+        if (!run.TimedOut && RouterAnswered(run.Stdout, run.Stderr))
+        {
+            if (TryParseGatewayDescription(run.Stdout) is { } url)
+                gateway.Remember(url);
+
+            if (_directOnly)
+            {
+                _directOnly = false;
+                logger.LogInformation("UPnP: discovery is answering again");
+            }
+
+            health.Answered();
+            return run;
+        }
+
+        if (gateway.Current is { } known)
+        {
+            UpnpcRun direct = await RunUpnpcRawAsync(["-u", known, .. args], ct).ConfigureAwait(false);
+
+            if (direct.Launched && !direct.TimedOut && RouterAnswered(direct.Stdout, direct.Stderr))
+            {
+                if (!_directOnly)
+                {
+                    _directOnly = true;
+                    logger.LogWarning(
+                        "UPnP: discovery got no answer; the router answered at its last known address {Url}", known);
+                }
+
+                health.Answered();
+                return direct;
+            }
+        }
+
+        health.Unanswered(run.TimedOut ? "upnpc timed out" : "discovery got no answer");
+        return run;
+    }
+
+    /// <summary>
+    /// Whether the output of one upnpc call shows a router answered it.
+    /// </summary>
+    /// <remarks>
+    /// upnpc can exit 0 with no router found, so the exit code is not the signal; the text is. "Found
+    /// valid IGD" on stdout is its definitive marker that a router answered, printed before any command
+    /// runs regardless of miniupnpc version. Its two no-router banners go to stderr, and are refused on
+    /// either stream. A router that answered and then refused the command (a conflicting mapping, a
+    /// delete of nothing) still answered.
+    /// </remarks>
+    internal static bool RouterAnswered(string stdout, string stderr)
+    {
+        static bool NoRouter(string text) =>
+            text.Contains("No IGD", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("No valid UPNP", StringComparison.OrdinalIgnoreCase);
+
+        return stdout.Contains("Found valid IGD", StringComparison.OrdinalIgnoreCase)
+               && !NoRouter(stdout)
+               && !NoRouter(stderr);
+    }
+
+    /// <summary>
+    /// The description URL of the router that answered, lifted off upnpc's discovery listing — or null
+    /// when the output does not name one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Discovery lists every device that replied as a <c>desc:</c> URL followed by its <c>st:</c> type,
+    /// then names the control URL it chose on the <c>Found valid IGD</c> line. The URL kept is the first
+    /// Internet Gateway Device description served from the same scheme, host and port as that control
+    /// URL, so a second UPnP device on the LAN can never be remembered as the router.
+    /// </para>
+    /// <para>
+    /// A call that skipped discovery lists no devices, which returns null and leaves the remembered URL as
+    /// it is.
+    /// </para>
+    /// </remarks>
+    internal static string? TryParseGatewayDescription(string stdout)
+    {
+        const string ChosenMarker = "Found valid IGD";
+
+        string[] lines = stdout.Split('\n');
+
+        Uri? chosen = null;
+        foreach (string line in lines)
+        {
+            int at = line.IndexOf(ChosenMarker, StringComparison.OrdinalIgnoreCase);
+            if (at < 0)
+                continue;
+
+            int colon = line.IndexOf(':', at + ChosenMarker.Length);
+            if (colon >= 0 && Uri.TryCreate(line[(colon + 1)..].Trim(), UriKind.Absolute, out Uri? control))
+                chosen = control;
+            break;
+        }
+
+        if (chosen is null)
+            return null;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string desc = lines[i].Trim();
+            if (!desc.StartsWith("desc:", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string st = i + 1 < lines.Length ? lines[i + 1].Trim() : "";
+            if (!st.StartsWith("st:", StringComparison.OrdinalIgnoreCase)
+                || !st.Contains("InternetGatewayDevice", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string candidate = desc["desc:".Length..].Trim();
+            if (Uri.TryCreate(candidate, UriKind.Absolute, out Uri? url)
+                && string.Equals(url.Scheme, chosen.Scheme, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(url.Host, chosen.Host, StringComparison.OrdinalIgnoreCase)
+                && url.Port == chosen.Port)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Spawn <c>upnpc</c> with the given argv, time-boxed to <see cref="UpnpTimeout"/>, draining both

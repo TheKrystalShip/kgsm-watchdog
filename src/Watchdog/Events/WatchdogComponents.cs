@@ -44,4 +44,14 @@ internal static class WatchdogComponents
     /// degradation is for the life of the process and recovers only across a reboot.
     /// </remarks>
     public const string CgroupKill = "cgroup-kill";
+
+    /// <summary>
+    /// The router's UPnP service — what opens and restores the forwards running servers declare.
+    /// </summary>
+    /// <remarks>
+    /// Degraded when no router has answered for long enough that a brief outage is ruled out. Servers
+    /// keep running and keep accepting LAN players; what stops is reachability from the internet, and
+    /// nothing on this host can restart a router's UPnP service, so reporting it is the whole response.
+    /// </remarks>
+    public const string UpnpRouter = "upnp-router";
 }

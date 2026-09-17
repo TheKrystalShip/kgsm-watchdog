@@ -137,7 +137,7 @@ public sealed class RunAgeIsTheRunsOwnTests : IDisposable
             TestState.RunHistory(options),
             events,
             events.Lifecycle,
-            new UpnpService(NullLogger<UpnpService>.Instance),
+            TestUpnp.Service(),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),

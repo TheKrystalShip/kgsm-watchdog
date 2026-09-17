@@ -30,15 +30,22 @@ namespace TheKrystalShip.KGSM.Watchdog.PortForwarding;
 /// </para>
 /// <para>
 /// The sweep is deliberately cheap and deliberately timid. It costs nothing while no forwarding
-/// instance runs, reads the whole IGD table in one invocation however many instances it covers, and
-/// touches the router only to add back a mapping it has confirmed is missing. A router it cannot reach
-/// leaves it doing nothing at all — an unreadable table is not evidence of an empty one, and treating
-/// it as such would turn a brief router outage into a storm of redundant re-opens.
+/// instance runs and the router is answering, reads the whole IGD table in one invocation however many
+/// instances it covers, and touches the router only to add back a mapping it has confirmed is missing. A
+/// router it cannot reach leaves it doing nothing at all — an unreadable table is not evidence of an empty
+/// one, and treating it as such would turn a brief router outage into a storm of redundant re-opens.
+/// </para>
+/// <para>
+/// Doing nothing is not the same as saying nothing. Each unanswered listing is an observation
+/// <see cref="UpnpRouterHealth"/> counts, and an outage that lasts is reported as this daemon's
+/// <c>upnp-router</c> component degraded; while it stands, the sweep keeps listing even with nothing to
+/// restore, so the recovery is measured rather than assumed.
 /// </para>
 /// </summary>
 internal sealed class UpnpReconciler(
     InstanceSupervisor supervisor,
     UpnpService upnp,
+    UpnpRouterHealth health,
     WatchdogOptions options,
     ILogger<UpnpReconciler> logger) : BackgroundService
 {
@@ -88,13 +95,22 @@ internal sealed class UpnpReconciler(
     {
         ForwardingCandidate[] candidates = supervisor.ForwardingCandidates();
         if (candidates.Length == 0)
-            return; // nothing forwarding → never touch the router at all
+        {
+            // Nothing forwarding, so nothing to restore. The router is still asked while it stands
+            // reported unreachable: the listing is the observation that reports the recovery, and a
+            // recovery nobody measures leaves the fault standing on every surface until the next start.
+            if (health.IsDegraded)
+                await upnp.ListAllAsync(ct).ConfigureAwait(false);
+
+            return;
+        }
 
         UpnpTable table = await upnp.ListAllAsync(ct).ConfigureAwait(false);
         if (!table.Reached)
         {
             // We do not know what the router holds. Doing nothing is the only honest move: an
             // unreachable IGD read as an empty table would re-open every forward on every sweep.
+            // UpnpRouterHealth has already counted this call, and reports the outage once it has lasted.
             logger.LogDebug("UPnP reconcile: router unreachable, skipping sweep");
             return;
         }

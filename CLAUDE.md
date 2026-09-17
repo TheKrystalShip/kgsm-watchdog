@@ -147,7 +147,12 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   supervision loop, because a sweep is a multi-second network round trip and that loop holds the gate;
   it needs no gate itself, reading the instance table lock-free like `/status` does. **A router that
   cannot be reached means the sweep does nothing** — an unreadable redirection table is not evidence
-  of an empty one, and the whole design rests on not confusing the two.
+  of an empty one, and the whole design rests on not confusing the two. **Doing nothing is not saying
+  nothing:** every `upnpc` call goes through `UpnpService.RunAgainstRouterAsync`, which reports whether
+  a router answered to `UpnpRouterHealth` — calls unanswered across 15 minutes mark the `upnp-router`
+  component degraded, the first answer recovers it, and the sweep keeps listing while it stands so
+  the recovery is observed. The same path retries a call whose discovery got no answer at the router's
+  last description URL (`UpnpGatewayMemory`, `upnpc -u`).
 - **Hot-swap entrypoints run before anything binds.** `--version` / `--selfcheck` (in `Program.cs`,
   before the host is built) let a deploy interrogate a freshly-installed binary as a cheap subprocess
   **without** binding the socket, entering the slice, or touching cgroups. `HotSwapCoordinator` +
@@ -165,7 +170,9 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   only on disconnect. `readiness-state.json` (`ReadinessStateStore`) records which RUN each instance was
   last announced ready for, because `instance-ready` is a transition and the daemon infers it from its
   own first sight of a populated cgroup — an inference that repeats on every daemon start for a server
-  that never stopped. All resolve their location through `StatePathResolver`.
+  that never stopped. `upnp-gateway` (`UpnpGatewayMemory`) is one line: the description URL the router
+  last answered discovery from, persisted because the outage it serves can outlast a deploy. All resolve
+  their location through `StatePathResolver`.
 
 ## Project-specific invariants
 

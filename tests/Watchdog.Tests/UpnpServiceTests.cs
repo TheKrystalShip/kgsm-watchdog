@@ -69,7 +69,7 @@ public sealed class UpnpServiceTests
     [Fact]
     public async Task OpenAsync_returns_Skipped_when_port_forwarding_disabled()
     {
-        var svc = new UpnpService(NullLogger<UpnpService>.Instance);
+        var svc = TestUpnp.Service();
         // Disabled even though ports ARE configured — the gate short-circuits before any upnpc call.
         var instance = new Instance
         {
@@ -121,7 +121,7 @@ public sealed class UpnpServiceTests
         // Nothing left to release means nothing changed on the router, so this is Skipped and NOT
         // Applied — an "upnp closed" event here would record a removal that never happened. It also
         // returns before upnpc is ever spawned, which is what keeps this test off a live IGD.
-        var svc = new UpnpService(NullLogger<UpnpService>.Instance);
+        var svc = TestUpnp.Service();
         var instance = new Instance
         {
             Name = "stationeers",
@@ -137,7 +137,7 @@ public sealed class UpnpServiceTests
     [Fact]
     public async Task OpenAsync_returns_Skipped_when_enabled_but_no_ports()
     {
-        var svc = new UpnpService(NullLogger<UpnpService>.Instance);
+        var svc = TestUpnp.Service();
         // Enabled but nothing to forward → a clean no-op (no upnpc call), so Skipped (no event).
         var instance = new Instance
         {
@@ -152,7 +152,7 @@ public sealed class UpnpServiceTests
     [Fact]
     public async Task OpenAsync_explicit_ports_still_gated_off_when_forwarding_disabled()
     {
-        var svc = new UpnpService(NullLogger<UpnpService>.Instance);
+        var svc = TestUpnp.Service();
         // Config is the authority: an external explicit-port open does NOT force-forward a gated-off
         // instance — the gate short-circuits before any upnpc call → Skipped (no event).
         var instance = new Instance { Name = "gated-01", EnablePortForwarding = false, Ports = [] };
@@ -269,5 +269,118 @@ public sealed class UpnpServiceTests
         Assert.Equal("192.168.1.50", m.InternalClient);
         Assert.Equal(27015, m.InternalPort);
         Assert.Equal("my server", m.Description); // a space inside the quoted description is preserved
+    }
+
+    // ---- whether a router answered, and where it answered from ------------------------------------
+    // Discovery output captured from miniupnpc 2.3.3 on hotrod against its Livebox, which lists the same
+    // gateway under two description URLs.
+    private const string DiscoveryListing =
+        "upnpc: miniupnpc library test client, version 2.3.3.\n" +
+        " (c) 2005-2025 Thomas Bernard.\n" +
+        "List of UPNP devices found on the network :\n" +
+        " desc: http://192.168.1.1:62571/4b808ee6/IGDV1/rootDesc.xml\n" +
+        " st: urn:schemas-upnp-org:device:InternetGatewayDevice:1\n" +
+        "\n" +
+        " desc: http://192.168.1.1:62571/4b808ee6/rootDesc.xml\n" +
+        " st: urn:schemas-upnp-org:device:InternetGatewayDevice:1\n" +
+        "\n" +
+        "Found valid IGD : http://192.168.1.1:62571/4b808ee6/ctl/IPConn\n" +
+        "Local LAN ip address : 192.168.1.128\n";
+
+    [Fact]
+    public void RouterAnswered_on_the_found_marker()
+    {
+        Assert.True(UpnpService.RouterAnswered(DiscoveryListing, stderr: ""));
+    }
+
+    [Theory]
+    [InlineData("No IGD UPnP Device found on the network !")]
+    [InlineData("connect: Connection refused\nNo valid UPNP Internet Gateway Device found.")]
+    public void RouterAnswered_refuses_the_no_router_banners_which_arrive_on_stderr(string stderr)
+    {
+        // Captured: both banners go to stderr while stdout carries only upnpc's own header.
+        Assert.False(UpnpService.RouterAnswered(
+            "upnpc: miniupnpc library test client, version 2.3.3.\n", stderr));
+    }
+
+    [Fact]
+    public void RouterAnswered_holds_when_the_router_refused_the_command()
+    {
+        // A delete of a mapping that does not exist exits non-zero with the router plainly reached.
+        Assert.True(UpnpService.RouterAnswered(DiscoveryListing, "UPNP_DeletePortMapping() failed with code : 714"));
+    }
+
+    [Fact]
+    public void TryParseGatewayDescription_keeps_the_first_gateway_served_where_the_chosen_control_url_is()
+    {
+        Assert.Equal(
+            "http://192.168.1.1:62571/4b808ee6/IGDV1/rootDesc.xml",
+            UpnpService.TryParseGatewayDescription(DiscoveryListing));
+    }
+
+    [Fact]
+    public void TryParseGatewayDescription_never_remembers_another_device_on_the_lan()
+    {
+        const string output =
+            "List of UPNP devices found on the network :\n" +
+            " desc: http://192.168.1.40:8200/rootDesc.xml\n" +
+            " st: urn:schemas-upnp-org:device:MediaServer:1\n" +
+            "\n" +
+            " desc: http://192.168.1.77:5000/rootDesc.xml\n" +
+            " st: urn:schemas-upnp-org:device:InternetGatewayDevice:1\n" +
+            "\n" +
+            " desc: http://192.168.1.1:62571/4b808ee6/rootDesc.xml\n" +
+            " st: urn:schemas-upnp-org:device:InternetGatewayDevice:1\n" +
+            "\n" +
+            "Found valid IGD : http://192.168.1.1:62571/4b808ee6/ctl/IPConn\n";
+
+        Assert.Equal("http://192.168.1.1:62571/4b808ee6/rootDesc.xml", UpnpService.TryParseGatewayDescription(output));
+    }
+
+    [Theory]
+    [InlineData("Found valid IGD : http://192.168.1.1:62571/4b808ee6/ctl/IPConn\nLocal LAN ip address : 192.168.1.128\n")]
+    [InlineData(" desc: http://192.168.1.1:62571/4b808ee6/rootDesc.xml\n st: urn:schemas-upnp-org:device:InternetGatewayDevice:1\n")]
+    [InlineData("")]
+    public void TryParseGatewayDescription_is_null_when_the_output_does_not_name_both_halves(string output)
+    {
+        // The first is a call that skipped discovery with -u: it must leave the remembered URL alone.
+        Assert.Null(UpnpService.TryParseGatewayDescription(output));
+    }
+
+    // ---- the remembered address -------------------------------------------------------------------
+
+    [Fact]
+    public void A_remembered_gateway_survives_a_new_process()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "kgsm-wd-gateway-" + Guid.NewGuid().ToString("N"));
+        const string url = "http://192.168.1.1:62571/4b808ee6/IGDV1/rootDesc.xml";
+
+        new UpnpGatewayMemory(path, NullLogger<UpnpGatewayMemory>.Instance).Remember(url);
+
+        Assert.Equal(url, new UpnpGatewayMemory(path, NullLogger<UpnpGatewayMemory>.Instance).Current);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not a url")]
+    [InlineData("file:///etc/passwd")]
+    public void A_gateway_file_that_does_not_hold_an_http_url_remembers_nothing(string content)
+    {
+        string path = Path.Combine(Path.GetTempPath(), "kgsm-wd-gateway-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(path, content);
+
+        Assert.Null(new UpnpGatewayMemory(path, NullLogger<UpnpGatewayMemory>.Instance).Current);
+    }
+
+    [Fact]
+    public void A_gateway_that_cannot_be_persisted_is_still_remembered_for_this_process()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "kgsm-wd-missing-" + Guid.NewGuid().ToString("N"), "upnp-gateway");
+        var memory = new UpnpGatewayMemory(path, NullLogger<UpnpGatewayMemory>.Instance);
+
+        memory.Remember("http://192.168.1.1:62571/4b808ee6/rootDesc.xml");
+
+        Assert.Equal("http://192.168.1.1:62571/4b808ee6/rootDesc.xml", memory.Current);
+        Assert.False(File.Exists(path));
     }
 }

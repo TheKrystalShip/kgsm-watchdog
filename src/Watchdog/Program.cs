@@ -180,6 +180,10 @@ builder.Services.AddSingleton<RunHistoryStore>();
 // UPnP port forwarding: process-lifetime network state the supervisor owns (opens on bring-up,
 // holds across crash-restart, closes on intended stop). Self-gates on enable_port_forwarding.
 builder.Services.AddSingleton<UpnpService>();
+// Whether the router is answering, fed by every upnpc call and reported as this daemon's upnp-router
+// component; and the address it last answered from, which a call retries at when discovery goes silent.
+builder.Services.AddSingleton<UpnpRouterHealth>();
+builder.Services.AddSingleton<UpnpGatewayMemory>();
 // Host firewall: the same process-lifetime shape as UPnP on the other side of the door — UPnP opens the
 // ROUTER, this opens the HOST. The authority (kgsm-firewall) still owns every firewall write; the
 // supervisor only owns the trigger, because it is the only thing that sees a boot-autostart or a

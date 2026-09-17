@@ -183,7 +183,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
     // ---- helpers ------------------------------------------------------------------------------
 
     private ContainerLifecycleIngester NewIngester(WatchdogOptions options, IInstanceService instances)
-        => new(options, instances, new UpnpService(NullLogger<UpnpService>.Instance),
+        => new(options, instances, TestUpnp.Service(),
             new NoClaims(), NullLogger<ContainerLifecycleIngester>.Instance);
 
     /// <summary>No other instance claims any port, so a close here releases whatever it declares.</summary>

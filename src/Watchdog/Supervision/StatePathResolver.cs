@@ -44,6 +44,9 @@ internal sealed class StatePathResolver(WatchdogOptions options, ILogger<StatePa
     /// <summary>The display name each account id was last seen under, per instance.</summary>
     public const string PlayerNamesFile = "player-names.json";
 
+    /// <summary>The description URL the router last answered UPnP discovery from.</summary>
+    public const string UpnpGatewayFile = "upnp-gateway";
+
     /// <summary>
     /// The files carried over from a home-directory layout. The run ledger and the player name index
     /// are absent by design: both are only ever written to the resolved directory, so there is no older

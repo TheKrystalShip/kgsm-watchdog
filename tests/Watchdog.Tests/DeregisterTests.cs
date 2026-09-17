@@ -154,7 +154,7 @@ public sealed class DeregisterTests
             TestState.RunHistory(options),
             recorder,
             recorder.Lifecycle,
-            new UpnpService(NullLogger<UpnpService>.Instance),
+            TestUpnp.Service(),
             new FirewallPortsService(
                 new FirewallPortsServiceTests.FakeFirewall(), NullLogger<FirewallPortsService>.Instance),
             TestState.Sessions(),

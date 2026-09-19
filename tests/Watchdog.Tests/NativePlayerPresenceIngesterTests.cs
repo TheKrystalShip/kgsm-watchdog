@@ -306,8 +306,8 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         string log = MakeInstanceWithLog("valheim", "valheim-test", "");
         var fake = new FakeInstanceService();
         fake.Add(Native("valheim-test", log,
-            joined: @"Got character ZDOID from (?<name>.+?) : (?<key>\d+):\d+",
-            left: @"Destroying abandoned non persistent zdo \d+:\d+ owner (?<key>\d+)"));
+            joined: @"Got character ZDOID from (?<name>.+?) : (?!0:0)(?<key>-?\d+):\d+",
+            left: @"Destroying abandoned non persistent zdo -?\d+:\d+ owner (?<key>-?\d+)"));
 
         var rec = new RecordingJournal();
         var ingester = NewIngester(rec.Journal, fake);
@@ -340,6 +340,46 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.True(rec.Calls[1].IsNull("PlayerAddr"));
         Assert.Equal("651023867", rec.Calls[1].String("SessionKey"));
         Assert.True(rec.Calls[1].IsNull("Reason"));
+    }
+
+    [Fact]
+    public void Valheim_negative_zdoid_session_survives_a_death_and_resolves_its_negative_owner_leave()
+    {
+        // A ZDOID is a signed 32-bit id, so about half of the players a server sees carry a negative
+        // one, and the sign is part of the token on the join line and on the leave line alike. Between
+        // them the server sends the none-ZDOID `0:0` when the character is destroyed and the owner half
+        // again when it respawns — one uninterrupted connection throughout.
+        string log = MakeInstanceWithLog("valheim", "valheim-signed", "");
+        var fake = new FakeInstanceService();
+        fake.Add(Native("valheim-signed", log,
+            joined: @"Got character ZDOID from (?<name>.+?) : (?!0:0)(?<key>-?\d+):\d+",
+            left: @"Destroying abandoned non persistent zdo -?\d+:\d+ owner (?<key>-?\d+)"));
+
+        var rec = new RecordingJournal();
+        var ingester = NewIngester(rec.Journal, fake);
+        ingester.IngestOnce(_root);
+
+        File.AppendAllText(log,
+            "09/19/2026 23:43:53: Got character ZDOID from Heisen : -15285636:1\n" +
+            "09/19/2026 23:46:16: Got character ZDOID from Heisen : 0:0\n" +
+            "09/19/2026 23:46:24: Got character ZDOID from Heisen : -15285636:331\n");
+        ingester.IngestOnce(_root);
+
+        // One arrival: the death sentinel is not a player and the respawn is the same session.
+        Assert.Single(rec.Calls);
+        Assert.Equal("player.joined", rec.Calls[0].Type);
+        Assert.Equal("Heisen", rec.Calls[0].String("PlayerName"));
+        Assert.Equal("-15285636", rec.Calls[0].String("SessionKey"));
+
+        File.AppendAllText(log,
+            "09/20/2026 00:05:14: Destroying abandoned non persistent zdo -15285636:3052 owner -15285636\n" +
+            "09/20/2026 00:05:14: Destroying abandoned non persistent zdo -15285636:331 owner -15285636\n");
+        ingester.IngestOnce(_root);
+
+        Assert.Equal(2, rec.Calls.Count);
+        Assert.Equal("player.left", rec.Calls[1].Type);
+        Assert.Equal("Heisen", rec.Calls[1].String("PlayerName"));
+        Assert.Equal("-15285636", rec.Calls[1].String("SessionKey"));
     }
 
     [Fact]

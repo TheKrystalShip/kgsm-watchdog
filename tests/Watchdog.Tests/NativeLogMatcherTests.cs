@@ -140,7 +140,7 @@ public sealed class NativeLogMatcherTests
     [Fact]
     public void Join_captures_key_alongside_name_valheim_shaped()
     {
-        var m = new NativeLogMatcher(@"Got character ZDOID from (?<name>.+?) : (?<key>\d+):\d+", "");
+        var m = new NativeLogMatcher(@"Got character ZDOID from (?<name>.+?) : (?!0:0)(?<key>-?\d+):\d+", "");
         var r = m.Match("Got character ZDOID from Test : 651023867:1");
 
         Assert.True(r.Emit);
@@ -148,6 +148,15 @@ public sealed class NativeLogMatcherTests
         Assert.Equal("651023867", r.Key);
         Assert.Null(r.PlayerId);
         Assert.Null(r.PlayerAddr);
+
+        // The id is signed, and the sign belongs to the key — a leave line repeats it verbatim.
+        var negative = m.Match("Got character ZDOID from Hyrrokin : -553871022:1");
+        Assert.True(negative.Emit);
+        Assert.Equal("Hyrrokin", negative.PlayerName);
+        Assert.Equal("-553871022", negative.Key);
+
+        // `0:0` is the none-ZDOID a destroyed character reports; the player is still connected.
+        Assert.False(m.Match("Got character ZDOID from Hyrrokin : 0:0").Emit);
     }
 
     [Fact]

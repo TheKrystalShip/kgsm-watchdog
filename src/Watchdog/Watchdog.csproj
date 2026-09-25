@@ -23,7 +23,7 @@
 
     <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
     <AssemblyName>kgsm-watchdog</AssemblyName>
-    <Version>1.47.1</Version>
+    <Version>1.47.2</Version>
 
     <!-- The source-generated [LibraryImport] p/invokes (mkfifo/open/write/setres*uid)
          emit unsafe marshalling stubs; no hand-written unsafe code in the project. -->
@@ -55,8 +55,8 @@
     <!-- Build-only: the descriptor attributes arrive as source and the generator as a tool, and the
          package declares no dependencies, so nothing here reaches the AOT publish. -->
     <PackageReference Include="TheKrystalShip.KGSM.ComponentConfig" Version="3.0.0" PrivateAssets="all" />
-    <PackageReference Include="TheKrystalShip.KGSM.ComponentSurface" Version="1.0.0-dev.6" />
-    <PackageReference Include="TheKrystalShip.KGSM.ComponentSurface.Http" Version="1.0.0-dev.3" />
+    <PackageReference Include="TheKrystalShip.KGSM.ComponentSurface" Version="1.0.0-dev.8" />
+    <PackageReference Include="TheKrystalShip.KGSM.ComponentSurface.Http" Version="1.0.0-dev.5" />
   </ItemGroup>
 
   <ItemGroup>

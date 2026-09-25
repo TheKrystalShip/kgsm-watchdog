@@ -116,6 +116,26 @@
       "pairedApiKey": "Api__WatchdogSocketPath"
     },
     {
+      "key": "surfaceSocketPath",
+      "env": "Watchdog__SurfaceSocketPath",
+      "label": "Own-surface socket",
+      "description": "Unix socket the Control Panel reaches this service's own configuration and journal through. Moving it makes the panel read these settings off disk instead, which still works and cannot apply a change while the service is up.",
+      "group": "socket",
+      "type": "path",
+      "default": "/run/kgsm-watchdog/surface.sock",
+      "risk": "wiring"
+    },
+    {
+      "key": "configOverridePath",
+      "env": "Watchdog__ConfigOverridePath",
+      "label": "Override file",
+      "description": "Where a setting changed in the Control Panel is written. It has to be a file this service's unit loads with EnvironmentFile= — the panel checks, and reports the settings as read-only rather than writing a change nothing would read.",
+      "group": "socket",
+      "type": "path",
+      "default": "/var/lib/kgsm-api/leaf-overrides/watchdog.env",
+      "risk": "wiring"
+    },
+    {
       "key": "socketMode",
       "env": "Watchdog__SocketMode",
       "label": "Control socket permissions",

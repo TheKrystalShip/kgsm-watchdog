@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — this daemon answers for its own configuration, unit and journal (1.47.0)
+
+A second unix socket, `Watchdog__SurfaceSocketPath` (default `/run/kgsm-watchdog/surface.sock`),
+serving the routes every KGSM component serves about itself: what it can be configured with, what
+systemd reports about its unit, its journal and the commands it declares. The node's API relays to it
+rather than reading this daemon's descriptor on its behalf, so the rules that decide what a value
+means are the ones this build ships.
+
+Its own socket rather than the control one, because the API finds it from this component's id alone —
+every unit already provisions `/run/kgsm-<id>/` — and the file's presence is the whole of what says
+this component answers for itself. No gate on it: the socket's filesystem permissions are the
+boundary and nothing else is on it.
+
+A change is written to `Watchdog__ConfigOverridePath`, which has to be a file this unit loads with
+`EnvironmentFile=`. The surface checks, and reports itself read-only naming the file rather than
+writing a change nothing would read.
+
 ### Fixed — a cgroup that cannot be read is no longer a crash, and the daemon has the descriptors it needs (1.46.1)
 
 On hotrod a burst of control-plane clients exhausted the daemon's 1024-descriptor soft limit. Every read

@@ -2,6 +2,8 @@
   "Watchdog": {
     "KgsmPath": "",
     "SocketPath": "/run/kgsm-watchdog/control.sock",
+    "SurfaceSocketPath": "/run/kgsm-watchdog/surface.sock",
+    "ConfigOverridePath": "/var/lib/kgsm-api/leaf-overrides/watchdog.env",
     "SocketMode": "660",
     "CgroupMountPoint": "/sys/fs/cgroup",
     "CgroupBaseName": "kgsm.slice",

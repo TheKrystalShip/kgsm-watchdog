@@ -80,6 +80,24 @@ public sealed class WatchdogSettings
         Risk = ConfigRisk.Wiring, PairedApiKey = "Api__WatchdogSocketPath")]
     public string SocketPath { get; set; } = "/run/kgsm-watchdog/control.sock";
 
+    /// <summary>Unix socket this daemon answers for ITSELF on — its configuration, its unit, its
+    /// journal and the commands it declares. Lives in the same per-service runtime dir, so the node's
+    /// API finds it from this component's id alone and needs no setting of its own.</summary>
+    /// <panel>Unix socket the Control Panel reaches this service's own configuration and journal
+    /// through. Moving it makes the panel read these settings off disk instead, which still works and
+    /// cannot apply a change while the service is up.</panel>
+    [ConfigField("surfaceSocketPath", "Own-surface socket", Group = "socket", Type = ConfigType.Path,
+        Risk = ConfigRisk.Wiring)]
+    public string SurfaceSocketPath { get; set; } = "/run/kgsm-watchdog/surface.sock";
+
+    /// <summary>The env file a configuration change made through the panel is written to.</summary>
+    /// <panel>Where a setting changed in the Control Panel is written. It has to be a file this
+    /// service's unit loads with EnvironmentFile= — the panel checks, and reports the settings as
+    /// read-only rather than writing a change nothing would read.</panel>
+    [ConfigField("configOverridePath", "Override file", Group = "socket", Type = ConfigType.Path,
+        Risk = ConfigRisk.Wiring)]
+    public string ConfigOverridePath { get; set; } = "/var/lib/kgsm-api/leaf-overrides/watchdog.env";
+
     /// <summary>
     /// Permission bits applied to the control socket once it exists, as octal digits (e.g.
     /// <c>"660"</c> — owner+group read/write). The socket can start and kill game servers, so its

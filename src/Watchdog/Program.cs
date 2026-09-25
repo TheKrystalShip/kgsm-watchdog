@@ -11,6 +11,8 @@ using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 using TheKrystalShip.KGSM.Lifecycle;
+using TheKrystalShip.KGSM.ComponentSurface;
+using TheKrystalShip.KGSM.ComponentSurface.Http;
 
 // When THIS IMAGE began, captured before anything else runs.
 //
@@ -113,6 +115,9 @@ if (string.IsNullOrEmpty(options.KgsmPath))
 // daemon restarts forever. The path is AppContext.BaseDirectory for the same reason the settings
 // file is (see AddWatchdogConfiguration): it is the one directory that is correct no matter where
 // the process was started from.
+// The id this component is described and addressed under, everywhere in the ecosystem.
+const string ComponentId = "watchdog";
+
 var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
 {
     Args = args,
@@ -274,7 +279,26 @@ builder.WebHost.ConfigureKestrel(kestrel =>
     if (File.Exists(options.SocketPath))
         File.Delete(options.SocketPath);
     kestrel.ListenUnixSocket(options.SocketPath);
+
+    // What this daemon answers about ITSELF, on a socket of its own. A component owns its
+    // configuration, its unit and its journal wherever it runs and only the transport differs; the
+    // node's API relays over this socket rather than reading the descriptor on this daemon's behalf.
+    //
+    // Its own socket rather than the control one so the API finds it from this component's id alone —
+    // every unit already provisions /run/kgsm-<id>/ — and so the file's presence is the whole of what
+    // says this component answers for itself.
+    if (File.Exists(options.SurfaceSocketPath))
+        File.Delete(options.SurfaceSocketPath);
+    kestrel.ListenUnixSocket(options.SurfaceSocketPath);
 });
+
+// The descriptor this build generated, the host's deploy floors beneath it, the overrides in force,
+// this unit's journal, and the bounce that makes a change take effect — all the shared component
+// library, which lives beside the generator that writes the descriptor it reads.
+builder.Services.AddComponentSurface(new ComponentSurfaceOptions(
+    ComponentSurfacePaths.Descriptor(ComponentId),
+    options.ConfigOverridePath,
+    ComponentSurfacePaths.Commands(ComponentId)));
 
 var app = builder.Build();
 
@@ -298,6 +322,8 @@ app.Lifetime.ApplicationStarted.Register(() =>
     {
         if (OperatingSystem.IsLinux() && File.Exists(options.SocketPath))
             File.SetUnixFileMode(options.SocketPath, options.SocketMode);
+        if (OperatingSystem.IsLinux() && File.Exists(options.SurfaceSocketPath))
+            File.SetUnixFileMode(options.SurfaceSocketPath, options.SocketMode);
     }
     catch (Exception ex)
     {
@@ -324,6 +350,10 @@ app.Lifetime.ApplicationStopping.Register(() =>
     app.Services.GetRequiredService<LeafLifecycle>().MarkStopping(LeafStopReason.Signal));
 
 app.MapWatchdog();
+
+// What this daemon answers about itself, at the routes every component serves them at. No gate: the
+// socket's filesystem permissions are the boundary, and nothing else is on it.
+app.MapGroup("/component").MapComponentSurface();
 app.MapConsole();
 
 // Surface typo'd config: a misspelled Watchdog__* var silently falls back to its default

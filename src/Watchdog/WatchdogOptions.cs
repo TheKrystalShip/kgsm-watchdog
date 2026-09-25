@@ -22,6 +22,14 @@ public sealed class WatchdogOptions
     /// <summary>Control unix domain socket the daemon listens on. <c>Watchdog__SocketPath</c>.</summary>
     public string SocketPath { get; init; } = "/run/kgsm-watchdog/control.sock";
 
+    /// <summary>Unix socket this daemon serves its own surface on.
+    /// <c>Watchdog__SurfaceSocketPath</c>.</summary>
+    public string SurfaceSocketPath { get; init; } = "/run/kgsm-watchdog/surface.sock";
+
+    /// <summary>Where a configuration change made through the Control Panel is written.
+    /// <c>Watchdog__ConfigOverridePath</c>.</summary>
+    public string ConfigOverridePath { get; init; } = "/var/lib/kgsm-api/leaf-overrides/watchdog.env";
+
     /// <summary>
     /// Permission bits applied to the control socket once it exists. <c>Watchdog__SocketMode</c>
     /// (octal, e.g. <c>660</c>). Default <c>0660</c> — owner+group read/write. The socket can
@@ -186,6 +194,8 @@ public sealed class WatchdogOptions
         return new WatchdogOptions
         {
             SocketPath = Or(s.SocketPath, defaults.SocketPath),
+            SurfaceSocketPath = Or(s.SurfaceSocketPath, defaults.SurfaceSocketPath),
+            ConfigOverridePath = Or(s.ConfigOverridePath, defaults.ConfigOverridePath),
             SocketMode = ParseMode(s.SocketMode, defaults.SocketMode),
             KgsmPath = s.KgsmPath?.Trim() ?? string.Empty,
             CgroupMountPoint = Or(s.CgroupMountPoint, defaults.CgroupMountPoint),
@@ -311,6 +321,10 @@ public sealed class WatchdogOptions
 
         Section("Control socket (the security boundary is its filesystem perms)");
         Row("Watchdog__SocketPath", $"[{d.SocketPath}]", "control unix-domain socket path");
+        Row("Watchdog__SurfaceSocketPath", $"[{d.SurfaceSocketPath}]",
+            "unix-domain socket this daemon answers for itself on");
+        Row("Watchdog__ConfigOverridePath", $"[{d.ConfigOverridePath}]",
+            "env file a Control Panel change is written to");
         Row("Watchdog__SocketMode", "[0660]", "octal perms applied to the socket");
 
         Section("Cgroup layout (rarely changed)");

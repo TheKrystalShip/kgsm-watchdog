@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "component": "watchdog",
+  "version": "1.48.0",
+  "actions": [
+    {
+      "id": "config.read",
+      "title": "Read Watchdog settings",
+      "effect": "read",
+      "scope": "node"
+    },
+    {
+      "id": "config.write",
+      "title": "Change Watchdog settings",
+      "effect": "write",
+      "scope": "node"
+    },
+    {
+      "id": "journal.read",
+      "title": "Read Watchdog logs",
+      "effect": "read",
+      "scope": "node"
+    },
+    {
+      "id": "lifecycle.restart",
+      "title": "Restart Watchdog",
+      "effect": "execute",
+      "scope": "node"
+    },
+    {
+      "id": "supervision.read",
+      "title": "See how the supervisor is running this machine's servers",
+      "effect": "read",
+      "scope": "node"
+    }
+  ],
+  "requires": []
+}

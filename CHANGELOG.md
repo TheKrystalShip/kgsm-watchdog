@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the watchdog declares the action a person needs to read it (1.48.0)
+
+`watchdog:supervision.read`, beside the standard configuration, journal and lifecycle actions, in
+`deploy/kgsm-watchdog.leaf.actions.json`, which the deploy and the package install into
+`/var/lib/kgsm/leaves/actions/watchdog.json`. It is what kgsm-api checks before relaying, and declaring
+it is what puts it in the cluster's catalog, where a role can hold it. Builds with
+`TheKrystalShip.KGSM.ComponentConfig` 3.2.0-dev.2.
+
 ### Fixed — a setting whose source this component could not read reports as unknown (1.47.2)
 
 `ComponentSurface` 1.0.0-dev.8 carries whether every declared floor source was actually read, and reads

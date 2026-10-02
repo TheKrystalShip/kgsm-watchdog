@@ -220,7 +220,10 @@ from `kgsm start --force`; it still takes the reservation, and the autostart, th
   `TheKrystalShip.KGSM.ComponentConfig` on every build — so edit the settings class, never the JSON, and
   commit what the build produces. Miss either and the build fails naming the key. The package is
   build-only and declares no dependencies, so the AOT publish is unaffected. Format:
-  `../leaf-config-descriptor.md`; mechanism: `../kgsm-componentconfig/README.md`.
+  `../leaf-config-descriptor.md`; mechanism: `../kgsm-componentconfig/README.md`. The same build writes
+  `deploy/kgsm-watchdog.leaf.actions.json`, the actions a person needs here
+  (`src/Watchdog/ActionDeclarations.cs`, checked by kgsm-api before it relays), which the deploy and the
+  package install beside the descriptor in `leaves/actions/`.
 - **A config-key rename cannot be hot-swapped.** The hot-swap `execv` inherits the live process's
   environment, which predates the rename, so `--selfcheck` on the new binary fails its required-knob
   check and the swap correctly aborts. Deploy those with `--cold`.

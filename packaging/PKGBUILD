@@ -64,6 +64,10 @@ package() {
     # a script, so it can never describe a different build than the one beside it.
     install -Dm644 "${repo}/deploy/kgsm-watchdog.leaf.json" \
         "${pkgdir}/var/lib/kgsm/leaves/watchdog.json"
+    # The actions this daemon declares, beside the descriptor in its actions/ directory under the same
+    # name, where the node reports them.
+    install -Dm644 "${repo}/deploy/kgsm-watchdog.leaf.actions.json" \
+        "${pkgdir}/var/lib/kgsm/leaves/actions/watchdog.json"
     install -Dm644 "${repo}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 
 }

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — built on released packages (1.48.1)
+
+Builds with `TheKrystalShip.KGSM.ComponentConfig` 3.2.0 and serves its surface with
+`ComponentSurface` and `ComponentSurface.Http` 1.0.0. No behaviour changes.
+
 ### Added — the watchdog declares the action a person needs to read it (1.48.0)
 
 `watchdog:supervision.read`, beside the standard configuration, journal and lifecycle actions, in

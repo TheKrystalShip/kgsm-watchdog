@@ -66,7 +66,7 @@ memory `kgsm-watchdog` / `kgsm-cgroup-supervision`.)
   to `IEventService` for create/remove awareness. A new deserialized type must be
   registered in `KgsmJsonContext` (no reflection fallback).
 - **The daemon ACTS; the monitor MEASURES.** kgsm-monitor stays consumer-agnostic,
-  measure-only (keystone §4). The watchdog is a separate resident that *acts*
+  measure-only (`../kgsm-docs/systems/engine/spine.md`). The watchdog is a separate resident that *acts*
   (spawn/kill/restart). They may cooperate (the monitor can read the cgroups the
   watchdog creates), but the watchdog never becomes a metrics source.
 - **Cgroup ops, inverted from the monitor.** The monitor *reads* cgroup v2 files;

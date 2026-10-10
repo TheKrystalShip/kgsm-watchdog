@@ -1,272 +1,101 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+The resident KGSM supervisor daemon, the engine's stateful half and peer of `kgsm`: it owns the
+`kgsm.slice` cgroup, spawns native standalone game servers into per-instance cgroups, holds desired-state
+and does crash-restart and boot-autostart. Clients issue lifecycle verbs over a unix socket. .NET 10,
+Native AOT. The daemon acts where `kgsm-monitor` only measures. Role, contracts and peers:
+`../kgsm-docs/components/kgsm-watchdog.md`; model: `../kgsm-docs/systems/engine/watchdog.md`.
 
-> Workspace context lives in `../CLAUDE.md` (the `tks` umbrella) and the keystone
-> `../system-architecture.md` — read those for the cross-repo dependency spine and ecosystem
-> invariants. This file is kgsm-watchdog-specific. **`PLAN.md` is the design source of truth**;
-> `README.md` is the operator-facing summary.
-
-## What this is
-
-The resident **KGSM supervisor daemon** — the engine's *stateful* half, peer of `kgsm` (the
-stateless bash CLI). It owns the `kgsm.slice` cgroup, spawns **native standalone** game-server
-instances *into* per-instance cgroups, holds desired-state, and does crash-restart + boot-autostart.
-CLI / kgsm-lib / the Discord bot are thin clients issuing lifecycle verbs over a unix socket, so
-KGSM manages non-systemd servers headlessly with **zero per-operation privilege escalation**.
-.NET 10, Native AOT — same shape as `kgsm-monitor`, but **the daemon ACTS where the monitor only
-MEASURES** (it *writes* cgroup v2 files; the monitor reads them). It never becomes a metrics source.
+Repo docs: `PLAN.md` (design), `README.md` (operator summary), `docs/internals.md` (control plane,
+supervisor, boot sequence, spawn, hosted services, state files).
 
 ## Build / test / publish
 
 ```bash
-dotnet build  kgsm-watchdog.slnx                                    # note: .slnx, not .sln
+dotnet build  kgsm-watchdog.slnx                                    # .slnx, not .sln
 dotnet test   kgsm-watchdog.slnx
 dotnet test   kgsm-watchdog.slnx --filter "FullyQualifiedName~CgroupManagerTests"   # one class/test
-dotnet publish src/Watchdog/Watchdog.csproj -c Release -r linux-x64 # AOT — expect 0 IL2026/IL3050/ILC warnings
+dotnet publish src/Watchdog/Watchdog.csproj -c Release -r linux-x64 # AOT: expect 0 IL2026/IL3050/ILC warnings
 ```
 
-The AOT publish (or a clean `dotnet build`) must stay **0-warning**: any `IL2026`/`IL3050`/`ILC`
-warning means something reaches for reflection and will fail at runtime, not compile time. This
-project (and its kgsm-lib dependency) is `IsAotCompatible` with no reflection fallback.
+The AOT publish (or a clean `dotnet build`) stays warning-free: an `IL2026`/`IL3050`/`ILC` warning means
+something reaches for reflection and fails at runtime. The project and its kgsm-lib dependency are
+`IsAotCompatible` with no reflection fallback.
 
-> The test project hand-rolls `IInstanceService` fakes (e.g. `HotSwapCoordinatorTests.EmptyInstances`,
-> the shared `FakeInstanceService`) that implement the *whole* interface, so a
-> kgsm-lib bump that adds an interface member breaks test compilation until each fake gains the new
-> member (the daemon source can build clean meanwhile). The kgsm-lib source is at `../kgsm-lib`.
+The test project hand-rolls `IInstanceService` fakes (`HotSwapCoordinatorTests.EmptyInstances`, the shared
+`FakeInstanceService`) implementing the whole interface, so a kgsm-lib bump that adds an interface member
+breaks test compilation until each fake gains it, while the daemon source still builds.
 
-## Deploy & live validation
+## Deploy and live validation
 
-This is a **live dev host** (see `../CLAUDE.md`): bounce the daemon freely; **prefer Factorio/Terraria**
-for spawn tests. systemd-only, one canonical unit (`deploy/kgsm-watchdog.service`): `User=`/`Group=`
-(the invoking user), `Slice=kgsm.slice`, `Delegate=yes`.
+Bounce the daemon freely; prefer Factorio or Terraria for spawn tests. One canonical unit,
+`deploy/kgsm-watchdog.service` (`Slice=kgsm.slice`, `Delegate=yes`).
 
 ```bash
-./deploy/setup.sh            # ONCE per host — asks for sudo; provisions and verifies the headless grant
-./deploy/deploy.sh           # HOT-swap if running (zero-downtime SIGHUP re-exec), else COLD install
-./deploy/deploy.sh --cold    # force stop → install → start
+./deploy/setup.sh            # once per host; asks for sudo, provisions and verifies the headless grant
+./deploy/deploy.sh           # hot-swap if running (zero-downtime SIGHUP re-exec), else cold install
+./deploy/deploy.sh --cold    # force stop, install, start
 ```
 
-- **HOT** (default when the service is active): the new binary is `--selfcheck`'d, atomically
-  `rename(2)`'d onto the live path, then `systemctl reload` (SIGHUP) makes the daemon `execv` the new
-  image **in place — same PID** — carrying each game's stdin-FIFO fd across, so no supervised game
-  restarts and no console EOF. Verified by a new `/version` + an **unchanged** `MainPID`.
-- **`deploy.sh` needs no privilege at all.** `/opt/kgsm-watchdog` is yours (so installing a binary is
-  a plain file write), the real unit lives in **user-owned** `/etc/kgsm-watchdog/systemd/` with
-  `/etc/systemd/system/kgsm-watchdog.service` symlinked to it (so a unit change is also a plain file
-  write), and the `systemctl` verbs — including the hot-swap `reload` — go through a polkit rule
-  scoped to this project's units. `setup.sh` provisions all of that once, asking for sudo, and ends
-  by verifying the grant with the same unprivileged calls `deploy.sh` makes. `deploy.sh` refuses
-  **before building** with *"run `deploy/setup.sh`"* on an unprovisioned host. If some *other* op
-  needs root, **stop and ask** — don't reintroduce `sudo` here.
-- The three files in `deploy/` (`deploy-common.sh` + the two entry points) are self-contained: a
-  standalone clone deploys with no other repo checked out. Every `kgsm-*` repo carries the same
-  pattern, so what you learn here transfers.
-- `deploy/validate-increment*.sh` are root-run end-to-end harnesses (persist → adopt → respawn → prune
-  across real daemon restarts against a live game server). They are the regression net for boot/cgroup
-  behavior that unit tests can't reach.
+- Hot-swap: the new binary is `--selfcheck`ed, atomically `rename(2)`d onto the live path, and
+  `systemctl reload` makes the daemon `execv` it in place with the same PID, carrying each game's
+  stdin-FIFO fd across. Verify with the new `/version` and an unchanged `MainPID`.
+- `deploy.sh` needs no privilege: `/opt/kgsm-watchdog` and the unit directory are yours and the
+  `systemctl` verbs go through a scoped polkit rule. If another operation needs root, stop and ask;
+  never reintroduce `sudo` here. The mechanism: the `deploying` skill.
+- `deploy/validate-increment*.sh` are root-run end-to-end harnesses (persist, adopt, respawn, prune
+  across real daemon restarts against a live game server): the regression net for boot and cgroup
+  behaviour that unit tests cannot reach.
 
-## Control plane (HTTP/1.1 over the unix socket)
+## Invariants for editing
 
-FS perms on the socket are the only security boundary (auth lives in the surfaces above). No TCP port.
-
-```bash
-S=/run/kgsm-watchdog/control.sock
-curl --unix-socket $S http://x/health            # readiness: 200 ready / 503 + {ready,detail}
-curl --unix-socket $S -X POST http://x/start/my-server   # 200 started / 507 no room / 409 failed
-curl --unix-socket $S -X POST 'http://x/maintenance/begin/my-server?origin=scheduler'  # park / release
-curl --unix-socket $S http://x/status/my-server  # ...also /list, /stop/{n}, /version
-curl --unix-socket $S http://x/players           # every instance: its detection + who is connected
-```
-
-`/health` is the unified ecosystem probe — **`200` only when in-slice and able to spawn**; treat
-anything else as "unavailable, retry". `start`/`restart` separate a **capacity refusal (`507`)** from
-a failure (`409`) on the status line, because the kgsm CLI's transport reads the code and discards
-the body; the body says the same thing in `ActionResult.refusal` for callers that read JSON, and
-kgsm maps the `507` to `EC_INSUFFICIENT_MEMORY` so both engine halves refuse with one code.
-**`POST /maintenance/begin|end/{name}?origin=<leaf>`** is the park a leaf runs disruptive work behind:
-the normal graceful drain with desired-state left `running`, so crash-restart is suppressed by the
-phase (`maintenance`) and the failure streak and give-up latch come out as they went in. The work
-happens between the two calls and never inside the supervisor's gate. `Watchdog__MaintenanceMaxMinutes`
-releases a park nothing else releases, and a park predating this daemon's start is released at boot —
-so a leaf that dies mid-sequence costs a window, never a server.
-**`POST /start/{name}?force=true`** is the only way past that check — a person's override, carried
-from `kgsm start --force`; it still takes the reservation, and the autostart, the crash-restart and
-`/restart` never set it. The daemon supervises native-standalone instances only; it
-**no-ops on systemd/container** instances (owned by systemd / Docker).
-
-## Architecture — the parts that span files
-
-- **`InstanceSupervisor` is the brain and the single decision point.** Every state transition — both
-  the control verbs (`start`/`stop`) *and* the periodic `Reconcile()` — lives here, under one
-  `SemaphoreSlim` gate, so a timer and an exit-handler never race the same state (the classic
-  supervisor bug). `CrashWatcher` is *just the clock*: a 1 Hz `PeriodicTimer` that calls
-  `Reconcile()`. Reconcile **try-acquires** the gate and skips the tick if a verb holds it (never
-  blocks behind a graceful-stop drain). Reads (`status`/`list`) are lock-free over a
-  `ConcurrentDictionary`.
-- **Detection vs. intent are separate axes.** *Detection* = a cgroup emptied (`cgroup.events`
-  populated→0) while still desired-running — child-inclusive and race-free. *Intent* =
-  `SupervisedInstance.DesiredRunning`, which a deliberate `stop` clears. The durable
-  `SupervisedInstance` (keyed by name) **outlives** the live `RunningInstance` so the restart counter
-  and phase (`running`/`restart-pending`/`stopped`/`failed`) survive the down-window. Restart =
-  `BackoffPolicy` (exponential + give-up at `MAX_RETRIES` → `phase=failed`; streak resets after
-  `STABILITY_SEC`). Default policy `always` (game exit codes are unreliable — many exit 0 on crash);
-  `on-failure` leaves clean code-0 exits stopped.
-- **Boot & privilege: systemd cgroup delegation, never a root step.** systemd creates `kgsm.slice` +
-  `kgsm.slice/kgsm-watchdog.service`, enables controllers, and chowns the service subtree to the user.
-  `CgroupBootstrap` then (1) **discovers** the delegated base from `/proc/self/cgroup` — never a
-  hardcoded `kgsm.slice`; (2) **enters** a `supervisor` leaf (cgroup v2 forbids `subtree_control` on a
-  cgroup holding processes); (3) **enables controllers** on the now-empty base. Per-instance cgroups
-  are `kgsm.slice/kgsm-watchdog.service/<inst>` — **under the service, not siblings under the slice**:
-  systemd reconciles a slice's own `subtree_control` on every `daemon-reload` and would strip
-  `memory`/`pids`/`io` off siblings, leaving their accounting files reading `0`. Bootstrap
-  failure sets `SupervisorState.Ready=false` (with a reason on `/start` and `/health`) rather than
-  crashing.
-- **`KillMode=process` is load-bearing.** Games live *under* the service cgroup, so `control-group`
-  kill would SIGKILL them on every `systemctl stop/restart`. `process` kills only the daemon; games
-  keep running and the next daemon **re-adopts** them. (Caveat: a daemon *cold* restart re-charges a
-  surviving game's `memory.current` from zero until its next restart — inherent to cgroup v2; hot-swap
-  and host reboot are unaffected.)
-- **Spawn = self-move launcher.** `SpawnEngine` forks a `/bin/sh -c` launcher that does
-  `echo $$ > <inst>/cgroup.procs` **before** `exec` — so the game and every child it forks are born
-  inside the cgroup (containment-correct, not spawn-then-migrate). The daemon holds the stdin FIFO
-  (`Instance.SocketFile`) open `O_RDWR` itself — **no `tail` keepalive process**; stdout appends to
-  `Instance.LogFile`.
-- **Three roles, all hosted services.** (a) *Native supervision* — the acting role above.
-  (b) *Player-presence ingesters* (`PlayerPresenceIngester` for containers, `NativePlayerPresenceIngester`
-  for native, `RconPlayerPresencePoller` for games that log connects but not disconnects) — pure
-  observers that re-emit player join/left as kgsm wire events (`origin=system`) into the shared
-  `PlayerSessionStore`. These never shell docker, never supervise; they're additive and decoupled from
-  supervision. **Whether an instance is observed at all is `PlayerDetection`'s answer and only its** —
-  the ingesters gate on it and `GET /players` reports it, so the daemon cannot poll a roster it calls
-  unobservable. It is not a predicate a consumer can re-derive: it spans log patterns, RCON
-  (port + password + command) and whether each pattern *compiles*, which is why the endpoint hands the
-  verdict out rather than leaving every surface to guess from the same config.
-  (c) *`UpnpReconciler`* — restores router forwards the IGD dropped under a running instance. Its own
-  timer (`Watchdog__UpnpReconcileSeconds`, default 300, `0` off) rather than a sub-cadence of the 1 Hz
-  supervision loop, because a sweep is a multi-second network round trip and that loop holds the gate;
-  it needs no gate itself, reading the instance table lock-free like `/status` does. **A router that
-  cannot be reached means the sweep does nothing** — an unreadable redirection table is not evidence
-  of an empty one, and the whole design rests on not confusing the two. **Doing nothing is not saying
-  nothing:** every `upnpc` call goes through `UpnpService.RunAgainstRouterAsync`, which reports whether
-  a router answered to `UpnpRouterHealth` — calls unanswered across 15 minutes mark the `upnp-router`
-  component degraded, the first answer recovers it, and the sweep keeps listing while it stands so
-  the recovery is observed. The same path retries a call whose discovery got no answer at the router's
-  last description URL (`UpnpGatewayMemory`, `upnpc -u`).
-- **Hot-swap entrypoints run before anything binds.** `--version` / `--selfcheck` (in `Program.cs`,
-  before the host is built) let a deploy interrogate a freshly-installed binary as a cheap subprocess
-  **without** binding the socket, entering the slice, or touching cgroups. `HotSwapCoordinator` +
-  `HotSwapSignalListener` bridge SIGHUP → in-place `execv`. SIGTERM is a normal shutdown.
-- **Persistence: the state directory, and two independent axes.**
-  `desired-state.json` (`Watchdog__StateFile`) = the **boot/enable** axis:
-  `enable`/`disable` add/remove a name; on startup `StartupRestorer` re-adopts a
-  still-live cgroup or respawns a dead one. Stores **intent only** — each spawn config is re-read fresh
-  from kgsm-lib, so no stale-spec drift. `supervision-state.json` (`SupervisionStateStore`) persists
-  restart counters / the give-up latch so they survive *any* death (OOM/SIGKILL), not just a planned
-  hot-swap. The runtime `start`/`stop` axis is separate from the boot `enable`/`disable` axis.
-  `run-history.json` (`RunHistoryStore`) records how each run ended, so a crash can be joined to the
-  console file that holds its output; `player-names.json` (`PlayerNameStore`) holds each instance's
-  `accountId → display name`, which is what lets a join event carry a name on a game that prints one
-  only on disconnect. `readiness-state.json` (`ReadinessStateStore`) records which RUN each instance was
-  last announced ready for, because `instance-ready` is a transition and the daemon infers it from its
-  own first sight of a populated cgroup — an inference that repeats on every daemon start for a server
-  that never stopped. `upnp-gateway` (`UpnpGatewayMemory`) is one line: the description URL the router
-  last answered discovery from, persisted because the outage it serves can outlast a deploy. All resolve
-  their location through `StatePathResolver`.
-
-## Project-specific invariants
-
-- **kgsm-lib is the only path to KGSM, and READ-ONLY here.** `PackageReference
-  TheKrystalShip.KGSM.Lib`. The watchdog uses it to *read* instance spawn config
-  (`IInstanceService.GetInstanceInfo`) and watch lifecycle events — **never to start/stop** (that path
-  spawns detached, outside this daemon's cgroups). Never shell `kgsm.sh` directly. (kgsm,
-  conversely, routes its native `start/stop` *to* this daemon via `commands/handlers/watchdog.sh` when
-  the socket is present.)
-- **Reflection-free JSON, or it throws at runtime.** Every (de)serialized type must be registered in
-  `Model/WatchdogJsonContext.cs` (source-gen). An unregistered type throws `NotSupportedException` at
-  runtime — there is no reflection fallback. This is what lets the daemon ship as AOT.
-- **Never fabricate state.** A status is measured (cgroup / `/proc`) or explicitly "unknown" — never
-  invented. A cgroup read that fails is `CgroupPopulation.Unknown`, never empty: `IsPopulated` treats it
-  as occupied (every act on emptiness — a crash, a purge, a spawn — destroys or duplicates something),
-  and the reconcile tick decides nothing on it. The daemon raises its soft open-file limit to the hard
-  limit at startup, because exhausting it is what makes every read fail; games are put back to 1024 by
-  the spawn launcher. A run's age is one of these: `SupervisedInstance.SpawnedAt` is when THIS daemon took charge
-  (the grace window and stability reset are measured from it, so it restarts at every adoption), while
-  `RunStartedAt` is the leader's own start read from `/proc` via `ProcessStartClock`. `/status`,
-  `/runtimes` and the run ledger report the latter, and report null when the leader cannot be read —
-  reporting the supervision clock as an uptime would date a days-old server to the last deploy.
-- **GC is tuned for an idle supervisor, deliberately.** `Watchdog.csproj` forces **Workstation,
-  non-concurrent GC** (overriding the Web SDK's Server-GC default, which reserved a heap per core →
-  ~100 MB idle RSS). `MemoryTrimmer` (hosted service) hands free pages back to the OS after activity
-  bursts, growth-gated so a genuinely idle daemon just ticks. Don't flip these back to defaults.
-- **Naming:** project `kgsm-watchdog`; namespace `TheKrystalShip.KGSM.Watchdog`; assembly
-  `kgsm-watchdog`; config section `Watchdog`, so env overrides are `Watchdog__*`. Only
-  `Watchdog__KgsmPath` is required.
-- **`kgsm-watchdog.settings.json` is the source of truth for every knob** (the ecosystem names these
-  `kgsm-<leaf>.settings.json`, never `appsettings.json`). It is loaded explicitly from
-  `AppContext.BaseDirectory` because the slim builder under systemd has no working directory and
-  default discovery finds nothing. An environment variable overrides one key of it; a variable naming
-  an undeclared key binds to nothing and is logged at startup as a probable typo.
-- **`AddEnvironmentVariables()` runs after the settings file, and the order is load-bearing.**
-  Configuration resolves by source order, so a file registered after the environment provider
-  outranks it and an override reads as applied while changing nothing. `AddWatchdogConfiguration`
-  owns that order and is used by both the pre-host reads (`--selfcheck`, the required-knob check)
-  and the host, so the two cannot diverge.
-- **`KnownEnvVars` is derived from `WatchdogSettings`, not hand-listed** — adding a property is the
-  only step needed to make a knob real, documented in `--help`, and exempt from the typo warning.
-- **A knob lives in two places**: a `WatchdogSettings` property carrying `[ConfigField]` and a
-  `<panel>` doc tag, and a key in `kgsm-watchdog.settings.json`. `deploy/kgsm-watchdog.leaf.json` is
-  **generated** from the first, with defaults read from the second, by
-  `TheKrystalShip.KGSM.ComponentConfig` on every build — so edit the settings class, never the JSON, and
-  commit what the build produces. Miss either and the build fails naming the key. The package is
-  build-only and declares no dependencies, so the AOT publish is unaffected. Format:
-  `../leaf-config-descriptor.md`; mechanism: `../kgsm-componentconfig/README.md`. The same build writes
-  `deploy/kgsm-watchdog.leaf.actions.json`, the actions a person needs here
-  (`src/Watchdog/ActionDeclarations.cs`, checked by kgsm-api before it relays), which the deploy and the
-  package install beside the descriptor in `leaves/actions/`.
-- **A config-key rename cannot be hot-swapped.** The hot-swap `execv` inherits the live process's
-  environment, which predates the rename, so `--selfcheck` on the new binary fails its required-knob
-  check and the swap correctly aborts. Deploy those with `--cold`.
+- **kgsm-lib is the only path to KGSM, and read-only here.** The watchdog reads instance spawn config
+  (`IInstanceService.GetInstanceInfo`) and watches lifecycle events; it never starts or stops through
+  kgsm-lib (that path spawns detached, outside this daemon's cgroups) and never shells `kgsm.sh`.
+- **Reflection-free JSON.** Every (de)serialized type is registered in `Model/WatchdogJsonContext.cs`; an
+  unregistered type throws `NotSupportedException` at runtime.
+- **Never fabricate state.** A status is measured (cgroup, `/proc`) or "unknown". A failed cgroup read is
+  `CgroupPopulation.Unknown`, never empty. A run's age is `RunStartedAt` from `/proc`, never the
+  supervision clock `SpawnedAt`. Details: `docs/internals.md`.
+- **`InstanceSupervisor` is the single decision point.** Every state transition runs under its gate;
+  `CrashWatcher` is only the clock. New transitions go there.
+- **`KillMode=process` is load-bearing**: games live under the service cgroup and survive a daemon stop.
+- **GC is tuned for an idle supervisor.** `Watchdog.csproj` forces Workstation, non-concurrent GC and
+  `MemoryTrimmer` returns free pages after bursts. Do not flip these to defaults.
+- **Naming:** namespace `TheKrystalShip.KGSM.Watchdog`, config section `Watchdog` (env overrides are
+  `Watchdog__*`; only `Watchdog__KgsmPath` is required).
+- **`kgsm-watchdog.settings.json` is the source of truth for every knob**, loaded explicitly from
+  `AppContext.BaseDirectory`. A variable naming an undeclared key binds to nothing and is logged at
+  startup as a probable typo.
+- **`AddEnvironmentVariables()` runs after the settings file, and the order is load-bearing**: a file
+  registered after the environment provider outranks it. `AddWatchdogConfiguration` owns the order for
+  both the pre-host reads (`--selfcheck`, the required-knob check) and the host.
+- **`KnownEnvVars` is derived from `WatchdogSettings`.** Adding a property is the only step that makes a
+  knob real, documented in `--help` and exempt from the typo warning.
+- **A knob lives in two places**: a `WatchdogSettings` property carrying `[ConfigField]` and a `<panel>`
+  doc tag, and a key in `kgsm-watchdog.settings.json`. `deploy/kgsm-watchdog.leaf.json` is generated from
+  them on every build, so edit the settings class, never the JSON, and commit what the build produces.
+  The same build writes `deploy/kgsm-watchdog.leaf.actions.json` from `src/Watchdog/ActionDeclarations.cs`.
+- **A config-key rename cannot be hot-swapped** (the `execv` inherits the old environment, so
+  `--selfcheck` fails the required-knob check). Deploy those with `--cold`.
 
 ## Version tracking
 
-- **Version source:** `<Version>` in `src/Watchdog/Watchdog.csproj`
-- **Packaging reads it via `deploy/version.sh`** — `./deploy/version.sh` prints the declared version, `--pkgver` prints the pacman-safe form. A package never restates a version number; it asks for one.
-- Bump the version whenever you make a user-facing change (new feature, bug fix, behaviour change). Patch for fixes, minor for new features, major for breaking changes.
-- Update `CHANGELOG.md` under `## [Unreleased]` with a brief entry for every meaningful change.
-- A git tag matching the new version should be created on release: `git tag v<version>`.
+- The version is `<Version>` in `src/Watchdog/Watchdog.csproj`; packaging reads it with
+  `./deploy/version.sh` (`--pkgver` for the pacman form).
+- Bump it for every user-facing change: patch for fixes, minor for features, major for breaking changes.
+- Add a `CHANGELOG.md` entry under `## [Unreleased]` for every meaningful change.
+- Tag the bump commit `git tag -a v<version> -m "kgsm-watchdog v<version>"`.
 
-## Documentation & comments: present-tense canon only
+## Read before changing
 
-Prose in this repo — every doc, `README`/`CLAUDE.md` section, and in-code comment — describes
-**how the thing works right now**, nothing else. History lives in the `CHANGELOG` and git
-history; never duplicate it into docs or code.
+- `../kgsm-docs/systems/engine/watchdog.md`: the daemon's role and the control socket contract.
+- `../kgsm-docs/systems/operations/maintenance-windows.md` and `reference/maintenance-windows.md`: the park.
+- `../kgsm-docs/systems/operations/firewall-and-ports.md`: router forwards and the firewall authority.
+- `../kgsm-docs/reference/leaf-config-descriptor.md` and `systems/components/`: the descriptor and action
+  declarations; mechanism in `../kgsm-componentconfig/README.md`.
+- `../kgsm-docs/reference/logging-convention.md`.
+- `../kgsm-docs/decisions/0022-watchdog-is-the-resident-exception.md`.
 
-- **No transitions.** Never "was X, now Y", "used to…", "changed from…", "no longer…", or any
-  before/after framing. State the current rule flat: a sentence that only makes sense to a reader
-  who knows what the code *used to* do is dead weight, because that "before" no longer exists
-  anywhere in the code.
-- **Tombstones leave no marker.** When something is removed — dying naturally as part of the work,
-  or explicitly asked to be deleted — the removal is silent: no *"removed X"*, no *"X is gone"*,
-  no *"deprecated, use Y instead"* pointing at a corpse. The prose reads as if it never was. Code
-  kept while the thing that justified it was deleted gets a live present-tense reason to exist —
-  or goes too.
-- **No residue of the active work.** References only meaningful *during* a piece of work don't
-  survive it: *"temporary shim for the rework"*, *"added to satisfy the new requirement"*,
-  milestone/phase labels (*"per M2"*, *"the Phase 1 step"*). If a line's justification is the work
-  that produced it rather than the system as it now stands, it goes.
-- **No volatile numbers.** Counts and versions that drift — how many projects/files/tests/
-  partials exist, a dependency's pinned version, a file's line count — never go in prose: they are
-  stale the moment anything changes, and nothing fails to remind anyone. Name the authoritative
-  source instead (the csproj, the directory, the barrel file). A number belongs in prose only when
-  it *is* the contract (a port, a timeout, a cap) or a measured fact that is itself the reason a
-  design exists.
-- **Edits are replacements, not appends.** When changing an existing feature, rewrite the affected
-  doc/comment fresh as if writing it for the first time — never append a correction under the
-  stale version, and never leave the stale version standing beside the new. The current revision
-  does not converse with prior revisions.
-
-A reader six months from now should learn the system from the doc without knowing what it
-replaced. If you catch yourself explaining a change, stop — that sentence belongs in the commit
-message. When touching prose that already violates this, rewrite it to present-tense canon in
-passing.
+Docs and comments describe the system as it is now: present tense, no history, no emoji, no volatile
+numbers (workspace `../CLAUDE.md`).

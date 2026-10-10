@@ -43,7 +43,7 @@ HEALTH_TRIES="${HEALTH_TRIES:-30}"
 # This project's leaf config descriptor — the JSON declaring its full configurable surface, which
 # kgsm-api reads to render the Control Panel's config page for this leaf. setup.sh creates the
 # discovery directory; deploy.sh installs the file there unprivileged on every deploy, so the
-# descriptor can never be older than the binary it describes. Format: tks/leaf-config-descriptor.md.
+# descriptor can never be older than the binary it describes. Format: kgsm-docs/reference/leaf-config-descriptor.md.
 # Leave empty for a project that is not a leaf (nothing is installed and nothing is asserted).
 LEAF_DESCRIPTOR="${REPO_DIR}/deploy/${PROJECT}.leaf.json"
 

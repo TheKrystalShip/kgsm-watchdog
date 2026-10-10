@@ -9,7 +9,7 @@
 > breaks KGSM's historical "stateless / no warm process" rule — accepted
 > eyes-open, because the daemon **is** the watchdog the project always wanted.
 >
-> **Logging** follows the ecosystem convention (`../logging-convention.md`):
+> **Logging** follows the ecosystem convention (`../kgsm-docs/reference/logging-convention.md`):
 > `Microsoft.Extensions.Logging` → `AddSystemdConsole()` (journald `<N>` priority prefix),
 > levels from `kgsm-watchdog.settings.json` `Logging` + env (`Logging__LogLevel__Default`, default
 > `Information`). The settings file is renamed from `appsettings.json` (collision-proof across the
@@ -896,4 +896,6 @@ the game had even re-loaded its save.
 - monitor conventions to mirror → `kgsm-monitor/PLAN.md`, `src/Monitor/*`
 - kgsm-lib consumable API → `kgsm-lib/CLAUDE.md`, `Core/Models/Instance.cs`,
   `Core/Interfaces/*`, `Json/KgsmJsonContext.cs`
-- ecosystem topology + invariants → `system-architecture.md` (the keystone)
+- ecosystem topology + invariants → `../kgsm-docs/architecture/README.md`; the daemon's role →
+  `../kgsm-docs/systems/engine/watchdog.md`
+- how the code is put together → `docs/internals.md`

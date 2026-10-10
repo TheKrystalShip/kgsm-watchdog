@@ -128,7 +128,7 @@ var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
 // diverge. See AddWatchdogConfiguration for why the path and the ordering are what they are.
 AddWatchdogConfiguration(builder.Configuration);
 
-// Ecosystem-standard logging (see ../tks/logging-convention.md): one journald-native SystemdConsole
+// Ecosystem-standard logging (see kgsm-docs/reference/logging-convention.md): one journald-native SystemdConsole
 // sink (the <N> syslog priority prefix lets `journalctl -p` filter by level). AddConfiguration binds the
 // "Logging" section from the settings file plus any Logging__LogLevel__Default override — wired
 // explicitly so the level knob is deterministic on the slim builder rather than relying on an implicit

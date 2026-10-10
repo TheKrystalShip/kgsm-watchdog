@@ -1,40 +1,38 @@
 # kgsm-watchdog
 
 The resident **KGSM supervisor daemon**: it owns the `kgsm.slice` cgroup, spawns native
-game-server instances *into* per-instance cgroups, and (from Increment 2) supervises them with
+game-server instances *into* per-instance cgroups, and supervises them with
 crash detection + restart. CLI / kgsm-lib / the Discord bot become thin clients that issue
 lifecycle commands over a unix socket — so KGSM can manage standalone (non-systemd) servers
 headlessly, with **zero per-operation privilege escalation**.
 
 It deliberately breaks KGSM's historical "stateless / no warm process" rule, eyes-open, because
 the daemon **is** the watchdog the project always wanted. See [`PLAN.md`](PLAN.md) for the full
-rationale and increment roadmap, and `../kgsm/docs/specs/cgroup-supervision-plan.md` for the
-cgroup foundation (Increment 0, in the `kgsm` repo).
+rationale and capabilities, and `../kgsm/docs/specs/cgroup-supervision-plan.md` for the
+cgroup foundation (in the `kgsm` repo).
 
-> **Status: Increment 2 — crash detection + restart.** Spawn/stop one native instance into its
-> cgroup over the control socket (Inc 1), and **supervise it**: a 1 Hz crash watcher detects cgroup
+> **Supervision.** Spawn/stop a native instance into its
+> cgroup over the control socket, and **supervise it**: a 1 Hz crash watcher detects cgroup
 > `populated`→0 while desired-running and restarts with **exponential backoff + give-up** (consecutive
 > failures since last stability ≥ maxRetries → `phase=failed`). Restart policy is configurable —
 > **`always`** by default (any exit restarts; only a deliberate `stop` keeps it down), or `on-failure`
 > (leave clean code-0 exits stopped).
 >
-> **Increment 3 — clients + boot integration (done).** kgsm-lib ships a typed
+> **Clients.** kgsm-lib ships a typed
 > `IWatchdogClient`; `kgsm start|stop|restart|is-active` (native standalone) auto-routes to the daemon
-> when present (falling back to direct spawn when absent); three boot variants ship in `deploy/`; and the
-> Discord bot consumes kgsm-lib 1.2.0 (from the local feed) — start/stop/restart route to the daemon
-> transparently via `kgsm.sh`, and a read-only `/supervision` command surfaces the daemon's supervision
-> state. Only the literal Discord-token-in-the-loop run is left to the operator.
+> when present (falling back to direct spawn when absent); and the Discord bot's read-only `/supervision`
+> command surfaces the daemon's supervision state, while its start/stop/restart route to the daemon
+> transparently via `kgsm.sh`.
 >
-> **Increment 5 — boot persistence (done).** The in-house replacement for systemd's
-> `systemctl enable` + `WantedBy=` — and the prerequisite for the planned systemd hard-break. The
+> **Boot persistence.** The replacement for systemd's
+> `systemctl enable` + `WantedBy=`. The
 > enabled-for-boot set is persisted to disk (`Watchdog__StateFile`, default under the KGSM user's
 > data dir) — written by `enable`/`disable` (independent of runtime `start`/`stop`) — and **restored on
 > daemon startup**: an instance whose cgroup is still
 > live (survived a *daemon* restart) is **re-adopted** without a respawn; one whose cgroup is empty (a
 > *host reboot*) is **spawned fresh**. So a reboot brings every previously-running native instance back
-> up, with no systemd unit involved. Unit-verified (55 tests, AOT-clean) and **validated as root against a
-> live `7dtd` server** — `deploy/validate-increment4.sh` exercises persist → adopt → respawn → prune
-> across four real daemon restarts (13/13 checks pass).
+> up, with no systemd unit involved. `deploy/validate-increment4.sh` exercises persist → adopt → respawn →
+> prune across real daemon restarts against a live game server.
 
 ## Architecture (sibling of kgsm-monitor)
 
@@ -127,7 +125,7 @@ systemd creates `kgsm.slice` + the delegated `kgsm.slice/kgsm-watchdog.service` 
 the controllers, and chowns the subtree to the user — so per-instance cgroups (and their
 `memory`/`pids`/`io` controllers) live below the service cgroup and **survive `daemon-reload`**.
 (Children must NOT sit as siblings under `kgsm.slice`: systemd reconciles a slice's own
-`subtree_control` and would strip their controllers — the bug PLAN Increment 8 fixes.)
+`subtree_control` and would strip their controllers; see PLAN section 4.)
 
 **Fully rootless, enforced.** The daemon and every game it spawns run as the unprivileged
 `User=` with **zero capabilities** — no root step, no privilege drop (systemd's `User=` runs
@@ -139,7 +137,7 @@ with `kgsm stop <instance>` — stopping the daemon leaves games running. (One c
 *cold* restart/crash re-charges a surviving game's memory metric from zero until it next
 restarts; hot-swap deploys and host reboots are unaffected — see PLAN §4.)
 
-## Clients (Increment 3)
+## Clients
 
 C# consumers reach the daemon through **kgsm-lib's** typed `IWatchdogClient`
 (`AddKgsmWatchdogClient(socketPath)`) — `start`/`stop`/`status`/`list`/`ready` over the

@@ -295,6 +295,13 @@ public sealed class PerInstanceCrashPolicyTests
     /// <summary>An IInstanceService that returns exactly one configured spec by name.</summary>
     internal sealed class SingleInstance(Instance instance) : IInstanceService
     {
+        /// <summary>The instance config's <c>transfer_lock</c> as the engine answers it: empty when absent.
+        /// Mutable, because the lock changes between calls.</summary>
+        public string TransferLock { get; set; } = "";
+
+        public KgsmResult GetInstanceConfigValue(string instanceName, string key) =>
+            key == "transfer_lock" ? new KgsmResult(0, TransferLock) : new KgsmResult(0, "");
+
         public Instance? GetInstanceInfo(string instanceName) =>
             string.Equals(instanceName, instance.Name, StringComparison.Ordinal) ? instance : null;
         public Dictionary<string, Instance> GetAll() => new() { [instance.Name] = instance };
@@ -334,7 +341,6 @@ public sealed class PerInstanceCrashPolicyTests
         public KgsmResult Save(string instanceName) => throw new NotImplementedException();
         public KgsmResult SendInput(string instanceName, string command, string? actor = null, string? origin = null) => throw new NotImplementedException();
         public KgsmResult FindConfigPath(string instanceName) => throw new NotImplementedException();
-        public KgsmResult GetInstanceConfigValue(string instanceName, string key) => throw new NotImplementedException();
         public KgsmResult SetInstanceConfigValue(string instanceName, string key, string value, string? actor = null, string? origin = null) => throw new NotImplementedException();
         public Task<LogSubscription> SubscribeToLogsAsync(string instanceName, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<LogSubscription> SubscribeToLogsAsync(string instanceName, LogLevel minimumLogLevel, bool includeRawLines = true, CancellationToken cancellationToken = default) => throw new NotImplementedException();

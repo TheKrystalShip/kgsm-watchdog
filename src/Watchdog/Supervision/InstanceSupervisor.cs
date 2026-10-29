@@ -70,6 +70,8 @@ internal sealed class InstanceSupervisor(
     /// comes back promptly once another server stops, long enough that a permanently-full node is not
     /// re-reading /proc/meminfo every tick.
     /// </remarks>
+    private const string TransferLockKey = "transfer_lock";
+
     private static readonly TimeSpan NoRoomRecheckDelay = TimeSpan.FromSeconds(30);
 
     // PIDs of hot-swap-ADOPTED instances we must reap ourselves. A game that survives a same-PID execve
@@ -102,6 +104,27 @@ internal sealed class InstanceSupervisor(
     // ---- control verbs ----------------------------------------------------------------------
 
     /// <summary>
+    /// Refuses an instance held by an instance transfer. The lock is the instance config's
+    /// <c>transfer_lock</c> key, a token the engine writes when an export takes the instance and removes
+    /// when it releases it. It is read from the engine on every call and never cached, because it changes
+    /// between calls. An unreadable config is a plain failure, never a pass: starting an instance whose
+    /// lock cannot be read could run it in two places.
+    /// </summary>
+    /// <returns>The refusal, or <see langword="null"/> when the instance is not locked.</returns>
+    private ActionResult? CheckTransferLock(string name)
+    {
+        var read = instances.GetInstanceConfigValue(name, TransferLockKey);
+        if (read.IsFailure)
+            return new ActionResult(name, false, $"transfer lock unreadable: {read.Stderr.Trim()}");
+
+        return string.IsNullOrWhiteSpace(read.Stdout)
+            ? null
+            : new ActionResult(name, false,
+                $"the instance is locked by an instance transfer ({TransferLockKey} is set)",
+                ActionRefusal.InstanceLocked);
+    }
+
+    /// <summary>
     /// Start an instance: spawn it into a fresh cgroup and confirm it entered.
     /// </summary>
     /// <param name="name">The instance to start.</param>
@@ -122,6 +145,9 @@ internal sealed class InstanceSupervisor(
     {
         if (!state.Ready)
             return new ActionResult(name, false, $"supervisor not ready: {state.Detail}");
+
+        if (CheckTransferLock(name) is { } locked)
+            return locked;
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -345,6 +371,10 @@ internal sealed class InstanceSupervisor(
     /// </param>
     public async Task<ActionResult> RestartAsync(string name, string requester = "scheduler", CancellationToken ct = default)
     {
+        // Checked before the stop: a restart of a locked instance stops nothing.
+        if (CheckTransferLock(name) is { } locked)
+            return locked;
+
         var stopResult = await StopAsync(name, ct).ConfigureAwait(false);
         if (!stopResult.Ok)
             return new ActionResult(name, false, $"restart aborted — stop failed: {stopResult.Message}");

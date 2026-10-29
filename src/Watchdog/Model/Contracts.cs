@@ -34,6 +34,10 @@ public static class ActionRefusal
     /// <summary>The node has no room: what this instance needs, plus what is already committed to the
     /// instances currently starting, would leave the node under the headroom floor.</summary>
     public const string NoRoom = "no_room";
+
+    /// <summary>The instance is held by an instance transfer: its config carries a non-empty
+    /// <c>transfer_lock</c>, so it stays stopped until the lock is released.</summary>
+    public const string InstanceLocked = "instance_locked";
 }
 
 /// <summary>

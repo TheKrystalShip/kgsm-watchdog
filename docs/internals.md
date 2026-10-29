@@ -25,6 +25,11 @@ curl --unix-socket $S http://x/players           # every instance: its detection
   line, because the kgsm CLI's transport reads the code and discards the body. The body says the same
   thing in `ActionResult.refusal` for callers that read JSON, and kgsm maps `507` to
   `EC_INSUFFICIENT_MEMORY`, so both engine halves refuse with one code.
+- `start` and `restart` refuse an instance locked by an instance transfer: `409` with
+  `refusal: "instance_locked"`. The lock is the instance config's `transfer_lock` key, read through
+  `IInstanceService.GetInstanceConfigValue` on every call and never cached. `InstanceSupervisor.StartAsync`
+  checks it before taking its gate and `RestartAsync` before its stop, so a restart of a locked instance
+  stops nothing. A config the engine cannot read is a plain failure (`409`, no refusal), never a pass.
 - `POST /maintenance/begin|end/{name}?origin=<leaf>` is the park a leaf runs disruptive work behind: the
   normal graceful drain with desired-state left `running`. Crash-restart is suppressed by the phase
   (`maintenance`), and the failure streak and give-up latch come out as they went in. The work happens

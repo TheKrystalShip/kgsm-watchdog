@@ -131,6 +131,72 @@ public sealed class NoRoomRefusalTests
         Assert.Equal(expected, ControlEndpoints.StatusFor(new ActionResult("x", ok, "why", refusal)));
     }
 
+    // ---- instance transfer lock ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_start_of_a_locked_instance_is_refused_before_anything_else()
+    {
+        // The gate would pass this instance; only the lock stands in the way, so the refusal is the lock's.
+        var (supervisor, instances) = NewLockable(SpecFor("wd-locked", memoryCapMb: 0), "transfer-1");
+
+        var result = await supervisor.StartAsync("wd-locked");
+
+        Assert.False(result.Ok);
+        Assert.Equal(ActionRefusal.InstanceLocked, result.Refusal);
+        Assert.Contains("transfer_lock", result.Message);
+        Assert.Null(supervisor.Status("wd-locked")); // nothing was recorded or attempted
+    }
+
+    [Fact]
+    public async Task A_restart_of_a_locked_instance_stops_nothing()
+    {
+        var (supervisor, _) = NewLockable(SpecFor("wd-locked-restart", memoryCapMb: 0), "transfer-1");
+
+        var result = await supervisor.RestartAsync("wd-locked-restart");
+
+        Assert.Equal(ActionRefusal.InstanceLocked, result.Refusal);
+        // A refused restart is not "stop ok; start refused": the stop half never ran.
+        Assert.DoesNotContain("stop ok", result.Message);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task A_start_is_not_refused_when_the_lock_is_empty_or_absent(string lockValue)
+    {
+        // Past the lock the spawn is attempted and fails on a spec with no executable, which is the
+        // observable difference between "the lock refused this" and "the lock let it through".
+        var (supervisor, _) = NewLockable(SpecFor("wd-unlocked", memoryCapMb: 0), lockValue);
+
+        var result = await supervisor.StartAsync("wd-unlocked");
+
+        Assert.Null(result.Refusal);
+        Assert.Contains("spawn failed", result.Message);
+    }
+
+    [Fact]
+    public async Task The_lock_is_read_on_every_call()
+    {
+        var (supervisor, instances) = NewLockable(SpecFor("wd-lock-moves", memoryCapMb: 0), "transfer-1");
+        Assert.Equal(ActionRefusal.InstanceLocked, (await supervisor.StartAsync("wd-lock-moves")).Refusal);
+
+        instances.TransferLock = "";
+
+        var released = await supervisor.StartAsync("wd-lock-moves");
+        Assert.Null(released.Refusal);
+        Assert.Contains("spawn failed", released.Message);
+
+        instances.TransferLock = "transfer-2";
+        Assert.Equal(ActionRefusal.InstanceLocked, (await supervisor.StartAsync("wd-lock-moves")).Refusal);
+    }
+
+    [Fact]
+    public void The_status_line_for_a_locked_instance_is_409()
+    {
+        Assert.Equal(409, ControlEndpoints.StatusFor(new ActionResult("x", false, "locked", ActionRefusal.InstanceLocked)));
+        Assert.Equal("instance_locked", ActionRefusal.InstanceLocked);
+    }
+
     // ---- harness ---------------------------------------------------------------------------------
 
     private static Instance SpecFor(string name, int memoryCapMb) => new()
@@ -141,7 +207,15 @@ public sealed class NoRoomRefusalTests
         MemoryCapMb = memoryCapMb,
     };
 
-    private static InstanceSupervisor NewSupervisor(Instance spec, MemoryGate gate)
+    private static (InstanceSupervisor Supervisor, PerInstanceCrashPolicyTests.SingleInstance Instances)
+        NewLockable(Instance spec, string transferLock)
+    {
+        var instances = new PerInstanceCrashPolicyTests.SingleInstance(spec) { TransferLock = transferLock };
+        return (NewSupervisor(spec, TestMemoryGate.Disabled(), instances), instances);
+    }
+
+    private static InstanceSupervisor NewSupervisor(Instance spec, MemoryGate gate,
+        PerInstanceCrashPolicyTests.SingleInstance? instances = null)
     {
         var options = new WatchdogOptions
         {
@@ -152,7 +226,7 @@ public sealed class NoRoomRefusalTests
         var cgroups = new CgroupManager(options, NullLogger<CgroupManager>.Instance);
         var events = new RecordingJournal();
         return new InstanceSupervisor(
-            new PerInstanceCrashPolicyTests.SingleInstance(spec),
+            instances ?? new PerInstanceCrashPolicyTests.SingleInstance(spec),
             new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance),
             cgroups,
             new BackoffPolicy(),

@@ -91,6 +91,10 @@ else releases, and a park that predates this daemon's own start is released at b
 anything else that went wrong — a refusal is not a failure, so a caller can stop retrying one and
 stop reporting it as a fault in the server. The body carries the same answer as `refusal:"no_room"`.
 
+`start` and `restart` also refuse an instance whose config holds a non-empty `transfer_lock` (an
+instance transfer holds it stopped): `409` with `refusal:"instance_locked"`. The key is read from the
+engine on every call, and a restart of a locked instance stops nothing.
+
 `?force=true` on **`start`** carries a person's override of that check and is the only way past it:
 autostart, crash-restart and `restart` take the verdict as final, because nobody is at a terminal to
 judge that a declared figure is wrong. A forced start still reserves what it declared, so the next

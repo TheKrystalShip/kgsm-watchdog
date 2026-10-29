@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — start and restart refuse an instance locked by an instance transfer (1.49.0)
+
+`POST /start/{name}` and `POST /restart/{name}` answer `409` with `refusal: "instance_locked"` when the
+instance config holds a non-empty `transfer_lock`. The scheduler's restart task reaches an instance
+through this socket without passing the engine's own lock check, so the daemon enforces it too. The key
+is read on every call; a restart of a locked instance stops nothing.
+
 ### Changed — built on released packages (1.48.1)
 
 Builds with `TheKrystalShip.KGSM.ComponentConfig` 3.2.0 and serves its surface with

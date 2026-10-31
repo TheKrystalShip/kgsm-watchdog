@@ -276,8 +276,8 @@ PY
     fi
 
     # The action manifest the build writes beside the descriptor, installed under the same name in
-    # the actions/ directory beside it: what this node reports to the auth anchor as the actions this
-    # component performs, and what the catalog of grantable actions is built from.
+    # the actions/ directory beside it: the actions this component performs, which kgsm-api serves
+    # for the node at /.well-known/tks-actions.json.
     local manifest="${LEAF_DESCRIPTOR%.json}.actions.json"
     if [[ -f "$manifest" ]]; then
         install -d -m 0755 "${dir}/actions"

@@ -33,6 +33,5 @@
       "effect": "read",
       "scope": "node"
     }
-  ],
-  "requires": []
+  ]
 }

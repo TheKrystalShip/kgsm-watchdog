@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — built on the released packages (1.49.1)
+
+Builds with `TheKrystalShip.KGSM.ComponentConfig` 4.0.0 and serves its surface with
+`ComponentSurface` and `ComponentSurface.Http` 2.0.0. The action manifest it writes lists the actions the
+daemon performs and no requirements section. The manifest is served at `/.well-known/tks-actions.json`.
+
 ### Added — start and restart refuse an instance locked by an instance transfer (1.49.0)
 
 `POST /start/{name}` and `POST /restart/{name}` answer `409` with `refusal: "instance_locked"` when the

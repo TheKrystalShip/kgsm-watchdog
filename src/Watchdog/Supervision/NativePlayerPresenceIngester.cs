@@ -497,7 +497,7 @@ internal sealed class NativePlayerPresenceIngester(
 
     /// <summary>
     /// Emit <c>instance-ready</c>: a single positional arg (the instance name) per the wire form kgsm-lib
-    /// / kgsm-api already register (<see cref="InstanceReadyData"/> upstream) — normalises dash→underscore
+    /// / kgsm-api already register (<c>InstanceReadyData</c> upstream) — normalises dash→underscore
     /// like every other event here. Same provenance + best-effort semantics as <see cref="Emit"/> (a
     /// failed emit is logged and swallowed, never retried — the latch stays set so it is not
     /// double-attempted on the next tick; a genuinely missed emit is exactly as recoverable as a missed
@@ -523,11 +523,8 @@ internal sealed class NativePlayerPresenceIngester(
     /// drove, so it carries the producer's derived <c>system:watchdog</c> actor
     /// (<c>JournalProducer.SystemActorFor</c>) rather than one this call names. A bare <c>system</c>
     /// would read as an OS user of that name, which is why the actor is qualified and why it is derived
-    /// from the producer id instead of being a second spelling of it here. Null fields pass as empty
-    /// string (a string-based emit can't carry a literal JSON null mid-args; empty maps to null);
-    /// <paramref name="parameters"/> is pre-built by <see cref="EmitJoined"/>/<see cref="EmitLeft"/> so
-    /// each event carries exactly its contract arity. Best-effort: a failed emit is logged and
-    /// swallowed, never crashes the ingester.
+    /// from the producer id instead of being a second spelling of it here. Best-effort: a failed emit is
+    /// logged and swallowed, never crashes the ingester.
     /// </summary>
     private void Emit(
         string eventName, string instanceName, string sessionKey, string detail,

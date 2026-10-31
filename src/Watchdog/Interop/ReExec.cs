@@ -125,7 +125,7 @@ internal static class ReExec
     /// CURRENT process environment, with one <paramref name="overrideKey"/> set to
     /// <paramref name="overrideValue"/> (or removed when the value is null). Pure (no syscalls, no exec) so
     /// it is unit-testable in isolation — the marshalling-correctness check the Phase 6 live exec cannot
-    /// give cheaply. Reads the environment via <see cref="Environment.GetEnvironmentVariables"/> (the CLR
+    /// give cheaply. Reads the environment via <see cref="Environment.GetEnvironmentVariables()"/> (the CLR
     /// view), which is fine because the successor will run on .NET and read it back through the same view —
     /// the only thing libc-environ visibility actually blocked was the handoff staged AFTER process start.
     /// </summary>

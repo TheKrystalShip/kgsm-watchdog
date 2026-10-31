@@ -20,6 +20,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// every deploy re-dates the whole fleet to the deploy.
 /// </para>
 /// </summary>
+[Collection(EnvironmentCollection.Name)] // adoption reads/writes the handoff env var — serialize with other env mutators
 public sealed class RunAgeIsTheRunsOwnTests : IDisposable
 {
     private readonly string _cgroupRoot;

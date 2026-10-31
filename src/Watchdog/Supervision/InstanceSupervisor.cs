@@ -902,7 +902,7 @@ internal sealed class InstanceSupervisor(
     /// <summary>
     /// Spawn an instance whose cgroup is empty (a host reboot / clean stop left nothing running). Mirrors
     /// the RESTART path (<see cref="ReconcileRestartPending"/>), not <see cref="StartAsync"/>: a bare
-    /// <see cref="TrySpawn(SupervisedInstance, DateTime, out string, out bool)"/> that trusts the grace window,
+    /// <see cref="TrySpawn(SupervisedInstance, DateTime, out string, out bool, bool)"/> that trusts the grace window,
     /// NOT a synchronous <c>WaitForPopulated</c> —
     /// blocking 5s × N instances here would delay the control socket binding during boot. The reconcile
     /// loop confirms liveness a tick later. Returns true if it spawned, false if the spawn failed

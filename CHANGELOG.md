@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — a flaky player-session test, and a clean build (1.49.2)
+
+`RunAgeIsTheRunsOwnTests` set the hot-swap handoff variable outside the environment collection, so a
+concurrent adoption in another class could read its blob and adopt the wrong instance. It joins the
+collection with every other adoption test. The build carries no warnings: the unresolved doc crefs, a
+stale `paramref`, and the platform analyzer on the tests' Unix file-mode calls are fixed.
+
 ### Changed — built on the released packages (1.49.1)
 
 Builds with `TheKrystalShip.KGSM.ComponentConfig` 4.0.0 and serves its surface with

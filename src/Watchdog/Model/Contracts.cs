@@ -200,7 +200,7 @@ public sealed record WatchdogVersionInfo(
 
 /// <summary>
 /// One run of a native instance's console — a single stretch of stdout between a spawn and the exit
-/// that followed it. <see cref="SpawnEngine"/> rotates the log on every fresh spawn, so a run's
+/// that followed it. <see cref="Supervision.SpawnEngine"/> rotates the log on every fresh spawn, so a run's
 /// output is one file: the live <c>Instance.LogFile</c> for the run in progress, a rotated sibling in
 /// the instance's logs directory for every run before it.
 /// <para>

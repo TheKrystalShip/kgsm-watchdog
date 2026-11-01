@@ -104,14 +104,24 @@ else
     ENV_SEEDED=0
 fi
 
+# ── 2a. The configuration this project's units read ──────────────────────────
+# Defined in deploy-common.sh's PROJECT BLOCK; a project with nothing to configure leaves it out.
+if declare -F setup_project_config >/dev/null; then
+    setup_project_config
+fi
+
 # ── 2b. The shared leaf-descriptor directory ──────────────────────────────────
-# Where this leaf declares its configurable surface for the Control Panel. Shared by every leaf
-# and scanned by kgsm-api, so it is created once by whichever project's setup.sh runs first and
-# owned by the deploying user — deploy.sh then writes the descriptor with no privilege. Skipped
+# Where this component declares its configurable surface. Two directories, because a leaf and an
+# anchor are different things: a leaf is one this node runs and kgsm-api scans for, an anchor serves
+# one capability to the whole cluster and merely happens to be here. Only the one this project's
+# descriptor belongs in is created, and it is created once by whichever project's setup.sh runs first
+# and owned by the deploying user — deploy.sh then writes the descriptor with no privilege. Skipped
 # entirely for a project that ships no descriptor.
-if [[ -n "${LEAF_DESCRIPTOR:-}" && -f "$LEAF_DESCRIPTOR" && ! -d "$LEAF_DESCRIPTOR_DIR" ]]; then
-    log "creating ${LEAF_DESCRIPTOR_DIR} (owned by ${DEPLOY_USER}) — the leaf config descriptors"
-    $SUDO install -d -m 0755 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$LEAF_DESCRIPTOR_DIR"
+if [[ -n "${LEAF_DESCRIPTOR:-}" && -f "$LEAF_DESCRIPTOR" ]]; then
+    if descriptor_dir="$(descriptor_dir_for "$LEAF_DESCRIPTOR")" && [[ ! -d "$descriptor_dir" ]]; then
+        log "creating ${descriptor_dir} (owned by ${DEPLOY_USER}) — the config descriptors"
+        $SUDO install -d -m 0755 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$descriptor_dir"
+    fi
 fi
 
 # ── 3. The user-owned unit directory ──────────────────────────────────────────

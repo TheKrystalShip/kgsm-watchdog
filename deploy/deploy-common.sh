@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# deploy-common.sh — the shared parameter block + helpers for kgsm-watchdog's deploy scripts.
+# deploy-common.sh — the shared parameter block + helpers for this project's deploy scripts.
 #
 # Sourced by BOTH deploy/setup.sh (the one-shot privileged host provisioning) and
 # deploy/deploy.sh (the headless code delivery). Every path, unit name and user lives here
 # exactly once, so the two entry points can never disagree about what this project installs.
 #
-# The canonical source of this pattern is tks/scripts/deploy-template/ — see its README for the
-# contract. This copy is vendored so a standalone kgsm-watchdog clone deploys with no umbrella
-# checkout present. Keep everything below the PROJECT BLOCK in step with the template.
+# This file is vendored per repo — each repo carries its own copy so a standalone clone deploys with
+# no umbrella checkout present. The canonical source is tks/scripts/deploy-template/. A repo's own
+# lines are its PROJECT BLOCK and, at the end, its PROJECT HELPERS; everything else is the template's,
+# written by the template's vendor.sh and checked by `vendor.sh --check`.
 #
 # Not executable on its own.
 
@@ -23,8 +24,8 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # The user that owns the install and runs the service. Everything is provisioned FOR this
 # user so that day-to-day deploys need no privilege at all.
-DEPLOY_USER="${KGSM_WATCHDOG_USER:-${KGSM_DEPLOY_USER:-$(id -un)}}"
-DEPLOY_GROUP="${KGSM_WATCHDOG_GROUP:-${KGSM_DEPLOY_GROUP:-$(id -gn)}}"
+DEPLOY_USER="${KGSM_DEPLOY_USER:-$(id -un)}"
+DEPLOY_GROUP="${KGSM_DEPLOY_GROUP:-$(id -gn)}"
 
 # ── PROJECT BLOCK — the only part that changes per repo ───────────────────────
 PROJECT="kgsm-watchdog"
@@ -287,6 +288,22 @@ PY
         fi
     fi
 
+    # A component that declares another namespace's actions has one more manifest per namespace,
+    # <name>.<namespace>.actions.json beside the descriptor, installed as <namespace>.json.
+    local stem="${LEAF_DESCRIPTOR%.json}" extra space
+    stem="${stem%.*}"
+    for extra in "${stem}".*.actions.json; do
+        [[ -f "$extra" ]] || continue
+        space="${extra#"${stem}".}"
+        space="${space%.actions.json}"
+        [[ "$space" == leaf || "$space" == anchor ]] && continue
+        install -d -m 0755 "${dir}/actions"
+        if ! cmp -s "$extra" "${dir}/actions/${space}.json"; then
+            log "action manifest changed → ${dir}/actions/${space}.json"
+            install -m 0644 "$extra" "${dir}/actions/${space}.json"
+        fi
+    done
+
     # A component that has changed kind leaves its old files behind, and a stale descriptor in the
     # leaves directory is read as a leaf however the component now describes itself.
     local other_dir
@@ -299,3 +316,5 @@ PY
         fi
     done
 }
+
+# ── PROJECT HELPERS — this project's own functions, if any, below this line ────

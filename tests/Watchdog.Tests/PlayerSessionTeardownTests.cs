@@ -86,7 +86,7 @@ public sealed class PlayerSessionTeardownTests
     }
 
     [Fact]
-    public void Clearing_the_map_emits_no_player_events()
+    public async Task Clearing_the_map_emits_no_player_events()
     {
         // Dropping the map is bookkeeping, not an observation. A leave per tracked session would be a
         // disconnect record no game ever reported — and the crash event this teardown DOES emit is
@@ -101,7 +101,7 @@ public sealed class PlayerSessionTeardownTests
 
         supervisor.Reconcile();
 
-        Assert.True(events.WaitFor("server.crashed"));
+        await events.WaitFor("server.crashed");
         Assert.DoesNotContain("player.left", events.Snapshot());
         Assert.Empty(sessions.GetSessions(spec.Name));
     }

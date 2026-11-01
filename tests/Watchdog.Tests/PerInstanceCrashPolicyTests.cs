@@ -37,7 +37,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 public sealed class PerInstanceCrashPolicyTests
 {
     [Fact]
-    public void CrashRestart_false_stops_without_a_retry_and_emits_crashed()
+    public async Task CrashRestart_false_stops_without_a_retry_and_emits_crashed()
     {
         var events = new RecordingJournal();
         var spec = SpecFor("no-recover", crashRestart: false);
@@ -49,12 +49,12 @@ public sealed class PerInstanceCrashPolicyTests
         var state = Single(supervisor);
         Assert.Equal("stopped", state.Phase);                 // no auto-recovery
         Assert.Equal(0, state.Restarts);                   // no retry slot consumed
-        Assert.True(events.WaitFor(EventCrashed), "crash_restart=false must still emit instance-crashed for alert visibility");
+        await events.WaitFor(EventCrashed);
         Assert.DoesNotContain("server.restarted", events.Snapshot());
     }
 
     [Fact]
-    public void CrashMaxRestarts_grants_a_retry_below_the_override_ceiling()
+    public async Task CrashMaxRestarts_grants_a_retry_below_the_override_ceiling()
     {
         var events = new RecordingJournal();
         var spec = SpecFor("cap-one", crashMaxRestarts: 1);
@@ -67,11 +67,11 @@ public sealed class PerInstanceCrashPolicyTests
         var state = Single(supervisor);
         Assert.Equal("restart-pending", state.Phase);
         Assert.Equal(1, state.Restarts);
-        Assert.True(events.WaitFor(EventCrashed));
+        await events.WaitFor(EventCrashed);
     }
 
     [Fact]
-    public void CrashMaxRestarts_override_gives_up_at_a_lower_ceiling_than_the_global()
+    public async Task CrashMaxRestarts_override_gives_up_at_a_lower_ceiling_than_the_global()
     {
         var events = new RecordingJournal();
         var spec = SpecFor("cap-one", crashMaxRestarts: 1);
@@ -85,7 +85,7 @@ public sealed class PerInstanceCrashPolicyTests
         var state = Single(supervisor);
         Assert.Equal("failed", state.Phase);
         Assert.Equal(2, state.Restarts);
-        Assert.True(events.WaitFor(EventFailed), "hitting the per-instance ceiling must emit instance-failed");
+        await events.WaitFor(EventFailed);
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public sealed class PerInstanceCrashPolicyTests
     }
 
     [Fact]
-    public void Once_the_cgroup_reads_empty_the_exit_is_judged_as_usual()
+    public async Task Once_the_cgroup_reads_empty_the_exit_is_judged_as_usual()
     {
         var events = new RecordingJournal();
         var spec = SpecFor("readable-again");
@@ -190,7 +190,7 @@ public sealed class PerInstanceCrashPolicyTests
         supervisor.Reconcile();
 
         Assert.Equal("restart-pending", Single(supervisor).Phase);
-        Assert.True(events.WaitFor(EventCrashed));
+        await events.WaitFor(EventCrashed);
     }
 
     /// <summary>An instance cgroup under <paramref name="mount"/> whose events file says it is empty and

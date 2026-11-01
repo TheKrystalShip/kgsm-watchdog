@@ -7,6 +7,7 @@ using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+using TheKrystalShip.Testing;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -112,8 +113,8 @@ public sealed class HotSwapCoordinatorTests
             });
 
         var first = Task.Run(async () => await coordinator.TriggerAsync());
-        // Give the first one time to enter the swap step and hold the in-progress flag.
-        SpinWait.SpinUntil(() => Volatile.Read(ref swapCalls) == 1, TimeSpan.FromSeconds(2));
+        // The first trigger holds the in-progress flag once it is inside the swap step.
+        await Eventually.Holds(() => Volatile.Read(ref swapCalls) == 1, "the first trigger enters the swap step");
 
         // A second trigger while the first is "swapping" must be ignored (not a second swap).
         await coordinator.TriggerAsync();

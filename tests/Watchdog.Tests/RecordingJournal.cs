@@ -5,6 +5,7 @@ using TheKrystalShip.KGSM.Lifecycle;
 using TheKrystalShip.KGSM.Watchdog.Events;
 
 using TheKrystalShip.KGSM.Events;
+using TheKrystalShip.Testing;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -59,23 +60,13 @@ public sealed class RecordingJournal
     public List<string> Snapshot() => [.. _writer.Recorded.Select(e => e.Type.Replace('_', '-'))];
 
     /// <summary>
-    /// Waits briefly for an event type to be recorded. Accepts either spelling, because the call sites
-    /// name events the way the engine's command line does and the journal writes the wire form.
+    /// Waits for an event type to be recorded. Accepts either spelling, because the call sites name events
+    /// the way the engine's command line does and the journal writes the wire form.
     /// </summary>
-    public bool WaitFor(string eventType, int timeoutMs = 2000)
+    public Task WaitFor(string eventType)
     {
         string wanted = eventType.Replace('-', '_');
-        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-
-        while (DateTime.UtcNow < deadline)
-        {
-            if (_writer.Recorded.Any(e => e.Type == wanted))
-                return true;
-
-            Thread.Sleep(10);
-        }
-
-        return false;
+        return Eventually.Holds(() => _writer.Recorded.Any(e => e.Type == wanted), $"{eventType} is recorded");
     }
 
     /// <summary>One recorded event: its type, provenance, and the payload as written.</summary>

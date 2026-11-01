@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using Xunit.Abstractions;
+using TheKrystalShip.Testing;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -199,7 +200,7 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void Lifecycle_roundtrip_create_attach_kill_remove()
+    public async Task Lifecycle_roundtrip_create_attach_kill_remove()
     {
         var mgr = Make(Defaults());
 
@@ -236,11 +237,7 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
 
             Assert.True(mgr.Kill(inst), "cgroup.kill should succeed");
 
-            // Bounded drain (<= ~5s); never an unbounded wait.
-            for (int i = 0; i < 50 && mgr.IsPopulated(inst); i++)
-                Thread.Sleep(100);
-
-            Assert.False(mgr.IsPopulated(inst), "cgroup should be empty after kill");
+            await Eventually.Holds(() => !mgr.IsPopulated(inst), "the cgroup is empty after kill");
             Assert.True(mgr.Remove(inst), "cgroup remove should succeed");
             Assert.False(Directory.Exists(cg));
         }
@@ -275,7 +272,7 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void TermAll_delivers_a_catchable_signal_to_every_process_in_the_cgroup()
+    public async Task TermAll_delivers_a_catchable_signal_to_every_process_in_the_cgroup()
     {
         var mgr = Make(Defaults());
 
@@ -308,11 +305,7 @@ public sealed class CgroupManagerTests(ITestOutputHelper output)
 
             Assert.Equal(1, mgr.TermAll(inst));
 
-            // Bounded drain (<= ~5s); never an unbounded wait.
-            for (int i = 0; i < 50 && mgr.IsPopulated(inst); i++)
-                Thread.Sleep(100);
-
-            Assert.False(mgr.IsPopulated(inst), "SIGTERM should have emptied the cgroup");
+            await Eventually.Holds(() => !mgr.IsPopulated(inst), "SIGTERM empties the cgroup");
 
             // The group must be left thawed whatever happened, or a survivor would be stopped dead
             // in a way nothing downstream would explain.

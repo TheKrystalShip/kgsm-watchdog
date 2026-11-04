@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — journal appends keep every line under concurrent writes (1.49.3)
+
+The daemon pins `TheKrystalShip.KGSM.Journal` 2.4.1, whose writer appends with `O_APPEND`. Concurrent appends
+no longer overwrite each other's lines.
+
 ### Fixed — a flaky player-session test, and a clean build (1.49.2)
 
 `RunAgeIsTheRunsOwnTests` set the hot-swap handoff variable outside the environment collection, so a

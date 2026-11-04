@@ -23,7 +23,7 @@
 
     <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
     <AssemblyName>kgsm-watchdog</AssemblyName>
-    <Version>1.49.2</Version>
+    <Version>1.49.3</Version>
 
     <!-- The source-generated [LibraryImport] p/invokes (mkfifo/open/write/setres*uid)
          emit unsafe marshalling stubs; no hand-written unsafe code in the project. -->
@@ -86,6 +86,7 @@
          this daemon replaces). The net9 lib is IsAotCompatible, so consuming it from
          this net10 AOT app is a verified pattern (same as kgsm-monitor). -->
     <PackageReference Include="TheKrystalShip.KGSM.Lib" Version="8.5.0" />
+    <PackageReference Include="TheKrystalShip.KGSM.Journal" Version="2.4.1" />
   </ItemGroup>
 
   <Target Name="SetSourceRevisionId" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo;CoreCompile"

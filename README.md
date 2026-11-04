@@ -146,7 +146,9 @@ restarts; hot-swap deploys and host reboots are unaffected — see PLAN §4.)
 C# consumers reach the daemon through **kgsm-lib's** typed `IWatchdogClient`
 (`AddKgsmWatchdogClient(socketPath)`) — `start`/`stop`/`status`/`list`/`ready` over the
 control socket, source-gen JSON, AOT-safe — keeping all watchdog integration in the one
-KGSM chokepoint. On the bash side, `kgsm start|stop` for **native standalone** instances
+KGSM chokepoint. The package `TheKrystalShip.KGSM.Watchdog.Client` (`src/Watchdog.Client`) holds the
+control surface's wire types, which the daemon shares, and `WatchdogClient`, a typed client over the
+socket that reads every answer from the body. On the bash side, `kgsm start|stop` for **native standalone** instances
 auto-routes to the daemon when its socket is present and `/health` is 200, and falls back to
 the legacy direct-spawn path when it is absent (so installs without the daemon are
 unchanged). See the kgsm repo's `commands/handlers/watchdog.sh`.

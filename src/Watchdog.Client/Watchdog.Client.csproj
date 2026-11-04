@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
+    <AssemblyName>TheKrystalShip.KGSM.Watchdog.Client</AssemblyName>
+
+    <!-- Reflection-free: every wire type is registered in WatchdogClientJsonContext, so a consumer's
+         Native-AOT publish stays clean. The package declares no dependency beyond the framework. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+
+    <PackageId>TheKrystalShip.KGSM.Watchdog.Client</PackageId>
+    <Version>1.0.0-dev.1</Version>
+    <Authors>TheKrystalShip</Authors>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+    <Description>The watchdog's control-socket wire types and a typed client over its unix socket. The
+      daemon shares the wire types, so the two cannot drift.</Description>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+
+</Project>

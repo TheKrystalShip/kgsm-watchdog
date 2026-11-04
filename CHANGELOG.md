@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — a client package for the control socket (1.50.0)
+
+`TheKrystalShip.KGSM.Watchdog.Client` (1.0.0-dev.1, `src/Watchdog.Client`) carries the control surface's wire types
+(`ActionResult`, `ActionRefusal`, `InstanceState`, `InstanceRunTimes`, `ReadyState`, `WatchdogVersionInfo`) and
+`WatchdogClient`, a typed client over the unix socket: health, status, list, run times, enabled, version, start,
+stop, restart, enable, disable and forget. Answers are read from the body; an absent daemon is
+`WatchdogHealth.Reachable` false for a health probe and `WatchdogUnavailableException` for any other call. The daemon
+references the project, so it and every client share one definition of the wire types; its behaviour is unchanged.
+
 ### Fixed — journal appends keep every line under concurrent writes (1.49.3)
 
 The daemon pins `TheKrystalShip.KGSM.Journal` 2.4.1, whose writer appends with `O_APPEND`. Concurrent appends

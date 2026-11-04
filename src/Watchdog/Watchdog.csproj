@@ -23,7 +23,7 @@
 
     <RootNamespace>TheKrystalShip.KGSM.Watchdog</RootNamespace>
     <AssemblyName>kgsm-watchdog</AssemblyName>
-    <Version>1.49.3</Version>
+    <Version>1.50.0</Version>
 
     <!-- The source-generated [LibraryImport] p/invokes (mkfifo/open/write/setres*uid)
          emit unsafe marshalling stubs; no hand-written unsafe code in the project. -->
@@ -72,6 +72,12 @@
          literal "appsettings.json", so the renamed file needs an explicit item to reach bin/ + publish/.
          Program.cs loads it from AppContext.BaseDirectory; deploy installs it beside the binary. -->
     <Content Update="kgsm-watchdog.settings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The control surface's wire types live in the client package's project, so the daemon and every
+         client share one definition. -->
+    <ProjectReference Include="../Watchdog.Client/Watchdog.Client.csproj" />
   </ItemGroup>
 
   <ItemGroup>

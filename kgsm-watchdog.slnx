@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Watchdog.Client/Watchdog.Client.csproj" />
     <Project Path="src/Watchdog/Watchdog.csproj" />
   </Folder>
   <Folder Name="/tests/">

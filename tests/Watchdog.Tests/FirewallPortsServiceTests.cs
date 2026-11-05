@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
+using TheKrystalShip.KGSM.Firewall.Contracts;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.Model;
 
@@ -180,7 +181,7 @@ public sealed class FirewallPortsServiceTests
         public FirewallException? Throw { get; set; }
 
         public Task<FirewallActionResult> EnsureOpenAsync(
-            string instanceName, IReadOnlyList<PortMapping> ports, string? actor = null,
+            string instanceName, IReadOnlyList<PortDto> ports, string? actor = null,
             string? origin = null, CancellationToken cancellationToken = default)
         {
             if (Throw is not null) throw Throw;

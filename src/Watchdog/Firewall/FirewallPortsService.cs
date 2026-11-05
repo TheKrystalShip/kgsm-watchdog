@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Logging;
-using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Firewall.Contracts;
 using TheKrystalShip.KGSM.Core.Models;
 
 using TheKrystalShip.KGSM.Watchdog.Model;
@@ -75,7 +75,7 @@ internal sealed class FirewallPortsService(IFirewallService firewall, ILogger<Fi
 
         return await InvokeAsync(
             "open", instance.Name,
-            () => firewall.EnsureOpenAsync(instance.Name, instance.Ports, actor, origin, ct)).ConfigureAwait(false);
+            () => firewall.EnsureOpenAsync(instance.Name, [.. instance.Ports.Select(p => new PortDto(p.Start, p.End, p.Protocol))], actor, origin, ct)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -110,27 +110,27 @@ internal sealed class FirewallPortsService(IFirewallService firewall, ILogger<Fi
             switch (result.Outcome)
             {
                 // A real transition — the only outcome worth an audit event.
-                case Core.Models.FirewallOutcome.Applied:
-                case Core.Models.FirewallOutcome.Removed:
+                case FirewallOutcome.Applied:
+                case FirewallOutcome.Removed:
                     return FirewallPortsOutcome.Applied;
 
                 // The rule is written but the backend is not enforcing (ufw inactive). A success, and the
                 // ports are open anyway because nothing is filtering — but no enforced transition
                 // happened, so it is not an "opened" event. The Control Panel reports the inactive
                 // backend from its own probe.
-                case Core.Models.FirewallOutcome.AppliedInactive:
+                case FirewallOutcome.AppliedInactive:
                     logger.LogInformation(
                         "firewall {Action} for {Instance}: staged, backend {Backend} is not enforcing",
                         action, instanceName, result.Backend);
                     return FirewallPortsOutcome.Skipped;
 
                 // Nothing to change — the desired state already held.
-                case Core.Models.FirewallOutcome.NoOp:
+                case FirewallOutcome.NoOp:
                     return FirewallPortsOutcome.Skipped;
 
                 // No firewall on this host (or a read-only driver). Not a failure of ours, and not
                 // something to warn about on every single start.
-                case Core.Models.FirewallOutcome.Unsupported:
+                case FirewallOutcome.Unsupported:
                     logger.LogDebug(
                         "firewall {Action} for {Instance}: backend {Backend} does not support it",
                         action, instanceName, result.Backend);

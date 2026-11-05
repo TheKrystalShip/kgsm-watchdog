@@ -89,9 +89,9 @@
     <!-- The engine core reads each instance's spawn config, derived layout and resolved launch
          arguments in-process; the watchdog never changes engine state through it. The Journal package
          is the event journal's writer and its event vocabulary. -->
-    <PackageReference Include="TheKrystalShip.KGSM.Engine" Version="4.0.0-dev.7" />
+    <PackageReference Include="TheKrystalShip.KGSM.Engine" Version="4.0.0-dev.8" />
     <PackageReference Include="TheKrystalShip.KGSM.Journal" Version="2.6.0-dev.1" />
-    <PackageReference Include="TheKrystalShip.KGSM.Firewall.Contracts" Version="1.2.0" />
+    <PackageReference Include="TheKrystalShip.KGSM.Firewall.Contracts" Version="1.5.0-dev.1" />
   </ItemGroup>
 
   <Target Name="SetSourceRevisionId" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo;CoreCompile"

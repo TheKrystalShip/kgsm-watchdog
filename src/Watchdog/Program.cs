@@ -3,6 +3,7 @@ using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Engine.Reading;
 using TheKrystalShip.KGSM.Extensions;
+using TheKrystalShip.KGSM.Firewall.Contracts;
 
 using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Watchdog;

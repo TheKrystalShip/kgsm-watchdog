@@ -7,8 +7,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// The pure, side-effect-free translation of one raw <c>lifecycle.ndjson</c> line (schema
 /// <see cref="ContainerLifecycleLine"/>) into a recognised lifecycle type — or a decision to drop it.
 /// Mirrors <see cref="PlayerPresenceParser"/>'s shape/rules (kept separate from the ingester so every
-/// branch — valid started/stopping, malformed JSON, unknown type — is unit-testable without files or
-/// kgsm-lib).
+/// branch — valid started/stopping, malformed JSON, unknown type — is unit-testable without files or the
+/// engine core).
 /// </summary>
 internal static class ContainerLifecycleParser
 {

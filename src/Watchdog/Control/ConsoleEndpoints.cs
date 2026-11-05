@@ -2,9 +2,11 @@ using System.Globalization;
 
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Control;
 
@@ -30,7 +32,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Control;
 /// </para>
 /// <para>
 /// <b>Native-only, by honesty.</b> The watchdog owns a native instance's stdout at spawn
-/// (<see cref="SpawnEngine"/> appends it to <see cref="Instance.LogFile"/>); a container's stdout
+/// (<see cref="SpawnEngine"/> appends it to <see cref="InstanceSpec.LogFile"/>); a container's stdout
 /// belongs to Docker, so a non-native instance is <c>404</c> here — we do not invent a stream we
 /// don't have. An unknown instance is likewise <c>404</c>; a native instance whose log file does not
 /// exist yet (never started / stopped) is an honest <b>empty 200</b>, never a fabricated line.
@@ -95,9 +97,9 @@ internal static class ConsoleEndpoints
         // was last given, so a game appending throughout cannot shift the answer, and a Start of 0
         // says the run begins there. A line count from the end would name a different line on every
         // request and quietly overlap or skip.
-        app.MapGet("/console/{name}", (string name, int? tail, int? run, long? end, HttpContext http, IInstanceService instances) =>
+        app.MapGet("/console/{name}", (string name, int? tail, int? run, long? end, HttpContext http, IInstanceCatalog instances) =>
         {
-            Instance? instance = ResolveNativeInstance(instances, name);
+            InstanceSpec? instance = ResolveNativeInstance(instances, name);
             if (instance is null)
                 return Results.NotFound();
 
@@ -132,9 +134,9 @@ internal static class ConsoleEndpoints
         // block by block rather than assembled in memory, so a multi-gigabyte log costs the daemon a
         // buffer rather than its whole RSS.
         app.MapGet("/console/{name}/download", async (
-            string name, int? run, HttpContext http, IInstanceService instances) =>
+            string name, int? run, HttpContext http, IInstanceCatalog instances) =>
         {
-            Instance? instance = ResolveNativeInstance(instances, name);
+            InstanceSpec? instance = ResolveNativeInstance(instances, name);
             if (instance is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -183,9 +185,9 @@ internal static class ConsoleEndpoints
         // an event against output (which run was live when this crashed?) reads this, matches on
         // EndedAt, and asks for that Index — it never has to reason about rotation or guess a path.
         app.MapGet("/console/{name}/runs", (
-            string name, IInstanceService instances, InstanceSupervisor sup, RunHistoryStore history) =>
+            string name, IInstanceCatalog instances, InstanceSupervisor sup, RunHistoryStore history) =>
         {
-            Instance? instance = ResolveNativeInstance(instances, name);
+            InstanceSpec? instance = ResolveNativeInstance(instances, name);
             if (instance is null)
                 return Results.NotFound();
 
@@ -224,7 +226,7 @@ internal static class ConsoleEndpoints
         // Live follow: stream lines appended after connect until the client disconnects. Mirrors the
         // native player-presence ingester's primeAtEnd tail + PeriodicTimer loop.
         app.MapGet("/console/{name}/follow", async (
-            string name, HttpContext http, IInstanceService instances, WatchdogOptions options) =>
+            string name, HttpContext http, IInstanceCatalog instances, WatchdogOptions options) =>
         {
             string? log = ResolveNativeLogFile(instances, name);
             if (log is null)
@@ -261,27 +263,27 @@ internal static class ConsoleEndpoints
     /// <summary>
     /// Resolve an instance's log file IFF it is a known, native instance — the gate every endpoint
     /// shares. Returns null (→ 404) for an unknown instance, a non-native (container) instance, an
-    /// empty <see cref="Instance.LogFile"/>, or a transient kgsm-lib read failure. A non-null,
+    /// empty <see cref="InstanceSpec.LogFile"/>, or a transient engine read failure. A non-null,
     /// possibly not-yet-existing-on-disk, path means "native + known": absence of the file itself is
     /// handled downstream as honest-empty, not 404.
     /// </summary>
-    private static string? ResolveNativeLogFile(IInstanceService instances, string name) =>
+    private static string? ResolveNativeLogFile(IInstanceCatalog instances, string name) =>
         ResolveNativeInstance(instances, name)?.LogFile;
 
     /// <summary>The same gate, keeping the whole instance — the run index needs its logs directory too.</summary>
-    private static Instance? ResolveNativeInstance(IInstanceService instances, string name)
+    private static InstanceSpec? ResolveNativeInstance(IInstanceCatalog instances, string name)
     {
-        Instance? instance;
+        InstanceSpec? instance;
         try
         {
-            instance = instances.GetInstanceInfo(name);
+            instance = instances.Find(name);
         }
         catch (Exception)
         {
             return null; // can't resolve right now — 404 rather than a fabricated stream
         }
 
-        if (instance is null || instance.Runtime != InstanceRuntime.Native || string.IsNullOrEmpty(instance.LogFile))
+        if (instance is null || instance.Runtime != BlueprintRuntime.Native || string.IsNullOrEmpty(instance.LogFile))
             return null;
 
         return instance;
@@ -353,7 +355,7 @@ internal static class ConsoleEndpoints
     /// caller can see what it got.
     /// </para>
     /// </summary>
-    internal static IReadOnlyList<RunFile> EnumerateRuns(Instance instance)
+    internal static IReadOnlyList<RunFile> EnumerateRuns(InstanceSpec instance)
     {
         var runs = new List<RunFile>();
 

@@ -112,13 +112,13 @@ public sealed class RunAgeIsTheRunsOwnTests : IDisposable
         File.WriteAllText(Path.Combine(dir, "cgroup.events"), "populated 1\nfrozen 0\n");
     }
 
-    private static Instance SpecFor(string name) => new()
+    private static InstanceSpec SpecFor(string name) => new()
     {
         Name = name,
         SocketFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-nofifo-{Guid.NewGuid():N}.fifo"),
     };
 
-    private InstanceSupervisor NewSupervisor(RecordingJournal events, Instance spec)
+    private InstanceSupervisor NewSupervisor(RecordingJournal events, InstanceSpec spec)
     {
         var options = new WatchdogOptions
         {
@@ -128,7 +128,7 @@ public sealed class RunAgeIsTheRunsOwnTests : IDisposable
         };
         var cgroups = new CgroupManager(options, NullLogger<CgroupManager>.Instance);
         return new InstanceSupervisor(
-            new PerInstanceCrashPolicyTests.SingleInstance(spec),
+            FakeInstanceCatalog.Of(spec),
             new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance),
             cgroups,
             new BackoffPolicy(),

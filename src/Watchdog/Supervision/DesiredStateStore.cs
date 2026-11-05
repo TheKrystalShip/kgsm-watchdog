@@ -8,7 +8,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// The durable record of which instances are <b>enabled for boot auto-start</b>, so the daemon can
 /// restore them after a restart or host reboot — the in-house replacement for systemd's
 /// <c>systemctl enable</c> + <c>WantedBy=</c>. It persists <b>operator intent only</b> (the set of
-/// instance names); the spawn config is re-read from kgsm-lib on restore, so there is no stale-spec
+/// instance names); the spawn config is re-read from the engine core on restore, so there is no stale-spec
 /// drift.
 /// <para>
 /// This set is the <em>boot</em> axis, written ONLY by <c>enable</c>/<c>disable</c> — it is independent
@@ -17,7 +17,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </para>
 /// <para>
 /// Mutation is <b>incremental</b> (<see cref="Add"/>/<see cref="Remove"/>), not a snapshot of the live
-/// supervisor table. That is deliberate: an instance whose config kgsm-lib can't read at restore time
+/// supervisor table. That is deliberate: an instance whose config the engine core can't read at restore time
 /// (a transient miss) must NOT be silently dropped from auto-start — intent persists until an
 /// <em>explicit</em> <c>disable</c> removes it, exactly like a systemd unit stays enabled until
 /// <c>disable</c>.

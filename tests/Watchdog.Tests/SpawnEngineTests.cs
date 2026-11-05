@@ -1,12 +1,13 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
+using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
-/// Covers the pure, security-relevant helpers in the spawn path: the envsubst-equivalent the daemon
-/// runs over <c>executable_arguments</c> before the launcher word-splits them, and
+/// Covers the pure, security-relevant helpers in the spawn path: the launcher that passes the
+/// engine core's resolved arguments to the game verbatim, and
 /// <see cref="SpawnEngine.RotateLogFile"/> — the fresh-spawn log rotation that keeps
 /// <c>NativeReadinessMatcher.MatchesExistingContent</c>'s whole-file late-attach
 /// scan from resurrecting a prior run's stale ready line on an instance's 2nd+ start. (The fork itself
@@ -14,7 +15,6 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// <see cref="NativePlayerPresenceIngesterTests"/> for the end-to-end readiness-across-rotation
 /// coverage, which drives <c>RotateLogFile</c> directly the way <see cref="SpawnEngine.Spawn"/> does.)
 /// </summary>
-[Collection(EnvironmentCollection.Name)] // ExpandEnvironment tests mutate process env vars — serialize with the other env-touching classes
 public sealed class SpawnEngineTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "kgsm-wd-spawn-" + Guid.NewGuid().ToString("N"));
@@ -35,52 +35,57 @@ public sealed class SpawnEngineTests : IDisposable
     }
 
     [Fact]
-    public void ExpandEnvironment_passes_through_when_no_dollar()
+    public async Task The_launcher_hands_every_argument_to_the_game_exactly_as_given()
     {
-        Assert.Equal("--port 1234 --world foo", SpawnEngine.ExpandEnvironment("--port 1234 --world foo"));
-    }
+        // The engine core resolves the arguments; the launcher passes each as one parameter, so a value
+        // holding a space, a dollar sign or a glob reaches the game unchanged.
+        string log = Path.Combine(_tempDir, "launch.log");
+        string input = Path.Combine(_tempDir, "input");
+        string cgroupProcs = Path.Combine(_tempDir, "cgroup.procs");
+        File.WriteAllText(input, "");
 
-    [Fact]
-    public void ExpandEnvironment_expands_braced_and_bare_vars()
-    {
-        Environment.SetEnvironmentVariable("WD_TEST_PORT", "27015");
-        Environment.SetEnvironmentVariable("WD_TEST_WORLD", "alpha");
-        try
+        var psi = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardError = true };
+        foreach (string argument in new[]
         {
-            Assert.Equal("-p 27015", SpawnEngine.ExpandEnvironment("-p ${WD_TEST_PORT}"));
-            Assert.Equal("-w alpha end", SpawnEngine.ExpandEnvironment("-w $WD_TEST_WORLD end"));
-        }
-        finally
+            "-c", SpawnEngine.LauncherBody, "sh", cgroupProcs, _tempDir, input, log, "1024",
+            "printf", "%s|", "a b", "$HOME", "*", "$(id)",
+        })
         {
-            Environment.SetEnvironmentVariable("WD_TEST_PORT", null);
-            Environment.SetEnvironmentVariable("WD_TEST_WORLD", null);
+            psi.ArgumentList.Add(argument);
         }
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        await process.WaitForExitAsync();
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal("a b|$HOME|*|$(id)|", File.ReadAllText(log));
+        Assert.True(int.Parse(File.ReadAllText(cgroupProcs).Trim(), System.Globalization.CultureInfo.InvariantCulture) > 0);
     }
 
     [Fact]
-    public void ExpandEnvironment_unknown_var_becomes_empty()
+    public void A_bare_executable_that_sits_in_the_launch_directory_is_run_from_there()
     {
-        Environment.SetEnvironmentVariable("WD_TEST_ABSENT", null);
-        Assert.Equal("a  b", SpawnEngine.ExpandEnvironment("a ${WD_TEST_ABSENT} b"));
+        File.WriteAllText(Path.Combine(_tempDir, "game"), "#!/bin/sh\n");
+
+        Assert.Equal("./game", SpawnEngine.ExecutablePath("game", _tempDir));
+        Assert.Equal("sh", SpawnEngine.ExecutablePath("sh", _tempDir));
+        Assert.Equal("/opt/game/bin/game", SpawnEngine.ExecutablePath("/opt/game/bin/game", _tempDir));
     }
 
     [Fact]
-    public void ExpandEnvironment_trailing_dollar_is_literal()
+    public void ValidateSpawnable_reports_a_launch_argument_that_could_not_be_resolved()
     {
-        Assert.Equal("cost$", SpawnEngine.ExpandEnvironment("cost$"));
-    }
+        string? msg = SpawnEngine.ValidateSpawnable(new InstanceSpec
+        {
+            Name = "factorio-test",
+            ExecutableFile = "factorio",
+            SocketFile = "/run/f.in",
+            LogFile = "/var/log/f.log",
+            InstallDir = "/opt/f",
+            LaunchArgumentsProblem = "no value for {bogus}",
+        });
 
-    [Fact]
-    public void ExpandEnvironment_resolves_instance_vars_like_envsubst()
-    {
-        // The real 7dtd case: args reference $instance_install_dir, which KGSM exports in the bash
-        // path. The resolver must map it from the Instance, not blank it from the daemon's env.
-        var inst = new TheKrystalShip.KGSM.Core.Models.Instance { InstallDir = "/opt/7dtd/install" };
-        var resolve = SpawnEngine.BuildVarResolver(inst);
-
-        Assert.Equal(
-            "-dedicated -configfile=/opt/7dtd/install/serverconfig.xml",
-            SpawnEngine.ExpandEnvironment("-dedicated -configfile=$instance_install_dir/serverconfig.xml", resolve));
+        Assert.Equal("factorio-test: launch arguments: no value for {bogus}", msg);
     }
 
     [Fact]
@@ -90,7 +95,7 @@ public sealed class SpawnEngineTests : IDisposable
         // throw "{name}: executable_file is empty" with a BLANK name → the crash alert read
         // "start failed: : executable_file is empty" (a missing field). It must now name the real cause
         // and never produce the empty interpolated field.
-        string? msg = SpawnEngine.ValidateSpawnable(new TheKrystalShip.KGSM.Core.Models.Instance());
+        string? msg = SpawnEngine.ValidateSpawnable(new InstanceSpec());
 
         Assert.Equal("instance descriptor is empty (kgsm returned no usable info)", msg);
         Assert.DoesNotContain(": :", $"start failed: {msg}"); // the doubled colon is gone
@@ -102,7 +107,7 @@ public sealed class SpawnEngineTests : IDisposable
         // A real, resolved instance with a genuinely empty executable_file still names itself — the
         // per-field message is honest because the name is present.
         string? msg = SpawnEngine.ValidateSpawnable(
-            new TheKrystalShip.KGSM.Core.Models.Instance { Name = "factorio-test" });
+            new InstanceSpec { Name = "factorio-test" });
 
         Assert.Equal("factorio-test: executable_file is empty", msg);
     }
@@ -110,7 +115,7 @@ public sealed class SpawnEngineTests : IDisposable
     [Fact]
     public void ValidateSpawnable_fully_populated_descriptor_is_null()
     {
-        var inst = new TheKrystalShip.KGSM.Core.Models.Instance
+        var inst = new InstanceSpec
         {
             Name = "factorio-test",
             ExecutableFile = "./factorio",

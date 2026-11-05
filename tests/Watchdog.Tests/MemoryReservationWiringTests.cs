@@ -92,7 +92,7 @@ public sealed class MemoryReservationWiringTests
 
     // ---- harness ---------------------------------------------------------------------------------
 
-    private static Instance SpecFor(string name, int memoryCapMb, bool? crashRestart = null) => new()
+    private static InstanceSpec SpecFor(string name, int memoryCapMb, bool? crashRestart = null) => new()
     {
         Name = name,
         SocketFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-nofifo-{Guid.NewGuid():N}.fifo"), // never exists → cgroup-only adopt
@@ -129,7 +129,7 @@ public sealed class MemoryReservationWiringTests
         finally { Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, prior); }
     }
 
-    private static InstanceSupervisor NewSupervisor(Instance spec, MemoryGate gate)
+    private static InstanceSupervisor NewSupervisor(InstanceSpec spec, MemoryGate gate)
     {
         var options = new WatchdogOptions
         {
@@ -140,7 +140,7 @@ public sealed class MemoryReservationWiringTests
         var cgroups = new CgroupManager(options, NullLogger<CgroupManager>.Instance);
         var events = new RecordingJournal();
         return new InstanceSupervisor(
-            new PerInstanceCrashPolicyTests.SingleInstance(spec),
+            FakeInstanceCatalog.Of(spec),
             new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance),
             cgroups,
             new BackoffPolicy(),

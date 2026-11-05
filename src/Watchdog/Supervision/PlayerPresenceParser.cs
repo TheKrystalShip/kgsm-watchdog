@@ -7,7 +7,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// The pure, side-effect-free translation of one raw NDJSON channel line (schema
 /// <see cref="PlayerPresenceLine"/>) into the kgsm wire event to emit — or a decision to drop it.
 /// Kept separate from the ingester so every branch (valid join/left, malformed JSON, unknown type,
-/// both-null id/name) is unit-testable without files, sockets, or kgsm-lib.
+/// both-null id/name) is unit-testable without files, sockets, or the engine core.
 /// <para>
 /// <b>Defensive at-least-one-non-null guard.</b> The shim is contracted to never write a line with
 /// both <c>id</c> and <c>name</c> null, but the watchdog never trusts its input: a both-null line is

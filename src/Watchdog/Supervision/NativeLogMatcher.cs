@@ -4,8 +4,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
 /// <summary>
 /// The native counterpart of the container in-image shim's matching step: applies a blueprint's
-/// <c>player_joined_regex</c> / <c>player_left_regex</c> (delivered on the <see cref="Core.Models.Instance"/> via the
-/// kgsm-lib chokepoint) to one raw game-log line and decides whether to emit a presence event. Pure +
+/// <c>player_joined_regex</c> / <c>player_left_regex</c> (delivered on the <see cref="Model.InstanceSpec"/> by the
+/// engine core) to one raw game-log line and decides whether to emit a presence event. Pure +
 /// side-effect-free (constructed once per instance, then <see cref="Match"/> per line) so every branch
 /// is unit-testable without files or sockets, mirroring <see cref="PlayerPresenceParser"/>; it returns
 /// the SAME <see cref="PlayerPresenceParser.ParseResult"/> shape and the same dash-form event names, so

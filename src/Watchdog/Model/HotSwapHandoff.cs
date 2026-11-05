@@ -12,7 +12,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Model;
 /// It travels through the <see cref="EnvVarName"/> environment variable as base64(UTF8(json)) — small,
 /// no temp file, and inherited by <c>execv</c> via the libc <c>environ</c> (which
 /// <c>Environment.SetEnvironmentVariable</c> updates). What is NOT here is re-derived in the successor
-/// from authoritative sources: the spec (kgsm-lib), cgroup liveness (<c>cgroup.events</c>), and the
+/// from authoritative sources: the spec (the engine core), cgroup liveness (<c>cgroup.events</c>), and the
 /// display PID (<c>cgroup.procs</c>) — never fabricated.
 /// </para>
 /// </summary>

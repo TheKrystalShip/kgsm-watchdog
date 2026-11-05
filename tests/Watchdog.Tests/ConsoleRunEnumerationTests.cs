@@ -1,6 +1,7 @@
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Control;
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -29,10 +30,10 @@ public sealed class ConsoleRunEnumerationTests : IDisposable
 
     private string LiveLog => Path.Combine(_dir, "romestead.log");
 
-    private Instance Spec(string? logsDir = null) => new()
+    private InstanceSpec Spec(string? logsDir = null) => new()
     {
         Name = "romestead",
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
         LogFile = LiveLog,
         LogsDir = logsDir ?? _logsDir,
     };

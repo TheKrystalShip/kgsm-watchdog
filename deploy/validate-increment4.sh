@@ -20,7 +20,7 @@ set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="${REPO}/src/Watchdog/bin/Release/net10.0/linux-x64/publish/kgsm-watchdog"
-KGSM="${Watchdog__KgsmPath:-/home/heisen/tks/kgsm/kgsm.sh}"
+KGSM="${Watchdog__KgsmPath:-$(command -v kgsm)}"
 SOCK="/run/kgsm-watchdog/control.sock"
 CGROOT="/sys/fs/cgroup/kgsm.slice"
 STATE="/tmp/wd-inc4-state.json"      # explicit so we can inspect/clean it deterministically

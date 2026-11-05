@@ -17,14 +17,14 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// instances dir — <c>&lt;instances&gt;/&lt;blueprint&gt;/&lt;instance&gt;/events/events.ndjson</c>, where
 /// each <c>&lt;instance&gt;</c> entry is a symlink to the real working dir (so an arbitrary per-instance
 /// install location is still reachable under one static root). The <c>&lt;instance&gt;</c> name is
-/// derived from the path, decoupling the ingester from kgsm-lib enumeration.
+/// derived from the path, decoupling the ingester from the engine core enumeration.
 /// </para>
 /// <para>
 /// Poll-driven (a <see cref="BackgroundService"/> + <see cref="PeriodicTimer"/>, mirroring
 /// <see cref="CrashWatcher"/>) rather than a <c>FileSystemWatcher</c>: the (inode, offset) tail must
 /// <c>statx</c> each tick anyway, and a poll handles "channel absent → appears later" and "a new
 /// instance dir shows up" for free, with no inotify/AOT edge cases. Each line is parsed by the pure
-/// <see cref="PlayerPresenceParser"/> and, on a valid join/left, emitted through kgsm-lib's string-based
+/// <see cref="PlayerPresenceParser"/> and, on a valid join/left, emitted through the string-based
 /// <see cref="WatchdogJournal"/> as <c>actor="system:watchdog" / origin="system"</c> —
 /// an autonomous observation no human drove (see <see cref="Emit"/> for why <c>"system"</c> not null). A
 /// dropped line (malformed / unknown type / both-null id+name) is logged, never emitted.

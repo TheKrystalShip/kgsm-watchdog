@@ -65,6 +65,11 @@
       "id": "network",
       "label": "Router port forwarding",
       "order": 9
+    },
+    {
+      "id": "memory",
+      "label": "Memory admission",
+      "order": 10
     }
   ],
   "fields": [
@@ -90,7 +95,7 @@
       "key": "kgsmPath",
       "env": "Watchdog__KgsmPath",
       "label": "KGSM executable",
-      "description": "Path to the KGSM executable. Required: the watchdog reads each instance's spawn configuration through it before forking the game, so it has nothing to supervise without one.",
+      "description": "Path to the KGSM engine binary. Required: the watchdog reads each instance's spawn configuration through it before forking the game, so it has nothing to supervise without one.",
       "group": "kgsm",
       "type": "path",
       "risk": "wiring"
@@ -347,6 +352,28 @@
       "default": "300",
       "min": 0,
       "unit": "s",
+      "risk": "safe"
+    },
+    {
+      "key": "enableMemoryGate",
+      "env": "Watchdog__EnableMemoryGate",
+      "label": "Check memory before a start",
+      "description": "Whether the watchdog checks that a server fits in the memory still free before it starts one, and refuses the start when it does not. The check counts servers that were started and have not yet finished loading, so two starts in a row cannot both be admitted into room that only one of them has.",
+      "group": "memory",
+      "type": "bool",
+      "default": "true",
+      "risk": "safe"
+    },
+    {
+      "key": "memoryGateHeadroomMb",
+      "env": "Watchdog__MemoryGateHeadroomMb",
+      "label": "Memory kept free",
+      "description": "How much memory must still be free after a server is admitted. The node keeps this much for the system and for the servers already running, so a start that would eat into it is refused.",
+      "group": "memory",
+      "type": "int",
+      "default": "1024",
+      "min": 0,
+      "unit": "MB",
       "risk": "safe"
     }
   ]

@@ -5,7 +5,7 @@
 
 > The resident **KGSM supervisor daemon**. It owns the `kgsm.slice` cgroup, spawns
 > native game-server instances *into* per-instance cgroups, and supervises them
-> (crash detection + restart). CLI / kgsm-lib / the Discord bot are **thin
+> (crash detection + restart). The CLI, the API and the Discord bot are **thin
 > clients** that issue lifecycle commands over a unix socket. This deliberately
 > breaks KGSM's historical "stateless / no warm process" rule — accepted
 > eyes-open, because the daemon **is** the watchdog the project always wanted.
@@ -60,11 +60,11 @@ component**. The rejected alternative is a setuid helper.
   + `PeriodicTimer`, reflection-free options, source-generated
   JSON context, hardened `Type=simple` systemd unit. **net10.0**, `PublishAot=true`,
   `InvariantGlobalization=true`, `IsAotCompatible=true`.
-- **Integrates kgsm-lib, never shells `kgsm.sh`** (the dependency spine).
-  `PackageReference TheKrystalShip.KGSM.Lib`. Reads instance
-  spawn config via `IInstanceService.GetAll()` / `GetInstanceInfo(name)`; subscribes
-  to `IEventService` for create/remove awareness. A new deserialized type must be
-  registered in `KgsmJsonContext` (no reflection fallback).
+- **Reads the engine through its core, never shells the binary** (the dependency spine).
+  `PackageReference TheKrystalShip.KGSM.Engine`. `EngineReader` describes each instance (spawn config,
+  derived layout, resolved launch arguments, player-presence patterns); `IInstanceCatalog` is the
+  daemon's seam over it. A new deserialized type must be registered in `WatchdogJsonContext` (no
+  reflection fallback).
 - **The daemon ACTS; the monitor MEASURES.** kgsm-monitor stays consumer-agnostic,
   measure-only (`../kgsm-docs/systems/engine/spine.md`). The watchdog is a separate resident that *acts*
   (spawn/kill/restart). They may cooperate (the monitor can read the cgroups the
@@ -135,11 +135,11 @@ per-operation escalation, ever.**
 A unix socket (FS-perms are the security boundary, exactly like the monitor —
 owner/group gated; network-facing auth like Discord-OAuth lives in the surfaces
 *above*, not here). HTTP/1.1 over the socket via Kestrel with source-gen JSON,
-so kgsm-lib has a tiny typed client that the bot and CLI reuse. The verbs and their
+so the watchdog client package is a small typed client that the bot and the API reuse. The verbs and their
 status codes are in `docs/internals.md`; the contract is
 `../kgsm-docs/systems/engine/watchdog.md`.
 
-- `start <inst>` — read config via kgsm-lib, spawn into the instance's cgroup, record
+- `start <inst>` — read config through the engine core, spawn into the instance's cgroup, record
   desired-state = running.
 - `stop <inst>` — desired-state = stopped, graceful stop-command → bounded drain →
   `cgroup.kill` → remove.
@@ -154,7 +154,7 @@ status codes are in `docs/internals.md`; the contract is
 kgsm-watchdog/
 ├── kgsm-watchdog.slnx
 ├── src/Watchdog/
-│   ├── Watchdog.csproj            (net10.0, PublishAot, refs KGSM.Lib)
+│   ├── Watchdog.csproj            (net10.0, PublishAot, refs KGSM.Engine)
 │   ├── Program.cs                 (CreateSlimBuilder, UDS, hosted services)
 │   ├── WatchdogSettings.cs        (the bound Watchdog section, 1:1 with the settings file)
 │   ├── WatchdogOptions.cs         (the validated form — FromSettings)
@@ -201,12 +201,10 @@ Each capability below is built; the code-level description is `docs/internals.md
   (`phase=failed`), the streak resetting after `STABILITY_SEC`. The policy is `always` by default and
   `on-failure` leaves clean code-0 exits stopped; the `on-failure` clean-exit branch is exercised only by
   unit tests, since the live runs saw non-zero exits.
-- **Clients.** kgsm-lib's `IWatchdogClient` is the typed client. `kgsm start|stop|restart|is-active`
-  for native-standalone instances route to the daemon when its socket answers `/health` with `200`
-  (`commands/handlers/watchdog.sh`): a connection failure is an error and never a silent double-spawn,
-  `is-active` routes too because the daemon writes no PID file, and `stop` of an instance the daemon does
-  not track falls through to the direct PID-file stop. The bot's `/supervision` command reads the
-  daemon's state; start, stop and restart reach the daemon through `kgsm.sh`.
+- **Clients.** The Watchdog.Client package's `IWatchdogClient` is the typed client. `kgsm instance
+  start|stop|restart` for native instances route to the daemon when its socket answers `/health` with
+  `200`; without it the instance starts through its own script, unsupervised. The bot's `/supervision`
+  command reads the daemon's state.
 - **Boot persistence.** The enabled-for-boot set lives in `desired-state.json`; `kgsm autostart` writes it
   and `StartupRestorer` re-adopts a still-live cgroup or respawns a dead one at startup. The runtime
   start/stop axis is independent of the boot enable/disable axis. Systemd is used only to boot the
@@ -262,8 +260,8 @@ Each capability below is built; the code-level description is `docs/internals.md
 
 - cgroup foundation (bash side) → `../kgsm/docs/specs/cgroup-supervision-plan.md`
 - monitor conventions to mirror → `../kgsm-monitor/PLAN.md`, `src/Monitor/*`
-- kgsm-lib consumable API → `../kgsm-lib/CLAUDE.md`, `Core/Models/Instance.cs`,
-  `Core/Interfaces/*`, `Json/KgsmJsonContext.cs`
+- the engine core's reads and the instance config → `../kgsm/CLAUDE.md`, `src/Engine/Reading/EngineReader.cs`,
+  `src/Engine.Contracts/Instances/InstanceConfig.cs`
 - ecosystem topology + invariants → `../kgsm-docs/architecture/README.md`; the daemon's role →
   `../kgsm-docs/systems/engine/watchdog.md`
 - how the code is put together → `docs/internals.md`

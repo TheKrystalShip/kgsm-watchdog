@@ -62,11 +62,12 @@ public sealed class WatchdogSettings
     }
 
     /// <summary>
-    /// Path to the KGSM executable (<c>kgsm.sh</c>). <b>Required</b> — unlike the monitor (which can
+    /// Path to the KGSM engine binary (<c>kgsm</c>). <b>Required</b> — unlike the monitor (which can
     /// run host-only), the watchdog has nothing to do without KGSM: it reads each instance's spawn
-    /// config via kgsm-lib before forking it.
+    /// config through the engine core before forking it, and the binary's install root is where the
+    /// engine's system blueprints and settings are.
     /// </summary>
-    /// <panel>Path to the KGSM executable. Required: the watchdog reads each instance's spawn
+    /// <panel>Path to the KGSM engine binary. Required: the watchdog reads each instance's spawn
     /// configuration through it before forking the game, so it has nothing to supervise without
     /// one.</panel>
     [ConfigField("kgsmPath", "KGSM executable", Group = "kgsm", Type = ConfigType.Path,
@@ -283,4 +284,26 @@ public sealed class WatchdogSettings
     [ConfigField("upnpReconcileSec", "Router forward check interval", Group = "network",
         Min = Floors.Zero, Unit = "s")]
     public int? UpnpReconcileSeconds { get; set; }
+
+    /// <summary>
+    /// Whether a start is checked against the memory still available. A start the gate refuses is
+    /// answered 507 (<c>no_room</c>). Unset reads as on. A bool the binder cannot parse binds to
+    /// nothing, which reads as on: a typo never switches the protection off.
+    /// </summary>
+    /// <panel>Whether the watchdog checks that a server fits in the memory still free before it starts
+    /// one, and refuses the start when it does not. The check counts servers that were started and have
+    /// not yet finished loading, so two starts in a row cannot both be admitted into room that only one
+    /// of them has.</panel>
+    [ConfigField("enableMemoryGate", "Check memory before a start", Group = "memory", Type = ConfigType.Bool)]
+    public bool? EnableMemoryGate { get; set; }
+
+    /// <summary>
+    /// The memory a start must leave free, MB. Floor 0.
+    /// </summary>
+    /// <panel>How much memory must still be free after a server is admitted. The node keeps this much
+    /// for the system and for the servers already running, so a start that would eat into it is
+    /// refused.</panel>
+    [ConfigField("memoryGateHeadroomMb", "Memory kept free", Group = "memory",
+        Min = Floors.Zero, Unit = "MB")]
+    public int? MemoryGateHeadroomMb { get; set; }
 }

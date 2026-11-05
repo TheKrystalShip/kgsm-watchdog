@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — the daemon reads the native engine through its core
+
+The daemon no longer references `TheKrystalShip.KGSM.Lib`. It pins `TheKrystalShip.KGSM.Engine`,
+`TheKrystalShip.KGSM.Journal` and the firewall contract package.
+
+- **Spawn config comes from the engine core.** `IInstanceCatalog` (`Catalog/`) is the daemon's read-only seam over
+  `EngineReader`; `InstanceSpec` is built from the engine's instance config and derived layout, with the launch
+  arguments already resolved by the engine core. The daemon expands nothing: the launcher hands the executable and
+  each argument to the game as one parameter, and a bare executable that sits in the launch directory runs from
+  there, as in the engine's script. An argument the engine cannot resolve fails the start with the reason.
+- **The memory gate's settings are the daemon's own**: `Watchdog__EnableMemoryGate` (on unless written false) and
+  `Watchdog__MemoryGateHeadroomMb` (1024, floor 0), declared in `WatchdogSettings` and in the generated descriptor
+  under "Memory admission". `GET /memory-gate` reports them. The engine holds no memory check.
+- **The transfer lock is the engine's lock file** in the instance's working directory; a start or restart of a
+  locked instance is refused with `instance_locked`.
+- `Watchdog__KgsmPath` names the `kgsm` binary; its install root locates the system blueprints and settings.
+- `RconClient` lives in the daemon.
+
 ### Added — the client package covers the whole control surface (`TheKrystalShip.KGSM.Watchdog.Client` 1.0.0-dev.2)
 
 `IWatchdogClient` is the interface `WatchdogClient` implements, for consumers to mock, and

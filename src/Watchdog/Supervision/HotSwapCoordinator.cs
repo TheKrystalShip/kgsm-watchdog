@@ -94,7 +94,7 @@ internal sealed class HotSwapCoordinator
             if (code != 0)
             {
                 // Log-only (the plan's documented fallback): a dedicated kgsm wire event for this would
-                // need a new event type registered across kgsm/kgsm-lib/kgsm-api; not worth that contract
+                // need a new event type registered across the engine, the journal package and kgsm-api; not worth that contract
                 // churn for an operator-facing condition the journal already surfaces loudly here.
                 _logger.LogCritical(
                     "hot-swap: ABORTED — `{Target} --selfcheck` exited {Code} (timeout/fail). Staying on the running image; " +

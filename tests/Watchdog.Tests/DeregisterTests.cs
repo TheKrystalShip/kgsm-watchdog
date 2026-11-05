@@ -1,9 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.Model;
@@ -124,14 +123,14 @@ public sealed class DeregisterTests
         finally { Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, prior); }
     }
 
-    private static Instance SpecFor(string name) => new()
+    private static InstanceSpec SpecFor(string name) => new()
     {
         Name = name,
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
         SocketFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-nofifo-{Guid.NewGuid():N}.fifo"),
     };
 
-    private static InstanceSupervisor NewSupervisor(Instance spec)
+    private static InstanceSupervisor NewSupervisor(InstanceSpec spec)
     {
         var options = new WatchdogOptions
         {
@@ -144,7 +143,7 @@ public sealed class DeregisterTests
         var state = new SupervisorState { Ready = true, Detail = "test" };
         var recorder = new RecordingJournal();
         return new InstanceSupervisor(
-            new SingleInstance(spec),
+            FakeInstanceCatalog.Of(spec),
             spawn,
             cgroups,
             new BackoffPolicy(),
@@ -165,55 +164,5 @@ public sealed class DeregisterTests
 
     /// <summary>A no-op event sink — these tests assert supervisor state, not emitted events.</summary>
 
-    /// <summary>An IInstanceService that returns exactly one configured spec by name.</summary>
-    private sealed class SingleInstance(Instance instance) : IInstanceService
-    {
-        public Instance? GetInstanceInfo(string instanceName) =>
-            string.Equals(instanceName, instance.Name, StringComparison.Ordinal) ? instance : null;
-        public Dictionary<string, Instance> GetAll() => new() { [instance.Name] = instance };
-        public Dictionary<string, Instance>? GetAllOrNull() => GetAll();
 
-        // ---- unused by these tests ----
-        public InstanceRuntimeStatus? GetInstanceStatus(string instanceName) => throw new NotImplementedException();
-        public Dictionary<string, Reading<InstanceRuntimeStatus>> GetAllStatuses(bool fast = false) => throw new NotImplementedException();
-        public KgsmResult Install(string blueprintName, string? library = null, string? version = null, string? displayName = null, string? actor = null, string? origin = null, int? port = null, bool? start = null, string? id = null) => throw new NotImplementedException();
-        public KgsmResult Move(string instanceName, string library, bool skipSpaceCheck = false, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult Announce(string instanceName, string message, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult SetDisplayName(string instanceId, string displayName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult Uninstall(string instanceName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public ICollection<string> GetLogs(string instanceName, int maxLines = 10) => throw new NotImplementedException();
-        public Task<ICollection<string>> GetLogsAsync(string instanceName, int maxLines = 10, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public KgsmResult GetStatus(string instanceName) => throw new NotImplementedException();
-        public KgsmResult GetInfo(string instanceName) => throw new NotImplementedException();
-        public bool IsActive(string instanceName) => throw new NotImplementedException();
-        public KgsmResult Start(string instanceName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult Stop(string instanceName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult Restart(string instanceName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult GetInstalledVersion(string instanceName) => throw new NotImplementedException();
-        public KgsmResult GetLatestVersion(string instanceName) => throw new NotImplementedException();
-        public KgsmResult CheckUpdate(string instanceName, bool emit = false, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult DeleteBackup(string instanceName, string backupName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult Update(string instanceName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult GetBackups(string instanceName) => throw new NotImplementedException();
-    public List<InstanceBackup> GetBackupsDetailed(string instanceName) => throw new NotImplementedException();
-    public InstanceNoteResult SetInstanceNote(string instanceName, string body, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult CreateBackup(string instanceName, string? actor = null, string? origin = null, string? reason = null, string? retention = null) => throw new NotImplementedException();
-        public KgsmResult PinBackup(string instanceName, string backupName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult UnpinBackup(string instanceName, string backupName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public List<TheKrystalShip.KGSM.Core.Models.InstanceConfigEntry>? GetInstanceConfig(string instanceName, bool settableOnly = false) => throw new NotImplementedException();
-        public KgsmResult RestoreBackup(string instanceName, string backupName, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult PruneBackups(string instanceName, int keepN, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult GenerateId(string blueprintName, string? customName = null) => throw new NotImplementedException();
-        public KgsmResult Save(string instanceName) => throw new NotImplementedException();
-        public KgsmResult SendInput(string instanceName, string command, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public KgsmResult FindConfigPath(string instanceName) => throw new NotImplementedException();
-        public KgsmResult GetInstanceConfigValue(string instanceName, string key) => throw new NotImplementedException();
-        public KgsmResult SetInstanceConfigValue(string instanceName, string key, string value, string? actor = null, string? origin = null) => throw new NotImplementedException();
-        public Task<LogSubscription> SubscribeToLogsAsync(string instanceName, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public Task<LogSubscription> SubscribeToLogsAsync(string instanceName, LogLevel minimumLogLevel, bool includeRawLines = true, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-    
-    public KgsmResult Kick(string instanceName, string target, string? actor = null, string? origin = null) => throw new NotImplementedException();
-    public KgsmResult Ban(string instanceName, string target, string? actor = null, string? origin = null) => throw new NotImplementedException();
-    public KgsmResult Unban(string instanceName, string target, string? actor = null, string? origin = null) => throw new NotImplementedException();
-}
 }

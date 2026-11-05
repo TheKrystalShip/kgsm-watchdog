@@ -1,9 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
-using TheKrystalShip.KGSM.Exceptions;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -23,10 +22,10 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// </summary>
 public sealed class FirewallPortsServiceTests
 {
-    private static Instance Native(bool firewallManaged, params PortMapping[] ports) => new()
+    private static InstanceSpec Native(bool firewallManaged, params PortMapping[] ports) => new()
     {
         Name = "fw-test",
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
         EnableFirewallManagement = firewallManaged,
         Ports = [.. ports],
     };

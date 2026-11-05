@@ -2,13 +2,15 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -143,7 +145,7 @@ public sealed class NoRoomRefusalTests
 
         Assert.False(result.Ok);
         Assert.Equal(ActionRefusal.InstanceLocked, result.Refusal);
-        Assert.Contains("transfer_lock", result.Message);
+        Assert.Contains("instance transfer", result.Message);
         Assert.Null(supervisor.Status("wd-locked")); // nothing was recorded or attempted
     }
 
@@ -159,14 +161,12 @@ public sealed class NoRoomRefusalTests
         Assert.DoesNotContain("stop ok", result.Message);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("  ")]
-    public async Task A_start_is_not_refused_when_the_lock_is_empty_or_absent(string lockValue)
+    [Fact]
+    public async Task A_start_is_not_refused_when_no_transfer_holds_the_instance()
     {
         // Past the lock the spawn is attempted and fails on a spec with no executable, which is the
         // observable difference between "the lock refused this" and "the lock let it through".
-        var (supervisor, _) = NewLockable(SpecFor("wd-unlocked", memoryCapMb: 0), lockValue);
+        var (supervisor, _) = NewLockable(SpecFor("wd-unlocked", memoryCapMb: 0), "");
 
         var result = await supervisor.StartAsync("wd-unlocked");
 
@@ -180,13 +180,13 @@ public sealed class NoRoomRefusalTests
         var (supervisor, instances) = NewLockable(SpecFor("wd-lock-moves", memoryCapMb: 0), "transfer-1");
         Assert.Equal(ActionRefusal.InstanceLocked, (await supervisor.StartAsync("wd-lock-moves")).Refusal);
 
-        instances.TransferLock = "";
+        instances.Lock("wd-lock-moves", TransferLockState.Free);
 
         var released = await supervisor.StartAsync("wd-lock-moves");
         Assert.Null(released.Refusal);
         Assert.Contains("spawn failed", released.Message);
 
-        instances.TransferLock = "transfer-2";
+        instances.Lock("wd-lock-moves", TransferLockState.Locked);
         Assert.Equal(ActionRefusal.InstanceLocked, (await supervisor.StartAsync("wd-lock-moves")).Refusal);
     }
 
@@ -199,23 +199,24 @@ public sealed class NoRoomRefusalTests
 
     // ---- harness ---------------------------------------------------------------------------------
 
-    private static Instance SpecFor(string name, int memoryCapMb) => new()
+    private static InstanceSpec SpecFor(string name, int memoryCapMb) => new()
     {
         Name = name,
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
         SocketFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-nofifo-{Guid.NewGuid():N}.fifo"),
         MemoryCapMb = memoryCapMb,
     };
 
-    private static (InstanceSupervisor Supervisor, PerInstanceCrashPolicyTests.SingleInstance Instances)
-        NewLockable(Instance spec, string transferLock)
+    private static (InstanceSupervisor Supervisor, FakeInstanceCatalog Instances)
+        NewLockable(InstanceSpec spec, string transferLock)
     {
-        var instances = new PerInstanceCrashPolicyTests.SingleInstance(spec) { TransferLock = transferLock };
+        var instances = FakeInstanceCatalog.Of(spec);
+        instances.Lock(spec.Name, transferLock.Length == 0 ? TransferLockState.Free : TransferLockState.Locked);
         return (NewSupervisor(spec, TestMemoryGate.Disabled(), instances), instances);
     }
 
-    private static InstanceSupervisor NewSupervisor(Instance spec, MemoryGate gate,
-        PerInstanceCrashPolicyTests.SingleInstance? instances = null)
+    private static InstanceSupervisor NewSupervisor(InstanceSpec spec, MemoryGate gate,
+        FakeInstanceCatalog? instances = null)
     {
         var options = new WatchdogOptions
         {
@@ -226,7 +227,7 @@ public sealed class NoRoomRefusalTests
         var cgroups = new CgroupManager(options, NullLogger<CgroupManager>.Instance);
         var events = new RecordingJournal();
         return new InstanceSupervisor(
-            instances ?? new PerInstanceCrashPolicyTests.SingleInstance(spec),
+            instances ?? FakeInstanceCatalog.Of(spec),
             new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance),
             cgroups,
             new BackoffPolicy(),

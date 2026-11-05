@@ -1,5 +1,7 @@
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -33,7 +35,7 @@ internal static class PlayerDetection
     /// and this agrees with it by asking the matcher rather than by re-testing the strings.
     /// </para>
     /// </remarks>
-    public static bool FromLog(Instance instance) =>
+    public static bool FromLog(InstanceSpec instance) =>
         new NativeLogMatcher(instance.PlayerJoinedRegex ?? "", instance.PlayerLeftRegex ?? "").Enabled;
 
     /// <summary>
@@ -47,8 +49,8 @@ internal static class PlayerDetection
     /// is indistinguishable from nobody being connected. RCON is native-only because a container's
     /// port is not this daemon's to reach.
     /// </remarks>
-    public static bool FromRcon(Instance instance) =>
-        instance.Runtime == InstanceRuntime.Native
+    public static bool FromRcon(InstanceSpec instance) =>
+        instance.Runtime == BlueprintRuntime.Native
         && instance.RconPort is not null
         && !string.IsNullOrEmpty(instance.RconPassword)
         && !string.IsNullOrWhiteSpace(instance.RconPlayersCommand)
@@ -63,7 +65,7 @@ internal static class PlayerDetection
     /// transitions by diffing it, which cannot see churn between two polls. So the label names the
     /// mechanism whose answers are exact, not the only one running.
     /// </remarks>
-    public static PlayerDetectionMechanism For(Instance instance) =>
+    public static PlayerDetectionMechanism For(InstanceSpec instance) =>
         FromLog(instance) ? PlayerDetectionMechanism.Log
         : FromRcon(instance) ? PlayerDetectionMechanism.Rcon
         : PlayerDetectionMechanism.None;

@@ -1,11 +1,11 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Lifecycle;
 using TheKrystalShip.KGSM.Watchdog.Events;
 
 using TheKrystalShip.KGSM.Events;
 using TheKrystalShip.Testing;
+using TheKrystalShip.KGSM.Core.Interfaces;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 

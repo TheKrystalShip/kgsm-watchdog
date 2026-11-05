@@ -68,7 +68,7 @@ on_err() {
 }
 trap 'on_err "$LINENO"' ERR
 
-# The path to kgsm.sh the UNIT runs with — needed so the new binary's --selfcheck (a no-side-effect
+# The path to the kgsm binary the UNIT runs with — needed so the new binary's --selfcheck (a no-side-effect
 # WatchdogOptions parse + load probe) sees the SAME Watchdog__KgsmPath the live daemon resolves.
 # Source order mirrors the unit: an EnvironmentFile assignment overrides the unit's inline default,
 # so the env file (if present) wins; else fall back to the unit's documented default. This file is

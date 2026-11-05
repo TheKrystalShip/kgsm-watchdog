@@ -20,6 +20,7 @@ using TheKrystalShip.KGSM.ComponentConfig;
 [assembly: ConfigGroup("ingesters", "Event ingesters & console", 7)]
 [assembly: ConfigGroup("firewall", "Host firewall", 8)]
 [assembly: ConfigGroup("network", "Router port forwarding", 9)]
+[assembly: ConfigGroup("memory", "Memory admission", 10)]
 
 // Lowest precedence first — the same order the daemon resolves them in.
 [assembly: ConfigFloorSource("appsettings", "/opt/kgsm-watchdog/kgsm-watchdog.settings.json")]

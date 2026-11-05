@@ -1,13 +1,13 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
-using TheKrystalShip.KGSM.Core.Models;
+using TheKrystalShip.KGSM.Watchdog.Catalog;
+using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
 /// The node-capacity check the daemon applies before every spawn. The arithmetic is pure, so these run
-/// against fakes for the two engine reads (kgsm's config, a blueprint's declared figure) and the real
+/// against the daemon's own two settings and a fake for the one engine read (a blueprint's declared figure) and the real
 /// /proc/meminfo reading the host provides. The reservation-ledger tests instead pose a node of a known
 /// size (<see cref="PosedGate"/>): they are about several starts composing, which needs the node's own
 /// figure to hold still — and proving a memory bound by consuming memory would be self-defeating.
@@ -86,11 +86,10 @@ public sealed class MemoryGateTests
     }
 
     [Fact]
-    public void Missing_config_keys_leave_the_gate_ON_at_the_default_headroom()
+    public void Unset_settings_leave_the_gate_ON_at_the_default_headroom()
     {
-        // A host whose config predates the gate must be protected, not unprotected. Absent keys fall
-        // back to the same coded defaults kgsm uses (on, 1024MB), so the two halves agree even before
-        // the config migration has run.
+        // A daemon whose settings do not name the gate must be protected, not unprotected: unset reads as
+        // on at 1024MB.
         var gate = Gate(enabled: null, headroom: null, minRamMb: null);
 
         // 1MB against a 1024MB floor fits on any host that can run this suite, so the gate is proven
@@ -99,24 +98,22 @@ public sealed class MemoryGateTests
     }
 
     [Fact]
-    public void Malformed_headroom_falls_back_rather_than_removing_the_reserve()
+    public void A_negative_headroom_is_floored_at_zero_rather_than_accepted()
     {
-        // A typo in config.ini must not silently disable the protection.
-        var gate = Gate(enabled: "true", headroom: "not-a-number", minRamMb: null);
+        WatchdogOptions options = WatchdogOptions.FromSettings(new WatchdogSettings { MemoryGateHeadroomMb = -5 });
 
-        Assert.Equal(MemoryGate.Verdict.Allowed, gate.Evaluate(Spec(capMb: 1)).Verdict);
+        Assert.Equal(0, options.MemoryGateHeadroomMb);
+        Assert.True(options.EnableMemoryGate);
     }
 
     [Fact]
-    public void An_engine_that_throws_leaves_the_gate_at_its_defaults()
+    public void A_blueprint_that_cannot_be_read_is_an_unanswerable_check_not_a_refusal()
     {
-        // Reading the config is how the gate is TUNED; it is not what decides the gate exists. A
-        // supervisor that refused to start game servers because it could not read its own config would
-        // be a worse outage than the one the gate prevents.
-        var gate = new MemoryGate(new ThrowingConfig(), new FakeBlueprints(null),
-            NullLogger<MemoryGate>.Instance);
+        // A supervisor that refused to start game servers because it could not read a blueprint would be
+        // a worse outage than the one the gate prevents.
+        var gate = new MemoryGate(Options(null, null), new ThrowingCatalog(), NullLogger<MemoryGate>.Instance);
 
-        Assert.Equal(MemoryGate.Verdict.Allowed, gate.Evaluate(Spec(capMb: 1)).Verdict);
+        Assert.Equal(MemoryGate.Verdict.NotChecked, gate.Evaluate(Spec(capMb: 0)).Verdict);
     }
 
     // ---- the reservation ledger -------------------------------------------------------------
@@ -315,7 +312,21 @@ public sealed class MemoryGateTests
     }
 
     private static MemoryGate Gate(string? enabled, string? headroom, int? minRamMb) =>
-        new(new FakeConfig(enabled, headroom), new FakeBlueprints(minRamMb), NullLogger<MemoryGate>.Instance);
+        new(Options(enabled, headroom), Blueprints(minRamMb), NullLogger<MemoryGate>.Instance);
+
+    private static WatchdogOptions Options(string? enabled, string? headroom) =>
+        WatchdogOptions.FromSettings(new WatchdogSettings
+        {
+            EnableMemoryGate = enabled is null ? null : enabled == "true",
+            MemoryGateHeadroomMb = headroom is null ? null : int.Parse(headroom, System.Globalization.CultureInfo.InvariantCulture),
+        });
+
+    private static FakeInstanceCatalog Blueprints(int? minRamMb)
+    {
+        var catalog = new FakeInstanceCatalog();
+        if (minRamMb is { } mb) catalog.DeclareBlueprintMemory("testgame", mb);
+        return catalog;
+    }
 
     /// <summary>
     /// A gate over a POSED node reading rather than the host's own. The ledger tests are about a set of
@@ -326,7 +337,7 @@ public sealed class MemoryGateTests
     private static MemoryGate PosedGate(
         int? availableMb, string? enabled = "true", string? headroom = "1024", int? minRamMb = null,
         TestClock? clock = null) =>
-        new(new FakeConfig(enabled, headroom), new FakeBlueprints(minRamMb), NullLogger<MemoryGate>.Instance,
+        new(Options(enabled, headroom), Blueprints(minRamMb), NullLogger<MemoryGate>.Instance,
             () => availableMb, clock ?? new TestClock(DateTime.UtcNow));
 
     /// <summary>A clock the test moves by hand, so the reservation backstop is exercised in microseconds.</summary>
@@ -337,58 +348,21 @@ public sealed class MemoryGateTests
         public void Advance(TimeSpan by) => _now = _now.Add(by);
     }
 
-    private static Instance Spec(int capMb) => new()
+    private static InstanceSpec Spec(int capMb) => new()
     {
         Name = "test-instance",
-        BlueprintFile = "/blueprints/testgame.bp.yaml",
+        Blueprint = "testgame",
         MemoryCapMb = capMb,
     };
 
-    private sealed class FakeConfig(string? enabled, string? headroom) : IConfigService
+    private sealed class ThrowingCatalog : IInstanceCatalog
     {
-        public string? Get(string key) => key switch
-        {
-            "enable_memory_gate" => enabled,
-            "memory_gate_headroom_mb" => headroom,
-            _ => null,
-        };
+        public InstanceSpec? Find(string name) => null;
 
-        public KgsmResult Set(string key, string value) => new(0, "", "");
-        public Dictionary<string, string> List() => [];
-        public KgsmResult Reset() => new(0, "", "");
-        public KgsmResult Validate() => new(0, "", "");
-        public KgsmResult Merge() => new(0, "", "");
-        public KgsmResult Rollback(int generation = 0) => new(0, "", "");
-        public KgsmResult Diff(int generation = 0) => new(0, "", "");
-    }
+        public IReadOnlyList<InstanceSpec>? All() => [];
 
-    private sealed class ThrowingConfig : IConfigService
-    {
-        public string? Get(string key) => throw new InvalidOperationException("engine unreachable");
-        public KgsmResult Set(string key, string value) => new(0, "", "");
-        public Dictionary<string, string> List() => [];
-        public KgsmResult Reset() => new(0, "", "");
-        public KgsmResult Validate() => new(0, "", "");
-        public KgsmResult Merge() => new(0, "", "");
-        public KgsmResult Rollback(int generation = 0) => new(0, "", "");
-        public KgsmResult Diff(int generation = 0) => new(0, "", "");
-    }
+        public int? BlueprintMinRamMb(string blueprint) => throw new InvalidOperationException("engine unreachable");
 
-    private sealed class FakeBlueprints(int? minRamMb) : IBlueprintService
-    {
-        public Blueprint? GetInfo(string blueprintName) => new()
-        {
-            Name = blueprintName,
-            Metadata = new BlueprintMetadata { MinRamMb = minRamMb },
-        };
-
-        public List<string> List() => [];
-        public List<string> ListDefault() => [];
-        public List<string> ListCustom() => [];
-        public Dictionary<string, Blueprint> ListDetailed() => [];
-        public BlueprintCandidates? FindAll(string blueprintName) => null;
-        public BlueprintValidation? Validate(string blueprintNameOrPath) => null;
-        public string? FindPath(string blueprintName) => null;
-        public string? GetScaffold() => null;
+        public TransferLockState LockState(string name) => TransferLockState.Free;
     }
 }

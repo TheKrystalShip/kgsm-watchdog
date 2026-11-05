@@ -1,4 +1,4 @@
-using TheKrystalShip.KGSM.Core.Models;
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -39,7 +39,7 @@ internal sealed class SupervisedInstance
     public required string Name { get; init; }
 
     /// <summary>The spawn config captured at start, reused verbatim on every restart (no mid-supervision config drift).</summary>
-    public required Instance Spec { get; set; }
+    public required InstanceSpec Spec { get; set; }
 
     /// <summary>Operator intent: was the daemon last told to run this? A deliberate <c>stop</c> sets it false.</summary>
     public bool DesiredRunning { get; set; } = true;

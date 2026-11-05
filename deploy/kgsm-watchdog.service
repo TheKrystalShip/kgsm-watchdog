@@ -40,8 +40,8 @@ Group=kgsm
 Slice=kgsm.slice
 Delegate=yes
 
-# REQUIRED: absolute path to kgsm.sh (read-only, via kgsm-lib, for each instance's spawn config). Point
-# at the packaged launcher, not a copy under /home. The full reference: `kgsm-watchdog --help`.
+# REQUIRED: absolute path to the kgsm binary (read in-process, never to change engine state, for each instance's
+# spawn config). Point at the packaged binary, not a copy under /home. The full reference: `kgsm-watchdog --help`.
 Environment=Watchdog__KgsmPath=/usr/bin/kgsm
 # Optional: keep the rest of the knobs in a file. The leading '-' makes it optional (no failure if
 # absent). Every key here must exist in kgsm-watchdog.settings.json, which declares the daemon's whole

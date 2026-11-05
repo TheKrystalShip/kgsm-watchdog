@@ -2,8 +2,12 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
+
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -43,7 +47,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </summary>
 internal sealed class ContainerLifecycleIngester(
     WatchdogOptions options,
-    IInstanceService instances,
+    IInstanceCatalog instances,
     UpnpService upnp,
     IForwardedPortClaims claims,
     ILogger<ContainerLifecycleIngester> logger) : BackgroundService
@@ -164,10 +168,10 @@ internal sealed class ContainerLifecycleIngester(
             return;
         }
 
-        Instance? instance;
+        InstanceSpec? instance;
         try
         {
-            instance = instances.GetInstanceInfo(instanceName);
+            instance = instances.Find(instanceName);
         }
         catch (Exception ex)
         {
@@ -181,7 +185,7 @@ internal sealed class ContainerLifecycleIngester(
             return;
         }
 
-        if (instance.Runtime != InstanceRuntime.Container)
+        if (instance.Runtime != BlueprintRuntime.Container)
         {
             // Native UPnP is already driven by InstanceSupervisor — never double-drive the same
             // instance from here (this channel shouldn't exist for a native instance anyway, but the

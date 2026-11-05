@@ -4,8 +4,8 @@ using System.Text.RegularExpressions;
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
 /// <summary>
-/// Pure readiness detector for one instance's <c>startup_success_regex</c> (kgsm-lib
-/// <c>Instance.StartupSuccessRegex</c>) — the .NET analog of the bash reference's
+/// Pure readiness detector for one instance's <c>startup_success_regex</c> (the instance config's
+/// <c>StartupSuccessRegex</c>) — the .NET analog of the bash reference's
 /// <c>watchers.logs.sh</c> <c>__logic_test_log_pattern</c> (whole-file <c>grep -q</c>) and
 /// <c>__logic_determine_strategy</c> (empty pattern ⇒ no distinct readiness signal). Mirrors
 /// <see cref="NativeLogMatcher"/>'s compile/timeout/honesty rules — 100 ms ReDoS-guard timeout,

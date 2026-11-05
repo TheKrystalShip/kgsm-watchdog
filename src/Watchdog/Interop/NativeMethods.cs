@@ -121,7 +121,7 @@ internal static partial class NativeMethods
     /// it). Always called with <see cref="WNOHANG"/>, so it never blocks: returns the pid when it reaps a
     /// zombie, 0 if that child is still alive, or -1 (ECHILD) if it is not / no longer our child. It targets
     /// only those specific adopted pids — NEVER <c>waitpid(-1)</c> — so it cannot race the CLR reaping the
-    /// children IT spawned (the launcher, --selfcheck, kgsm-lib calls), which would corrupt their exit codes.
+    /// children IT spawned (the launcher, --selfcheck), which would corrupt their exit codes.
     /// </summary>
     [LibraryImport("libc", SetLastError = true)]
     internal static partial int waitpid(int pid, out int wstatus, int options);
@@ -179,7 +179,7 @@ internal static partial class NativeMethods
     /// malloc_trim(3) — return free memory from the top of the main glibc arena (and, on modern glibc,
     /// other arenas) to the OS. The periodic <see cref="Supervision.MemoryTrimmer"/> calls it AFTER an
     /// aggressive compacting <c>GC.Collect</c>: the GC hands back its own committed heap, but the native
-    /// allocations behind the control plane (Kestrel/socket churn, kgsm-lib subprocess plumbing) go
+    /// allocations behind the control plane (Kestrel/socket churn) go
     /// through glibc <c>malloc</c>, which by default keeps freed chunks cached in the arena rather than
     /// <c>munmap</c>-ing them — so they linger on the RSS until this is called. <paramref name="pad"/> is
     /// the number of bytes to leave available at the top (0 = release as much as possible). Returns 1 if

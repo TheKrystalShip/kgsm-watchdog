@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
-using TheKrystalShip.KGSM.Core.Interfaces;
-using TheKrystalShip.KGSM.Core.Models;
+using TheKrystalShip.KGSM.Watchdog.Catalog;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -25,9 +26,10 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// on every path where it will never report ready.
 /// </para>
 /// <para>
-/// The two knobs are read from <b>kgsm's</b> config, not from the daemon's own settings, so the host
-/// has one answer rather than two that can disagree. They arrive through
-/// <see cref="IConfigService"/> — the C#-to-engine chokepoint — never by parsing the ini here.
+/// The two knobs are the daemon's own settings (<see cref="WatchdogOptions.EnableMemoryGate"/> and
+/// <see cref="WatchdogOptions.MemoryGateHeadroomMb"/>); the engine holds no memory check, so the watchdog's
+/// answer is the only one. The control surface reports them (<c>GET /memory-gate</c>) for the surfaces
+/// that show or edit them. A blueprint's advisory figure is read through <see cref="IInstanceCatalog"/>.
 /// </para>
 /// <para>
 /// <b>The daemon never overrules itself.</b> It has nobody to ask, so the autostart and the
@@ -38,23 +40,12 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </para>
 /// </remarks>
 public sealed class MemoryGate(
-    IConfigService config,
-    IBlueprintService blueprints,
+    WatchdogOptions options,
+    IInstanceCatalog catalog,
     ILogger<MemoryGate> logger)
 {
-    /// <summary>kgsm's key for the master switch. Shared with the CLI; see kgsm's <c>[resources]</c>.</summary>
-    private const string EnabledKey = "enable_memory_gate";
-
-    /// <summary>kgsm's key for the reserve that must survive a start.</summary>
-    private const string HeadroomKey = "memory_gate_headroom_mb";
-
-    /// <summary>What both sides fall back to when the key is absent — a host whose config predates the
-    /// gate is protected, not unprotected. Must match kgsm's coded defaults.</summary>
-    private const bool DefaultEnabled = true;
-    private const int DefaultHeadroomMb = 1024;
-
     /// <summary>
-    /// How long a config or blueprint reading is reused. Every read costs a kgsm invocation, and the
+    /// How long a blueprint reading is reused. Every read parses the blueprint file, and the
     /// crash-restart path can ask repeatedly while an instance is looping; a minute is short enough
     /// that an operator's config edit takes effect while they are still watching.
     /// </summary>
@@ -80,7 +71,6 @@ public sealed class MemoryGate(
     /// dictionaries, never across an engine read.
     /// </summary>
     private readonly Lock _gate = new();
-    private (bool Enabled, int HeadroomMb, DateTime ReadAt)? _settings;
     private readonly Dictionary<string, (int? MinRamMb, DateTime ReadAt)> _blueprintRam = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -99,11 +89,11 @@ public sealed class MemoryGate(
     /// <summary>Test seam: a posed node reading and a controllable clock. Production always reads
     /// <c>/proc/meminfo</c> and the system clock.</summary>
     internal MemoryGate(
-        IConfigService config,
-        IBlueprintService blueprints,
+        WatchdogOptions options,
+        IInstanceCatalog catalog,
         ILogger<MemoryGate> logger,
         Func<int?> available,
-        TimeProvider clock) : this(config, blueprints, logger)
+        TimeProvider clock) : this(options, catalog, logger)
     {
         _available = available;
         _clock = clock;
@@ -148,7 +138,7 @@ public sealed class MemoryGate(
     /// be a worse outage than the one the gate exists to prevent. An unanswerable check is unanswerable
     /// whatever the ledger holds: those cases return before any reservation is subtracted.
     /// </remarks>
-    public Decision Evaluate(Instance spec) => Judge(spec, reserveFor: null);
+    public Decision Evaluate(InstanceSpec spec) => Judge(spec, reserveFor: null);
 
     /// <summary>
     /// Judge <paramref name="spec"/> exactly as <see cref="Evaluate"/> does and, when the answer is not
@@ -169,7 +159,7 @@ public sealed class MemoryGate(
     /// the moment the node is under the most pressure.
     /// </para>
     /// </remarks>
-    public Decision TryReserve(string instanceName, Instance spec, bool force = false)
+    public Decision TryReserve(string instanceName, InstanceSpec spec, bool force = false)
         => Judge(spec, reserveFor: instanceName, force: force);
 
     /// <summary>
@@ -208,7 +198,7 @@ public sealed class MemoryGate(
         }
     }
 
-    private Decision Judge(Instance spec, string? reserveFor, bool force = false)
+    private Decision Judge(InstanceSpec spec, string? reserveFor, bool force = false)
     {
         if (spec is null) return AllowedDecision;
 
@@ -294,7 +284,7 @@ public sealed class MemoryGate(
     /// a number nobody measured.
     /// </para>
     /// </remarks>
-    private int? RequirementMb(Instance spec)
+    private int? RequirementMb(InstanceSpec spec)
     {
         // 0 is kgsm's spelling of "uncapped" for this key, not a request for no memory.
         if (spec.MemoryCapMb is { } cap and > 0) return cap;
@@ -312,8 +302,7 @@ public sealed class MemoryGate(
         int? minRam = null;
         try
         {
-            Blueprint? bp = blueprints.GetInfo(blueprint);
-            minRam = bp?.Metadata?.MinRamMb is { } mb and > 0 ? mb : null;
+            minRam = catalog.BlueprintMinRamMb(blueprint) is { } mb and > 0 ? mb : null;
         }
         catch (Exception ex)
         {
@@ -328,42 +317,8 @@ public sealed class MemoryGate(
         return minRam;
     }
 
-    // The two kgsm keys, cached. A malformed value falls back to the default rather than disabling the
-    // reserve silently — a typo in config.ini must not quietly remove the protection.
-    private (bool Enabled, int HeadroomMb) Settings()
-    {
-        lock (_gate)
-        {
-            if (_settings is { } s && Now - s.ReadAt < CacheTtl)
-                return (s.Enabled, s.HeadroomMb);
-        }
-
-        bool enabled = DefaultEnabled;
-        int headroom = DefaultHeadroomMb;
-        try
-        {
-            string? rawEnabled = config.Get(EnabledKey);
-            if (!string.IsNullOrWhiteSpace(rawEnabled))
-                enabled = !string.Equals(rawEnabled.Trim(), "false", StringComparison.OrdinalIgnoreCase);
-
-            string? rawHeadroom = config.Get(HeadroomKey);
-            if (!string.IsNullOrWhiteSpace(rawHeadroom)
-                && int.TryParse(rawHeadroom.Trim(), out int parsed) && parsed >= 0)
-                headroom = parsed;
-        }
-        catch (Exception ex)
-        {
-            // Falling back to the coded defaults keeps the protection on. Reading the config is how the
-            // gate is TUNED; it is not what decides that the gate exists.
-            logger.LogDebug(ex, "could not read the memory gate config from kgsm; using defaults");
-        }
-
-        lock (_gate)
-        {
-            _settings = (enabled, headroom, Now);
-        }
-        return (enabled, headroom);
-    }
+    /// <summary>The settings the gate judges by.</summary>
+    public (bool Enabled, int HeadroomMb) Settings() => (options.EnableMemoryGate, options.MemoryGateHeadroomMb);
 }
 
 /// <summary>The node's own memory reading.</summary>

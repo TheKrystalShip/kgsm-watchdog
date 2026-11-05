@@ -6,12 +6,14 @@ using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Model;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
 
+using TheKrystalShip.KGSM.Watchdog.Catalog;
+
 namespace TheKrystalShip.KGSM.Watchdog.Control;
 
 /// <summary>
 /// The control protocol (PLAN §5), served as HTTP/1.1 over the unix socket exactly like the
-/// monitor's <c>/metrics</c> — same transport, same source-gen JSON, so kgsm-lib gets a tiny typed
-/// client and the bot/CLI reuse it. The socket's filesystem perms are the security boundary; there
+/// monitor's <c>/metrics</c> — same transport, same source-gen JSON, so the watchdog client package is a
+/// small typed client and the bot and the API reuse it. The socket's filesystem perms are the security boundary; there
 /// is no in-daemon authn (that belongs to the network-facing surfaces above).
 /// </summary>
 internal static class ControlEndpoints
@@ -100,7 +102,7 @@ internal static class ControlEndpoints
         // default "scheduler") names the REQUESTING LEAF — kgsm-scheduler's scheduled restart is the one
         // caller — and the emitted instance-restarted is attributed to it, so the audit trail names the
         // leaf that asked rather than this daemon. The query key stays `origin` because that is what
-        // kgsm-lib's IWatchdogClient.RestartAsync sends. Does NOT touch the crash streak — it routes
+        // the watchdog client's IWatchdogClient.RestartAsync sends. Does NOT touch the crash streak — it routes
         // through StartAsync which resets it. Same three statuses as /start, for the same reason: its
         // start half runs the capacity check, so a restart can be refused for room — and that lands the
         // instance DOWN with the stop already done, which a caller reading a generic 409 would retry
@@ -216,6 +218,14 @@ internal static class ControlEndpoints
         // The running daemon's build identity. The hot-swap deploy curls this after a
         // reload to confirm the new binary is live; the same version is what `--version` prints. Read
         // from the compiled-in informational version (never fabricated), split into version + commit.
+        // The memory admission gate's settings as the daemon runs them. They are the daemon's own, so
+        // a surface that shows or edits them reads them here and writes them to the daemon's settings.
+        app.MapGet("/memory-gate", (MemoryGate gate) =>
+        {
+            (bool enabled, int headroomMb) = gate.Settings();
+            return Results.Json(new MemoryGateState(enabled, headroomMb), WatchdogJsonContext.Default.MemoryGateState);
+        });
+
         app.MapGet("/version", () =>
             Results.Json(
                 WatchdogVersionInfo.FromInformational(VersionInfo.Informational),
@@ -233,17 +243,17 @@ internal static class ControlEndpoints
         // Detection is PlayerDetection's answer — the same predicate the ingesters gate on, not a
         // second derivation from the same config. It is re-read per request: a blueprint edit or a
         // reinstall changes it, and this is a control call at human cadence, not a hot path.
-        app.MapGet("/players", (PlayerSessionStore store, IInstanceService instances) =>
+        app.MapGet("/players", (PlayerSessionStore store, IInstanceCatalog instances) =>
         {
             var sessions = store.GetAllSessionsWithKeys();
             var result = new Dictionary<string, InstancePresence>(StringComparer.Ordinal);
 
             // Every instance kgsm knows, not only the ones with somebody on them — an instance
             // missing from this map is the ambiguity the endpoint exists to remove.
-            Dictionary<string, Instance>? inventory = null;
+            IReadOnlyList<InstanceSpec>? inventory = null;
             try
             {
-                inventory = instances.GetAllOrNull();
+                inventory = instances.All();
             }
             catch (Exception)
             {
@@ -252,8 +262,9 @@ internal static class ControlEndpoints
                 // lose the sessions too.
             }
 
-            foreach (var (name, instance) in inventory ?? [])
+            foreach (InstanceSpec instance in inventory ?? [])
             {
+                string name = instance.Name;
                 var players = sessions.TryGetValue(name, out var tracked)
                     ? tracked.Select(e => new PlayerSession(e.Key, e.Value.Id, e.Value.Name, e.Value.Addr)).ToArray()
                     : [];

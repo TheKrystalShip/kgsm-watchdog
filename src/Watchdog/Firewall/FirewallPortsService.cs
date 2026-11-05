@@ -1,7 +1,8 @@
 using Microsoft.Extensions.Logging;
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Exceptions;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Firewall;
 
@@ -27,8 +28,8 @@ internal enum FirewallPortsOutcome { Skipped, Applied, Failed }
 /// close on an intended stop. Only the supervisor observes those transitions precisely, and it observes
 /// them for boot-autostart and crash-respawn too, which nothing in the kgsm CLI ever sees.
 /// <para>
-/// It owns the <em>trigger</em>, not the firewall: every write goes through kgsm-lib's
-/// <see cref="IFirewallService"/> to the kgsm-firewall authority, which stays the single owner of host
+/// It owns the <em>trigger</em>, not the firewall: every write goes through the firewall
+/// contract package's <see cref="IFirewallService"/> to the kgsm-firewall authority, which stays the single owner of host
 /// firewall state. This type adds only the per-instance gate, the outcome mapping, and honest logging.
 /// </para>
 /// <para>
@@ -56,7 +57,7 @@ internal sealed class FirewallPortsService(IFirewallService firewall, ILogger<Fi
     /// asked — the authority repeats the claim and cannot check it, which is why it must come from here.
     /// </remarks>
     public async Task<FirewallPortsOutcome> OpenAsync(
-        Instance instance, string? actor = null, string? origin = null, CancellationToken ct = default)
+        InstanceSpec instance, string? actor = null, string? origin = null, CancellationToken ct = default)
     {
         // Per-instance gate, the mirror of UPnP's enable_port_forwarding check. Disabled is the operator
         // saying "do not manage this instance's firewall", which a bring-up must not override.
@@ -83,7 +84,7 @@ internal sealed class FirewallPortsService(IFirewallService firewall, ILogger<Fi
     /// ownership tag, so it cleans up correctly even for an instance whose declared ports have changed.
     /// </summary>
     public async Task<FirewallPortsOutcome> CloseAsync(
-        Instance instance, string? actor = null, string? origin = null, CancellationToken ct = default)
+        InstanceSpec instance, string? actor = null, string? origin = null, CancellationToken ct = default)
     {
         if (!instance.EnableFirewallManagement)
             return FirewallPortsOutcome.Skipped;

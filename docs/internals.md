@@ -119,7 +119,7 @@ All resolve their location through `StatePathResolver`.
 
 - `desired-state.json` (`Watchdog__StateFile`) is the boot and enable axis. `enable` and `disable` add
   and remove a name; on startup `StartupRestorer` re-adopts a still-live cgroup or respawns a dead one.
-  It stores intent only: each spawn config is re-read from kgsm-lib, so no stale spec drifts. The
+  It stores intent only: each spawn config is re-read from the engine core, so no stale spec drifts. The
   runtime `start`/`stop` axis is separate.
 - `supervision-state.json` (`SupervisionStateStore`) persists restart counters and the give-up latch so
   they survive any death, including OOM and SIGKILL.

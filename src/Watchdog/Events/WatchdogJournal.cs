@@ -14,9 +14,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Events;
 /// <para>
 /// <b>A producer emits what that producer does.</b> Every event here is one the watchdog itself
 /// established — it spawned the process, it opened the port, it saw the readiness line — so it writes
-/// them, rather than asking the engine to write them down on its behalf. That also removes a
-/// <c>kgsm.sh</c> process spawn per event: a bash bootstrap, a sourced library and a <c>jq</c> call to
-/// append one line, three times over on a single server start.
+/// them, rather than asking the engine to write them down on its behalf. An append is one write in this
+/// process, not a child process per event.
 /// </para>
 /// <para>
 /// <b>Writes are inline, not off-thread.</b> An append is a single write to a file this daemon owns,

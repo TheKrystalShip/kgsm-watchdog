@@ -1,9 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
 using TheKrystalShip.KGSM.Watchdog.Model;
@@ -188,7 +187,7 @@ public sealed class PlayerSessionTeardownTests
         finally { Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, prior); }
     }
 
-    private static Instance SpecFor(string name, int? crashMaxRestarts = null) => new()
+    private static InstanceSpec SpecFor(string name, int? crashMaxRestarts = null) => new()
     {
         Name = name,
         SocketFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-nofifo-{Guid.NewGuid():N}.fifo"), // never exists → cgroup-only adopt
@@ -196,7 +195,7 @@ public sealed class PlayerSessionTeardownTests
     };
 
     private static InstanceSupervisor NewSupervisor(
-        Instance spec, PlayerSessionStore sessions, RecordingJournal? events = null)
+        InstanceSpec spec, PlayerSessionStore sessions, RecordingJournal? events = null)
     {
         var options = new WatchdogOptions
         {
@@ -209,7 +208,7 @@ public sealed class PlayerSessionTeardownTests
         var state = new SupervisorState { Ready = true, Detail = "test" };
         RecordingJournal recorder = events ?? new RecordingJournal();
         return new InstanceSupervisor(
-            new PerInstanceCrashPolicyTests.SingleInstance(spec),
+            FakeInstanceCatalog.Of(spec),
             spawn,
             cgroups,
             new BackoffPolicy(),

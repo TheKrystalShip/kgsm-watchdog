@@ -1,10 +1,11 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Watchdog.Model;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -178,7 +179,7 @@ public sealed class ReadinessSurvivesDaemonRestartTests : IDisposable
         Assert.Empty(second.Calls);
     }
 
-    private NativePlayerPresenceIngester NewIngester(WatchdogJournal journal, IInstanceService instances) =>
+    private NativePlayerPresenceIngester NewIngester(WatchdogJournal journal, IInstanceCatalog instances) =>
         new(new WatchdogOptions { InstancesDir = _root }, instances, journal, TestState.Sessions(),
             new CgroupManager(
                 new WatchdogOptions { CgroupMountPoint = _cgroupRoot, CgroupBaseName = "kgsm.slice" },
@@ -187,13 +188,13 @@ public sealed class ReadinessSurvivesDaemonRestartTests : IDisposable
             TestState.Readiness(new WatchdogOptions { StateFile = Path.Combine(_stateRoot, "desired-state.json") }),
             NullLogger<NativePlayerPresenceIngester>.Instance);
 
-    private static FakeInstanceService NewFake(string name, string log, string ready)
+    private static FakeInstanceCatalog NewFake(string name, string log, string ready)
     {
-        var fake = new FakeInstanceService();
-        fake.Add(new Instance
+        var fake = new FakeInstanceCatalog();
+        fake.Add(new InstanceSpec
         {
             Name = name,
-            Runtime = InstanceRuntime.Native,
+            Runtime = BlueprintRuntime.Native,
             LogFile = log,
             StartupSuccessRegex = ready,
             PlayerJoinedRegex = "",

@@ -1,9 +1,10 @@
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
-using System.Text;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Interop;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -43,11 +44,13 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </summary>
 internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> logger)
 {
-    // $0=sh $1=cgroup.procs $2=launchdir $3=exe $4=args(unquoted: word-split+glob, faithful) $5=fifo $6=log
-    // $7=the game's soft open-file limit. -S sets only the soft limit (a bare -n in bash lowers the hard
-    // limit too, which the game could never raise back), and a refusal is not a reason to not start.
-    private const string LauncherBody =
-        "ulimit -Sn \"$7\" 2>/dev/null; echo $$ > \"$1\" && cd \"$2\" && exec \"$3\" $4 < \"$5\" >> \"$6\" 2>&1";
+    // $0=sh $1=cgroup.procs $2=launchdir $3=fifo $4=log $5=the game's soft open-file limit, then the
+    // executable and its arguments, one positional parameter each, exactly as the engine core resolved
+    // them: nothing is word-split, globbed or expanded here. -S sets only the soft limit (a bare -n in
+    // bash lowers the hard limit too, which the game could never raise back), and a refusal is not a
+    // reason to not start.
+    internal const string LauncherBody =
+        "ulimit -Sn \"$5\" 2>/dev/null; echo $$ > \"$1\" && cd \"$2\" && fifo=$3 && log=$4 && shift 5 && exec \"$@\" < \"$fifo\" >> \"$log\" 2>&1";
 
     /// <summary>
     /// Create the instance cgroup + FIFO, then fork the game into it. Returns a live handle on
@@ -55,7 +58,7 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
     /// failure (the caller maps that to a failed control result). Best-effort cleanup runs on the
     /// throwing paths so a failed spawn leaves no half-built cgroup/FIFO behind.
     /// </summary>
-    public RunningInstance Spawn(Instance instance)
+    public RunningInstance Spawn(InstanceSpec instance)
     {
         // Fail fast on a malformed/unpopulated descriptor with an honest, name-safe message — before any
         // cgroup/FIFO side effects. See ValidateSpawnable: an unpopulated spec (no name) reports "no
@@ -66,20 +69,11 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
 
         string name = instance.Name;
         string launchDir = FirstNonEmpty(instance.LaunchDir, instance.WorkingDir, instance.InstallDir);
-        string exe = instance.ExecutableFile;
+        string exe = ExecutablePath(instance.ExecutableFile, launchDir);
         string fifo = instance.SocketFile;
         string log = instance.LogFile;
 
         if (!Directory.Exists(launchDir)) throw new InvalidOperationException($"{name}: launch dir missing: {launchDir}");
-
-        // Faithful to the bash native path's security gate: reject command-substitution patterns.
-        string rawArgs = instance.ExecutableArguments ?? string.Empty;
-        if (rawArgs.Contains("$(", StringComparison.Ordinal) || rawArgs.Contains('`'))
-            throw new InvalidOperationException($"{name}: executable_arguments contains command-substitution patterns");
-        // envsubst over BOTH the instance_* vars (KGSM exports these in the management script's
-        // env, so blueprints reference e.g. $instance_install_dir in their args) and the process
-        // environment. Resolving only against the daemon's env would silently blank $instance_*.
-        string args = ExpandEnvironment(rawArgs, BuildVarResolver(instance));
 
         string? logDir = Path.GetDirectoryName(log);
         if (!string.IsNullOrEmpty(logDir))
@@ -138,11 +132,11 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
         psi.ArgumentList.Add("sh");        // $0
         psi.ArgumentList.Add(cgProcs);     // $1
         psi.ArgumentList.Add(launchDir);   // $2
-        psi.ArgumentList.Add(exe);         // $3
-        psi.ArgumentList.Add(args);        // $4
-        psi.ArgumentList.Add(fifo);        // $5
-        psi.ArgumentList.Add(log);         // $6
-        psi.ArgumentList.Add(FileDescriptorLimit.GameSoftLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)); // $7
+        psi.ArgumentList.Add(fifo);        // $3
+        psi.ArgumentList.Add(log);         // $4
+        psi.ArgumentList.Add(FileDescriptorLimit.GameSoftLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)); // $5
+        psi.ArgumentList.Add(exe);         // $6
+        foreach (string argument in instance.LaunchArguments) psi.ArgumentList.Add(argument);
 
         Process proc;
         try
@@ -194,7 +188,7 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
     /// reached only with a non-empty name, so a failure reason always identifies the instance.
     /// </para>
     /// </summary>
-    internal static string? ValidateSpawnable(Instance instance)
+    internal static string? ValidateSpawnable(InstanceSpec instance)
     {
         string name = instance.Name;
         if (string.IsNullOrEmpty(name))
@@ -207,6 +201,8 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
             return $"{name}: log_file is empty";
         if (string.IsNullOrEmpty(FirstNonEmpty(instance.LaunchDir, instance.WorkingDir, instance.InstallDir)))
             return $"{name}: no launch/working/install dir";
+        if (instance.LaunchArgumentsProblem is { } problem)
+            return $"{name}: launch arguments: {problem}";
         return null;
     }
 
@@ -288,79 +284,13 @@ internal sealed class SpawnEngine(CgroupManager cgroups, ILogger<SpawnEngine> lo
     private static int Errno() => System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
 
     /// <summary>
-    /// The <c>instance_*</c> variables KGSM exports into the management script's environment, mapped
-    /// from the <see cref="Instance"/> — so a blueprint's <c>$instance_install_dir</c> resolves the
-    /// same way the bash native path's envsubst resolves it. Falls back to the process environment
-    /// for everything else (PATH/HOME/etc.), matching envsubst's full-environment expansion.
+    /// The executable as the launcher runs it. A bare name is the game's own binary when a file of that
+    /// name sits in the launch directory, and is run as <c>./name</c>; otherwise it is left for the
+    /// launcher to find on <c>PATH</c>. This is the engine script's rule, so a game starts the same way
+    /// under either.
     /// </summary>
-    internal static Func<string, string?> BuildVarResolver(Instance i)
-    {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["instance_name"] = i.Name,
-            ["instance_install_dir"] = i.InstallDir,
-            ["instance_working_dir"] = i.WorkingDir,
-            ["instance_launch_dir"] = i.LaunchDir,
-            ["instance_saves_dir"] = i.SavesDir,
-            ["instance_backups_dir"] = i.BackupsDir,
-            ["instance_logs_dir"] = i.LogsDir,
-            ["instance_temp_dir"] = i.TempDir,
-            ["instance_level_name"] = i.LevelName,
-            ["instance_blueprint"] = i.Blueprint,
-            ["instance_ports"] = i.Ports.ToUfwSpec(),
-            ["instance_executable_file"] = i.ExecutableFile,
-            ["instance_executable_subdirectory"] = i.ExecutableSubdirectory,
-        };
-        return name => map.TryGetValue(name, out var v) ? v : Environment.GetEnvironmentVariable(name);
-    }
-
-    /// <summary>Expand against the process environment only (used where there is no instance context).</summary>
-    internal static string ExpandEnvironment(string input)
-        => ExpandEnvironment(input, Environment.GetEnvironmentVariable);
-
-    /// <summary>
-    /// Expand <c>$VAR</c> / <c>${VAR}</c> via <paramref name="resolve"/> — the envsubst step the bash
-    /// native path runs before word-splitting. Unknown variables expand to empty (envsubst
-    /// semantics). No command/arithmetic expansion; the result is then word-split + globbed by the
-    /// launcher's unquoted <c>$4</c>.
-    /// </summary>
-    internal static string ExpandEnvironment(string input, Func<string, string?> resolve)
-    {
-        if (input.IndexOf('$') < 0)
-            return input;
-
-        var sb = new StringBuilder(input.Length);
-        int i = 0;
-        while (i < input.Length)
-        {
-            char c = input[i];
-            if (c != '$') { sb.Append(c); i++; continue; }
-            if (i + 1 >= input.Length) { sb.Append('$'); break; }
-
-            char n = input[i + 1];
-            if (n == '{')
-            {
-                int close = input.IndexOf('}', i + 2);
-                if (close < 0) { sb.Append(input, i, input.Length - i); break; }
-                string varName = input.Substring(i + 2, close - (i + 2));
-                sb.Append(resolve(varName) ?? string.Empty);
-                i = close + 1;
-            }
-            else if (n == '_' || char.IsLetter(n))
-            {
-                int j = i + 1;
-                while (j < input.Length && (input[j] == '_' || char.IsLetterOrDigit(input[j])))
-                    j++;
-                string varName = input.Substring(i + 1, j - (i + 1));
-                sb.Append(resolve(varName) ?? string.Empty);
-                i = j;
-            }
-            else
-            {
-                sb.Append('$');
-                i++;
-            }
-        }
-        return sb.ToString();
-    }
+    internal static string ExecutablePath(string executable, string launchDir) =>
+        !executable.Contains('/', StringComparison.Ordinal) && File.Exists(Path.Combine(launchDir, executable))
+            ? "./" + executable
+            : executable;
 }

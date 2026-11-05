@@ -4,10 +4,13 @@ using Microsoft.Extensions.Logging;
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
-using TheKrystalShip.KGSM.Exceptions;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Services;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
+
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -45,7 +48,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// not the PID file.
 /// </remarks>
 internal sealed class RconPlayerPresencePoller(
-    IInstanceService instances,
+    IInstanceCatalog instances,
     WatchdogJournal journal,
     PlayerSessionStore sessionStore,
     InstanceSupervisor supervisor,
@@ -76,7 +79,7 @@ internal sealed class RconPlayerPresencePoller(
     /// RCON configured (non-null port, non-empty password) are cached here.
     /// Null value means "checked, no RCON — skip".
     /// </summary>
-    private readonly ConcurrentDictionary<string, Instance?> _instanceCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, InstanceSpec?> _instanceCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Per-instance timestamp of when the metadata was last refreshed.
@@ -139,10 +142,10 @@ internal sealed class RconPlayerPresencePoller(
             if (!cacheValid)
             {
                 // Fetch (or re-fetch) instance metadata
-                Instance? instance;
+                InstanceSpec? instance;
                 try
                 {
-                    instance = instances.GetInstanceInfo(name);
+                    instance = instances.Find(name);
                 }
                 catch (Exception ex)
                 {
@@ -169,7 +172,7 @@ internal sealed class RconPlayerPresencePoller(
                     // reply cannot be parsed — either way the poll could only produce a roster that is
                     // empty for want of parsing, which is indistinguishable from nobody connected.
                     // An instance with no RCON at all is not a misconfiguration and says nothing.
-                    if (instance.Runtime == InstanceRuntime.Native
+                    if (instance.Runtime == BlueprintRuntime.Native
                         && instance.RconPort is not null
                         && !string.IsNullOrEmpty(instance.RconPassword))
                     {
@@ -226,7 +229,7 @@ internal sealed class RconPlayerPresencePoller(
         }
     }
 
-    private async Task PollInstance(Instance instance, int port, CancellationToken cancellationToken)
+    private async Task PollInstance(InstanceSpec instance, int port, CancellationToken cancellationToken)
     {
         string name = instance.Name;
 

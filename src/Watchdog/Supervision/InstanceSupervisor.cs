@@ -2,7 +2,7 @@ using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
@@ -12,6 +12,8 @@ using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using System.Text;
 using System.Text.Json;
 using TheKrystalShip.KGSM.Lifecycle;
+
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -37,7 +39,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </para>
 /// </summary>
 internal sealed class InstanceSupervisor(
-    IInstanceService instances,
+    IInstanceCatalog instances,
     SpawnEngine spawnEngine,
     CgroupManager cgroups,
     BackoffPolicy policy,
@@ -70,7 +72,6 @@ internal sealed class InstanceSupervisor(
     /// comes back promptly once another server stops, long enough that a permanently-full node is not
     /// re-reading /proc/meminfo every tick.
     /// </remarks>
-    private const string TransferLockKey = "transfer_lock";
 
     private static readonly TimeSpan NoRoomRecheckDelay = TimeSpan.FromSeconds(30);
 
@@ -82,7 +83,7 @@ internal sealed class InstanceSupervisor(
     // A live pid waitpid()s to 0 (kept); a reaped or never-ours pid drops out. Bounded by the instance count.
     private readonly ConcurrentDictionary<int, byte> _reapable = new();
 
-    // The autonomous supervisor lifecycle events kgsm-lib forwards to kgsm (dash CLI form), all
+    // The autonomous supervisor lifecycle events the daemon writes to its own journal, all
     // stamped actor=system / origin=system — engine actions no human drove. The watchdog is the
     // sole observer of a crash AND the sole driver of the recovery respawn / boot bring-up, so it
     // is the sole emitter of these. A USER-driven start/restart is NOT emitted here: that routes
@@ -104,24 +105,23 @@ internal sealed class InstanceSupervisor(
     // ---- control verbs ----------------------------------------------------------------------
 
     /// <summary>
-    /// Refuses an instance held by an instance transfer. The lock is the instance config's
-    /// <c>transfer_lock</c> key, a token the engine writes when an export takes the instance and removes
-    /// when it releases it. It is read from the engine on every call and never cached, because it changes
-    /// between calls. An unreadable config is a plain failure, never a pass: starting an instance whose
-    /// lock cannot be read could run it in two places.
+    /// Refuses an instance held by an instance transfer. The lock is a file the engine places in the
+    /// instance's working directory when an export takes the instance and removes when it releases it. It
+    /// is read through the catalog on every call and never cached, because it changes between calls. An
+    /// unreadable lock is a plain failure, never a pass: starting an instance whose lock cannot be read
+    /// could run it in two places.
     /// </summary>
     /// <returns>The refusal, or <see langword="null"/> when the instance is not locked.</returns>
     private ActionResult? CheckTransferLock(string name)
     {
-        var read = instances.GetInstanceConfigValue(name, TransferLockKey);
-        if (read.IsFailure)
-            return new ActionResult(name, false, $"transfer lock unreadable: {read.Stderr.Trim()}");
-
-        return string.IsNullOrWhiteSpace(read.Stdout)
-            ? null
-            : new ActionResult(name, false,
-                $"the instance is locked by an instance transfer ({TransferLockKey} is set)",
-                ActionRefusal.InstanceLocked);
+        return instances.LockState(name) switch
+        {
+            TransferLockState.Free => null,
+            TransferLockState.Locked => new ActionResult(name, false,
+                "the instance is locked by an instance transfer",
+                ActionRefusal.InstanceLocked),
+            _ => new ActionResult(name, false, "transfer lock unreadable: the instance is not registered or its files cannot be read"),
+        };
     }
 
     /// <summary>
@@ -156,14 +156,14 @@ internal sealed class InstanceSupervisor(
             if (existing is { Phase: SupervisionPhase.Running, Current: not null } && cgroups.IsPopulated(name))
                 return new ActionResult(name, true, "already running");
 
-            var instance = instances.GetInstanceInfo(name);
+            var instance = instances.Find(name);
             if (instance is null)
-                return new ActionResult(name, false, "unknown instance (kgsm-lib returned no info)");
+                return new ActionResult(name, false, "unknown instance (the engine core returned no config)");
 
             // Scope guard: the watchdog supervises NATIVE instances. Container instances are supervised
             // by Docker. No-op on those. (Runtime alone is the discriminator now that systemd is gone —
             // every native instance is the watchdog's.)
-            if (instance.Runtime != InstanceRuntime.Native)
+            if (instance.Runtime != BlueprintRuntime.Native)
                 return new ActionResult(name, false,
                     $"out of scope: {instance.Runtime} — the watchdog only supervises native instances");
 
@@ -366,8 +366,8 @@ internal sealed class InstanceSupervisor(
     /// The leaf that asked, which the emitted <c>instance-restarted</c> is ATTRIBUTED to (see
     /// <see cref="ProvenanceActor"/>) — so the audit trail names the scheduler rather than this daemon.
     /// The event's ORIGIN is <c>system</c>: origin is the surface a human drove, and a scheduled restart
-    /// has none. The wire spells this query parameter <c>origin</c>, which is what kgsm-lib's
-    /// <c>IWatchdogClient.RestartAsync</c> sends.
+    /// has none. The wire spells this query parameter <c>origin</c>, which is what the
+    /// watchdog client's <c>RestartAsync</c> sends.
     /// </param>
     public async Task<ActionResult> RestartAsync(string name, string requester = "scheduler", CancellationToken ct = default)
     {
@@ -406,7 +406,7 @@ internal sealed class InstanceSupervisor(
 
         // Emit instance-restarted attributed to the requester, so kgsm-api audits this as the scheduler
         // rather than as the watchdog's own crash recovery. Fire-and-forget, same posture as
-        // EmitSystemEvent: a slow kgsm.sh spawn must not stall the caller, and a dropped event is the
+        // EmitSystemEvent: a slow journal append must not stall the caller, and a dropped event is the
         // honest no-backfill boundary the consumer already accepts.
         journal.Instance(EventRestarted, name, ProvenanceActor(requester));
 
@@ -445,13 +445,13 @@ internal sealed class InstanceSupervisor(
     /// <param name="ct">Cancels only up to the point the drain begins.</param>
     public async Task<ActionResult> BeginMaintenanceAsync(string name, string origin = "scheduler", CancellationToken ct = default)
     {
-        // Read the spec OUTSIDE the gate (it shells out to kgsm-lib and can be slow), and settle the
+        // Read the spec OUTSIDE the gate (it shells out to the engine core and can be slow), and settle the
         // scope question from it: a container instance is Docker's, and there is no park to offer for
         // one whether or not it happens to be tabled here.
-        var instance = instances.GetInstanceInfo(name);
+        var instance = instances.Find(name);
         if (instance is null)
-            return new ActionResult(name, false, "unknown instance (kgsm-lib returned no info)");
-        if (instance.Runtime != InstanceRuntime.Native)
+            return new ActionResult(name, false, "unknown instance (the engine core returned no config)");
+        if (instance.Runtime != BlueprintRuntime.Native)
             return new ActionResult(name, false,
                 $"out of scope: {instance.Runtime} — the watchdog only supervises native instances");
 
@@ -611,11 +611,11 @@ internal sealed class InstanceSupervisor(
     /// </summary>
     public async Task<ActionResult> EnableAsync(string name, CancellationToken ct = default)
     {
-        // Read the spec OUTSIDE the gate (it shells out to kgsm-lib and can be slow).
-        var instance = instances.GetInstanceInfo(name);
+        // Read the spec OUTSIDE the gate (it shells out to the engine core and can be slow).
+        var instance = instances.Find(name);
         if (instance is null)
-            return new ActionResult(name, false, "unknown instance (kgsm-lib returned no info)");
-        if (instance.Runtime != InstanceRuntime.Native)
+            return new ActionResult(name, false, "unknown instance (the engine core returned no config)");
+        if (instance.Runtime != BlueprintRuntime.Native)
             return new ActionResult(name, false,
                 $"out of scope: {instance.Runtime} — only native instances can be enabled for watchdog auto-start");
 
@@ -656,7 +656,7 @@ internal sealed class InstanceSupervisor(
     /// for a server nobody can act on.
     /// <para>
     /// <b>Idempotent and validation-free.</b> An unknown name succeeds as a no-op: by the time a caller
-    /// deregisters, the instance's kgsm spec is typically already deleted, so validating against kgsm-lib
+    /// deregisters, the instance's kgsm spec is typically already deleted, so validating against the engine core
     /// (as <see cref="StartAsync"/>/<see cref="EnableAsync"/> do) would reject exactly the case this exists
     /// to serve. Same reasoning as <see cref="DisableAsync"/> — forgetting intent needs no proof of
     /// existence.
@@ -718,13 +718,13 @@ internal sealed class InstanceSupervisor(
     /// <summary>
     /// At daemon startup, restore supervision of every instance the operator enabled for boot auto-start
     /// (the set persisted by <see cref="DesiredStateStore"/>) — the in-house replacement for systemd boot
-    /// auto-start. For each, the spec is re-read fresh from kgsm-lib, then <see cref="RestorePlan"/>
+    /// auto-start. For each, the spec is re-read fresh from the engine core, then <see cref="RestorePlan"/>
     /// decides: ADOPT a still-live cgroup (a process that outlived a daemon restart — no kill, no
     /// respawn), SPAWN a dead one (a host reboot left nothing running), or skip.
     /// <para>
     /// Deliberately does <b>not</b> route through <see cref="StartAsync"/>: that purges the cgroup
     /// before spawning (<c>cgroup.kill</c>), which would murder a live instance we mean to adopt. And it
-    /// never prunes the persisted set on a (possibly transient) kgsm-lib read miss — durability is the
+    /// never prunes the persisted set on a (possibly transient) engine read miss — durability is the
     /// whole point; only an explicit stop removes intent.
     /// </para>
     /// </summary>
@@ -755,9 +755,9 @@ internal sealed class InstanceSupervisor(
                 if (_instances.ContainsKey(name))
                     continue; // already tracked — restore is idempotent
 
-                Instance? spec = null;
-                try { spec = instances.GetInstanceInfo(name); }
-                catch (Exception ex) { logger.LogWarning(ex, "restore: kgsm-lib threw reading {Instance}", name); }
+                InstanceSpec? spec = null;
+                try { spec = instances.Find(name); }
+                catch (Exception ex) { logger.LogWarning(ex, "restore: the engine core threw reading {Instance}", name); }
 
                 bool populated = cgroups.IsPopulated(name);
                 switch (RestorePlan.Classify(populated, spec))
@@ -774,7 +774,7 @@ internal sealed class InstanceSupervisor(
                     case RestoreAction.SkipGone:
                         skipped++;
                         logger.LogWarning(
-                            "restore: {Instance} is in the auto-start set but kgsm-lib returned no config — skipping " +
+                            "restore: {Instance} is in the auto-start set but the engine core returned no config — skipping " +
                             "(intent kept; re-start manually if this was a transient read failure, or stop it to prune)", name);
                         break;
 
@@ -826,9 +826,9 @@ internal sealed class InstanceSupervisor(
                 if (_instances.ContainsKey(name))
                     continue; // already restored via the persisted boot-autostart set
 
-                Instance? spec = null;
-                try { spec = instances.GetInstanceInfo(name); }
-                catch (Exception ex) { logger.LogWarning(ex, "adopt-orphan: kgsm-lib threw reading {Instance}", name); }
+                InstanceSpec? spec = null;
+                try { spec = instances.Find(name); }
+                catch (Exception ex) { logger.LogWarning(ex, "adopt-orphan: the engine core threw reading {Instance}", name); }
 
                 if (RestorePlan.Classify(cgroupPopulated: true, spec) == RestoreAction.Adopt)
                 {
@@ -861,7 +861,7 @@ internal sealed class InstanceSupervisor(
     /// then a stop is a hard <c>cgroup.kill</c> and there is no exit code (<c>ShouldRestartAfter(null)</c>
     /// restarts under both policies, so it stays supervised).
     /// </summary>
-    private void AdoptLive(string name, Instance spec, DateTime now)
+    private void AdoptLive(string name, InstanceSpec spec, DateTime now)
     {
         var si = new SupervisedInstance
         {
@@ -908,7 +908,7 @@ internal sealed class InstanceSupervisor(
     /// loop confirms liveness a tick later. Returns true if it spawned, false if the spawn failed
     /// (tracked as <see cref="SupervisionPhase.Failed"/>).
     /// </summary>
-    private bool RespawnFresh(string name, Instance spec, DateTime now)
+    private bool RespawnFresh(string name, InstanceSpec spec, DateTime now)
     {
         var si = new SupervisedInstance { Name = name, Spec = spec, DesiredRunning = true };
         if (TrySpawn(si, now, out var reason, out bool noRoom))
@@ -1072,11 +1072,11 @@ internal sealed class InstanceSupervisor(
     /// </remarks>
     private bool RespawnStalePark(string name, InstanceRestartState snap, DateTime now)
     {
-        Instance? spec = null;
-        try { spec = instances.GetInstanceInfo(name); }
-        catch (Exception ex) { logger.LogWarning(ex, "unpark-restore: kgsm-lib threw reading {Instance}", name); }
+        InstanceSpec? spec = null;
+        try { spec = instances.Find(name); }
+        catch (Exception ex) { logger.LogWarning(ex, "unpark-restore: the engine core threw reading {Instance}", name); }
 
-        if (spec is null || spec.Runtime != InstanceRuntime.Native)
+        if (spec is null || spec.Runtime != BlueprintRuntime.Native)
         {
             logger.LogWarning(
                 "unpark-restore: {Instance} was parked for maintenance but is no longer a native instance this daemon " +
@@ -1334,9 +1334,9 @@ internal sealed class InstanceSupervisor(
                 if (_instances.ContainsKey(entry.Name))
                     continue; // defensive: already tracked (shouldn't happen — this runs first)
 
-                Instance? spec = null;
-                try { spec = instances.GetInstanceInfo(entry.Name); }
-                catch (Exception ex) { logger.LogWarning(ex, "hot-swap: kgsm-lib threw reading {Instance}", entry.Name); }
+                InstanceSpec? spec = null;
+                try { spec = instances.Find(entry.Name); }
+                catch (Exception ex) { logger.LogWarning(ex, "hot-swap: the engine core threw reading {Instance}", entry.Name); }
 
                 if (spec is null)
                 {
@@ -1346,7 +1346,7 @@ internal sealed class InstanceSupervisor(
                     if (ReExec.IsValidFd(entry.FifoFd))
                         NativeMethods.close(entry.FifoFd);
                     logger.LogWarning(
-                        "hot-swap: {Instance} was handed off but kgsm-lib now returns no config — skipping (closed inherited fd)",
+                        "hot-swap: {Instance} was handed off but the engine core now returns no config — skipping (closed inherited fd)",
                         entry.Name);
                     continue;
                 }
@@ -1375,7 +1375,7 @@ internal sealed class InstanceSupervisor(
     /// inherited fd unexpectedly did not survive. Pure-ish decision around the fd validity check; the
     /// caller holds the gate.
     /// </summary>
-    private bool AdoptHandoffEntry(HotSwapEntry entry, Instance spec, DateTime now)
+    private bool AdoptHandoffEntry(HotSwapEntry entry, InstanceSpec spec, DateTime now)
     {
         var si = new SupervisedInstance
         {
@@ -1922,7 +1922,7 @@ internal sealed class InstanceSupervisor(
     /// </para>
     /// </summary>
     private void FireAndForget(
-        string what, Instance spec, Func<Task<bool>> apply, string appliedEvent,
+        string what, InstanceSpec spec, Func<Task<bool>> apply, string appliedEvent,
         IReadOnlyList<PortMapping>? appliedPorts = null)
         => _ = Task.Run(async () =>
         {
@@ -1946,7 +1946,7 @@ internal sealed class InstanceSupervisor(
     /// firewall changed is the firewall's to report, and reading it here to decide whether to write a
     /// line is exactly the second author being removed.
     /// </remarks>
-    private void AskAndForget(string what, Instance spec, Func<Task> ask)
+    private void AskAndForget(string what, InstanceSpec spec, Func<Task> ask)
         => _ = Task.Run(async () =>
         {
             try { await ask().ConfigureAwait(false); }
@@ -1958,7 +1958,7 @@ internal sealed class InstanceSupervisor(
     /// instance — NOT a crash-restart, where the router lease is deliberately held). The service
     /// self-gates on <c>enable_port_forwarding</c> and time-boxes upnpc.
     /// </summary>
-    private void OpenPortForwarding(Instance spec)
+    private void OpenPortForwarding(InstanceSpec spec)
         => FireAndForget("UPnP open", spec,
             async () => await upnp.OpenAsync(spec).ConfigureAwait(false) == UpnpOutcome.Applied,
             "network.upnp.opened");
@@ -1972,7 +1972,7 @@ internal sealed class InstanceSupervisor(
     /// still-running sibling off the air (<see cref="IForwardedPortClaims"/>).
     /// </para>
     /// </summary>
-    private void ClosePortForwarding(Instance spec)
+    private void ClosePortForwarding(InstanceSpec spec)
     {
         // Read at the stop edge rather than inside the task: this instance's own intent is already
         // cleared by the time we get here, so what comes back is exactly what OTHER instances claim.
@@ -2004,7 +2004,7 @@ internal sealed class InstanceSupervisor(
     /// as having done it. Journaling here as well would put one firewall edge in the trail twice, under
     /// two different authors.
     /// </remarks>
-    private void OpenFirewallPorts(Instance spec)
+    private void OpenFirewallPorts(InstanceSpec spec)
         => AskAndForget("firewall open", spec,
             () => firewall.OpenAsync(spec, WatchdogJournal.ActorWatchdog, OriginSystem));
 
@@ -2012,7 +2012,7 @@ internal sealed class InstanceSupervisor(
     /// Best-effort host-firewall close on a deliberate stop, releasing the ports the instance held.
     /// </summary>
     /// <remarks>Records nothing, for the same reason as <see cref="OpenFirewallPorts"/>.</remarks>
-    private void CloseFirewallPorts(Instance spec)
+    private void CloseFirewallPorts(InstanceSpec spec)
         => AskAndForget("firewall close", spec,
             () => firewall.CloseAsync(spec, WatchdogJournal.ActorWatchdog, OriginSystem));
 

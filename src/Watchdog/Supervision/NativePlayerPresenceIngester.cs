@@ -3,8 +3,12 @@ using Microsoft.Extensions.Logging;
 using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
+
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -20,8 +24,8 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// <see cref="SpawnEngine"/> already execs the native game with its stdout+stderr appended to
 /// <c>instance.LogFile</c> (a stable path), so detection is a tail of that file. The blueprint's
 /// <c>player_joined_regex</c>/<c>player_left_regex</c>/<c>startup_success_regex</c> arrive on the
-/// <see cref="Instance"/> via the kgsm-lib chokepoint (<see cref="IInstanceService.GetInstanceInfo"/>) —
-/// KGSM materialises them into the instance config, which <c>instances info --json</c> emits. The player
+/// <see cref="Model.InstanceSpec"/> through the catalog (<see cref="IInstanceCatalog.Find"/>) —
+/// the engine materialises them into the instance config. The player
 /// match is the pure <see cref="NativeLogMatcher"/> (the .NET analog of the in-image Perl shim); the
 /// readiness match is the pure <see cref="NativeReadinessMatcher"/> (the .NET analog of the bash
 /// reference's <c>watchers.logs.sh</c> whole-file grep).
@@ -36,7 +40,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// fallback — see <see cref="BuildWatch"/>), is cached as "skip" and never re-fetched. Tailing a
 /// <em>stopped</em> instance is harmless (no appends ⇒ no events; the parked tail catches the whole next
 /// session when it appends), so this is decoupled from supervision/run-state, exactly like the container
-/// ingester is decoupled from kgsm-lib enumeration.
+/// ingester is decoupled from the engine core enumeration.
 /// </para>
 /// <para>
 /// <b>Correlation (player-presence contract §4).</b> Each watch owns a <see cref="PlayerSessionMap"/>:
@@ -82,7 +86,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 /// </summary>
 internal sealed class NativePlayerPresenceIngester(
     WatchdogOptions options,
-    IInstanceService instances,
+    IInstanceCatalog instances,
     WatchdogJournal journal,
     PlayerSessionStore sessionStore,
     CgroupManager cgroups,
@@ -294,7 +298,7 @@ internal sealed class NativePlayerPresenceIngester(
     }
 
     /// <summary>
-    /// Resolve one instance's metadata (via the kgsm-lib chokepoint) into a live watch, or record it as
+    /// Resolve one instance's metadata (via the engine core) into a live watch, or record it as
     /// out-of-scope. Returns null when it was skipped OR when it could not be resolved yet (a transient
     /// kgsm error / a dir present before the instance is fully created) — the latter is deliberately NOT
     /// cached, so it retries on the next tick.
@@ -357,15 +361,15 @@ internal sealed class NativePlayerPresenceIngester(
             : null;
 
     /// <summary>
-    /// Read one instance's detection config through the kgsm-lib chokepoint, or record it as
+    /// Read one instance's detection config through the engine core, or record it as
     /// out-of-scope. Null means skipped OR not resolvable right now (see <see cref="BuildWatch"/>).
     /// </summary>
     private WatchConfig? ResolveConfig(string name)
     {
-        Instance? instance;
+        InstanceSpec? instance;
         try
         {
-            instance = instances.GetInstanceInfo(name);
+            instance = instances.Find(name);
         }
         catch (Exception ex)
         {
@@ -376,7 +380,7 @@ internal sealed class NativePlayerPresenceIngester(
         if (instance is null)
             return null; // not resolvable yet — retry, don't skip permanently
 
-        if (instance.Runtime != InstanceRuntime.Native)
+        if (instance.Runtime != BlueprintRuntime.Native)
         {
             _skip.Add(name); // containers are the other ingester's job
             return null;
@@ -496,8 +500,8 @@ internal sealed class NativePlayerPresenceIngester(
     private static string Display(string? value) => string.IsNullOrEmpty(value) ? "<none>" : value;
 
     /// <summary>
-    /// Emit <c>instance-ready</c>: a single positional arg (the instance name) per the wire form kgsm-lib
-    /// / kgsm-api already register (<c>InstanceReadyData</c> upstream) — normalises dash→underscore
+    /// Emit <c>instance-ready</c>: a single positional arg (the instance name) per the wire form the event
+    /// vocabulary registers (<c>InstanceReadyData</c>) — normalises dash→underscore
     /// like every other event here. Same provenance + best-effort semantics as <see cref="Emit"/> (a
     /// failed emit is logged and swallowed, never retried — the latch stays set so it is not
     /// double-attempted on the next tick; a genuinely missed emit is exactly as recoverable as a missed

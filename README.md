@@ -2,7 +2,7 @@
 
 The resident **KGSM supervisor daemon**: it owns the `kgsm.slice` cgroup, spawns native
 game-server instances *into* per-instance cgroups, and supervises them with
-crash detection + restart. CLI / kgsm-lib / the Discord bot become thin clients that issue
+crash detection + restart. The CLI, the API and the Discord bot are thin clients that issue
 lifecycle commands over a unix socket — so KGSM can manage standalone (non-systemd) servers
 headlessly, with **zero per-operation privilege escalation**.
 
@@ -18,11 +18,11 @@ cgroup foundation (in the `kgsm` repo).
 > **`always`** by default (any exit restarts; only a deliberate `stop` keeps it down), or `on-failure`
 > (leave clean code-0 exits stopped).
 >
-> **Clients.** kgsm-lib ships a typed
+> **Clients.** The `TheKrystalShip.KGSM.Watchdog.Client` package ships a typed
 > `IWatchdogClient`; `kgsm start|stop|restart|is-active` (native standalone) auto-routes to the daemon
 > when present (falling back to direct spawn when absent); and the Discord bot's read-only `/supervision`
 > command surfaces the daemon's supervision state, while its start/stop/restart route to the daemon
-> transparently via `kgsm.sh`.
+> transparently through the engine.
 >
 > **Boot persistence.** The replacement for systemd's
 > `systemctl enable` + `WantedBy=`. The
@@ -40,8 +40,9 @@ cgroup foundation (in the `kgsm` repo).
   Kestrel `ListenUnixSocket`, reflection-free source-gen JSON, `FromEnvironment()` options.
 - **The daemon ACTS; the monitor MEASURES.** It *writes* cgroup v2 files (`CgroupManager`, a C#
   port of `kgsm/core/cgroup.sh`) where the monitor only reads them.
-- **kgsm-lib is the only path to KGSM** (`PackageReference TheKrystalShip.KGSM.Lib`). Used to
-  *read* instance config; never to start/stop (that path spawns detached — what this replaces).
+- **The engine core is the only path to KGSM** (`PackageReference TheKrystalShip.KGSM.Engine`). Used to
+  *read* instance config and the resolved launch arguments, in-process; never to start/stop (the
+  binary's unsupervised path spawns detached — what this daemon replaces).
 - **Spawn = self-move launcher.** A `/bin/sh -c` launcher does `echo $$ > <inst>/cgroup.procs`
   before `exec`, so the game and every child it forks are born inside the instance cgroup —
   nothing escapes `cgroup.events` liveness or `cgroup.kill` teardown. The daemon holds the FIFO
@@ -73,6 +74,7 @@ curl --unix-socket $S -X POST http://x/start/my-server   # 200 started / 507 no 
 curl --unix-socket $S -X POST 'http://x/start/my-server?force=true'   # start it despite the capacity check
 curl --unix-socket $S http://x/status/my-server
 curl --unix-socket $S http://x/list
+curl --unix-socket $S http://x/memory-gate   # the admission gate's settings: {"enabled":true,"headroomMb":1024}
 curl --unix-socket $S -X POST http://x/stop/my-server
 curl --unix-socket $S -X POST 'http://x/maintenance/begin/my-server?origin=scheduler'  # park it
 curl --unix-socket $S -X POST 'http://x/maintenance/end/my-server?origin=scheduler'    # and release it
@@ -91,9 +93,9 @@ else releases, and a park that predates this daemon's own start is released at b
 anything else that went wrong — a refusal is not a failure, so a caller can stop retrying one and
 stop reporting it as a fault in the server. The body carries the same answer as `refusal:"no_room"`.
 
-`start` and `restart` also refuse an instance whose config holds a non-empty `transfer_lock` (an
-instance transfer holds it stopped): `409` with `refusal:"instance_locked"`. The key is read from the
-engine on every call, and a restart of a locked instance stops nothing.
+`start` and `restart` also refuse an instance an instance transfer holds stopped (the engine's transfer lock
+file in the instance's working directory): `409` with `refusal:"instance_locked"`. The lock is read on every
+call, and a restart of a locked instance stops nothing.
 
 `?force=true` on **`start`** carries a person's override of that check and is the only way past it:
 autostart, crash-restart and `restart` take the verdict as final, because nobody is at a terminal to
@@ -143,15 +145,13 @@ restarts; hot-swap deploys and host reboots are unaffected — see PLAN §4.)
 
 ## Clients
 
-C# consumers reach the daemon through **kgsm-lib's** typed `IWatchdogClient`
-(`AddKgsmWatchdogClient(socketPath)`) — `start`/`stop`/`status`/`list`/`ready` over the
-control socket, source-gen JSON, AOT-safe — keeping all watchdog integration in the one
-KGSM chokepoint. The package `TheKrystalShip.KGSM.Watchdog.Client` (`src/Watchdog.Client`) holds the
-control surface's wire types, which the daemon shares, and `WatchdogClient`, a typed client over the
-socket that reads every answer from the body. On the bash side, `kgsm start|stop` for **native standalone** instances
-auto-routes to the daemon when its socket is present and `/health` is 200, and falls back to
-the legacy direct-spawn path when it is absent (so installs without the daemon are
-unchanged). See the kgsm repo's `commands/handlers/watchdog.sh`.
+C# consumers reach the daemon through the typed `IWatchdogClient` of the
+`TheKrystalShip.KGSM.Watchdog.Client` package (`src/Watchdog.Client`), registered with
+`AddKgsmWatchdogClient(socketPath)`: every control verb, the console, player presence, port forwards and the
+memory gate's settings over the control socket, source-gen JSON, AOT-safe. The package holds the control
+surface's wire types, which the daemon shares, and `WatchdogClient`, which reads every answer from the body. On the bash side, `kgsm instance start|stop` for **native** instances
+routes to the daemon when its socket is present and `/health` is 200, and starts the instance through its
+own script, unsupervised, when it is absent.
 
 ## Configuration
 
@@ -171,7 +171,9 @@ at startup. Only **`Watchdog__KgsmPath` is required**; everything else has a wor
 
 | Key | Variable | Default | Meaning |
 |---|---|---|---|
-| `KgsmPath` | `Watchdog__KgsmPath` | *(required)* | absolute path to `kgsm.sh` (read via kgsm-lib for spawn config) |
+| `KgsmPath` | `Watchdog__KgsmPath` | *(required)* | absolute path to the `kgsm` binary (its install root locates the blueprints and settings the spawn config is read with) |
+| `EnableMemoryGate` | `Watchdog__EnableMemoryGate` | `true` | refuse a start the node has no memory for; `false` admits every start |
+| `MemoryGateHeadroomMb` | `Watchdog__MemoryGateHeadroomMb` | `1024` | memory a start must leave free, MB |
 | `SocketPath` | `Watchdog__SocketPath` | `/run/kgsm-watchdog/control.sock` | control unix-domain socket path |
 | `SocketMode` | `Watchdog__SocketMode` | `660` | octal perms applied to the control socket |
 | `CgroupMountPoint` | `Watchdog__CgroupMountPoint` | `/sys/fs/cgroup` | cgroup v2 mount point |
@@ -232,7 +234,7 @@ A version-controlled reference of the exact format ships as
 | Field | Meaning |
 |---|---|
 | `version` | on-disk schema version (currently `1`), carried for forward-compatible migration |
-| `desiredRunning` | the instance names to auto-start on boot — **intent only**; each one's spawn config is re-read fresh from kgsm-lib on restore, so there is no stale-spec drift |
+| `desiredRunning` | the instance names to auto-start on boot — **intent only**; each one's spawn config is re-read fresh from the engine core on restore, so there is no stale-spec drift |
 
 **The daemon owns this file** — it adds a name on `enable` and removes it on `disable`, so you normally
 never edit it by hand; `disable` an instance through the watchdog to drop it from auto-start (`stop`

@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
@@ -91,7 +91,7 @@ public sealed class MaintenanceParkTests
     {
         var events = new RecordingJournal();
         var spec = SpecFor("in-docker");
-        spec.Runtime = InstanceRuntime.Container;
+        spec.Runtime = BlueprintRuntime.Container;
         var supervisor = NewSupervisor(events, spec, out _);
 
         var result = await supervisor.BeginMaintenanceAsync(spec.Name, "scheduler");
@@ -269,17 +269,17 @@ public sealed class MaintenanceParkTests
         finally { Environment.SetEnvironmentVariable(HotSwapHandoff.EnvVarName, prior); }
     }
 
-    private static Instance SpecFor(string name) => new()
+    private static InstanceSpec SpecFor(string name) => new()
     {
         Name = name,
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
         SocketFile = Path.Combine(Path.GetTempPath(), $"kgsm-wd-nofifo-{Guid.NewGuid():N}.fifo"),
         StopCommandTimeoutSeconds = 1,
     };
 
     private static InstanceSupervisor NewSupervisor(
         RecordingJournal events,
-        Instance spec,
+        InstanceSpec spec,
         out string cgroupBase,
         int maintenanceMaxMinutes = 60,
         InstanceRestartState? persisted = null)
@@ -304,7 +304,7 @@ public sealed class MaintenanceParkTests
         var spawn = new SpawnEngine(cgroups, NullLogger<SpawnEngine>.Instance);
         var state = new SupervisorState { Ready = true, Detail = "test" };
         return new InstanceSupervisor(
-            new PerInstanceCrashPolicyTests.SingleInstance(spec),
+            FakeInstanceCatalog.Of(spec),
             spawn,
             cgroups,
             new BackoffPolicy(),

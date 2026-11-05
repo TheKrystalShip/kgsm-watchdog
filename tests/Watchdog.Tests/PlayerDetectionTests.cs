@@ -1,6 +1,7 @@
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -19,12 +20,12 @@ public sealed class PlayerDetectionTests
     private const string ValidLeft = @"\[LEAVE\] (?<name>\S+) left";
     private const string ValidRosterLine = @"^-\s*(?<name>\S.*?)\s*$";
 
-    private static Instance Rcon(
+    private static InstanceSpec Rcon(
         string? command = "players",
         string? regex = ValidRosterLine,
         int? port = 27015,
         string password = "secret",
-        InstanceRuntime runtime = InstanceRuntime.Native) =>
+        BlueprintRuntime runtime = BlueprintRuntime.Native) =>
         new()
         {
             Name = "instance",
@@ -42,7 +43,7 @@ public sealed class PlayerDetectionTests
     {
         // Half a pair still observes something real. A game that logs connects but not disconnects
         // is the case RCON polling exists to complete, not a reason to call it unobservable.
-        var instance = new Instance { Name = "i", PlayerJoinedRegex = ValidJoin };
+        var instance = new InstanceSpec { Name = "i", PlayerJoinedRegex = ValidJoin };
 
         Assert.True(PlayerDetection.FromLog(instance));
         Assert.Equal(PlayerDetectionMechanism.Log, PlayerDetection.For(instance));
@@ -51,7 +52,7 @@ public sealed class PlayerDetectionTests
     [Fact]
     public void No_patterns_is_not_detection()
     {
-        var instance = new Instance { Name = "i" };
+        var instance = new InstanceSpec { Name = "i" };
 
         Assert.False(PlayerDetection.FromLog(instance));
         Assert.Equal(PlayerDetectionMechanism.None, PlayerDetection.For(instance));
@@ -64,7 +65,7 @@ public sealed class PlayerDetectionTests
     [Fact]
     public void A_pattern_that_does_not_compile_is_not_detection()
     {
-        var instance = new Instance { Name = "i", PlayerJoinedRegex = "(?<name>[unterminated" };
+        var instance = new InstanceSpec { Name = "i", PlayerJoinedRegex = "(?<name>[unterminated" };
 
         Assert.False(PlayerDetection.FromLog(instance));
         Assert.Equal(PlayerDetectionMechanism.None, PlayerDetection.For(instance));
@@ -77,10 +78,10 @@ public sealed class PlayerDetectionTests
     [Fact]
     public void Log_detection_does_not_depend_on_runtime()
     {
-        var container = new Instance
+        var container = new InstanceSpec
         {
             Name = "i",
-            Runtime = InstanceRuntime.Container,
+            Runtime = BlueprintRuntime.Container,
             PlayerJoinedRegex = ValidJoin,
             PlayerLeftRegex = ValidLeft,
         };
@@ -93,7 +94,7 @@ public sealed class PlayerDetectionTests
     [Fact]
     public void Fully_wired_rcon_is_detection()
     {
-        Instance instance = Rcon();
+        InstanceSpec instance = Rcon();
 
         Assert.True(PlayerDetection.FromRcon(instance));
         Assert.Equal(PlayerDetectionMechanism.Rcon, PlayerDetection.For(instance));
@@ -113,7 +114,7 @@ public sealed class PlayerDetectionTests
     public void Rcon_missing_any_piece_is_not_detection(
         string? command, string? regex, int? port, string password)
     {
-        Instance instance = Rcon(command, regex, port, password);
+        InstanceSpec instance = Rcon(command, regex, port, password);
 
         Assert.False(PlayerDetection.FromRcon(instance));
         Assert.Equal(PlayerDetectionMechanism.None, PlayerDetection.For(instance));
@@ -123,7 +124,7 @@ public sealed class PlayerDetectionTests
     [Fact]
     public void Rcon_is_native_only()
     {
-        Assert.False(PlayerDetection.FromRcon(Rcon(runtime: InstanceRuntime.Container)));
+        Assert.False(PlayerDetection.FromRcon(Rcon(runtime: BlueprintRuntime.Container)));
     }
 
     // ── precedence ────────────────────────────────────────────────────────────────────────────
@@ -135,7 +136,7 @@ public sealed class PlayerDetectionTests
     [Fact]
     public void The_log_wins_the_label_when_both_are_wired()
     {
-        Instance instance = Rcon();
+        InstanceSpec instance = Rcon();
         instance.PlayerJoinedRegex = ValidJoin;
         instance.PlayerLeftRegex = ValidLeft;
 

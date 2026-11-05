@@ -1,6 +1,7 @@
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -12,10 +13,10 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// </summary>
 public sealed class RestorePlanTests
 {
-    private static Instance Native() => new()
+    private static InstanceSpec Native() => new()
     {
         Name = "7dtd",
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
     };
 
     [Fact]
@@ -29,7 +30,7 @@ public sealed class RestorePlanTests
     [Fact]
     public void Container_runtime_is_out_of_scope()
     {
-        var container = new Instance { Name = "valheim", Runtime = InstanceRuntime.Container };
+        var container = new InstanceSpec { Name = "valheim", Runtime = BlueprintRuntime.Container };
         Assert.Equal(RestoreAction.SkipOutOfScope, RestorePlan.Classify(false, container));
     }
 

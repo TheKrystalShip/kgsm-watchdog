@@ -40,9 +40,9 @@ public sealed class WatchdogOptions
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.GroupWrite;
 
     /// <summary>
-    /// Path to the KGSM executable (<c>kgsm.sh</c>). <c>Watchdog__KgsmPath</c>. <b>Required</b> —
+    /// Path to the KGSM engine binary (<c>kgsm</c>). <c>Watchdog__KgsmPath</c>. <b>Required</b> —
     /// unlike the monitor (which can run host-only), the watchdog has nothing to do without KGSM:
-    /// it reads each instance's spawn config via kgsm-lib before forking it.
+    /// it reads each instance's spawn config through the engine core before forking it.
     /// </summary>
     public string KgsmPath { get; init; } = string.Empty;
 
@@ -178,6 +178,17 @@ public sealed class WatchdogOptions
     /// </summary>
     public int UpnpReconcileSeconds { get; init; } = 300;
 
+    /// <summary>
+    /// Whether a start is checked against the memory still available. <c>Watchdog__EnableMemoryGate</c>;
+    /// on unless written false.
+    /// </summary>
+    public bool EnableMemoryGate { get; init; } = true;
+
+    /// <summary>
+    /// The memory a start must leave free, MB. <c>Watchdog__MemoryGateHeadroomMb</c>. Floored at zero.
+    /// </summary>
+    public int MemoryGateHeadroomMb { get; init; } = 1024;
+
     /// <summary>Absolute path of KGSM's delegated base: <c>{CgroupMountPoint}/{CgroupBaseName}</c>.</summary>
     public string CgroupBasePath => $"{CgroupMountPoint}/{CgroupBaseName}";
 
@@ -219,6 +230,8 @@ public sealed class WatchdogOptions
             // Floors at zero rather than at a minimum interval: zero is the documented "off" switch, and
             // an operator who names it means it.
             UpnpReconcileSeconds = Floor(s.UpnpReconcileSeconds ?? defaults.UpnpReconcileSeconds, WatchdogSettings.Floors.Zero),
+            EnableMemoryGate = s.EnableMemoryGate ?? defaults.EnableMemoryGate,
+            MemoryGateHeadroomMb = Floor(s.MemoryGateHeadroomMb ?? defaults.MemoryGateHeadroomMb, WatchdogSettings.Floors.Zero),
         };
     }
 
@@ -317,7 +330,7 @@ public sealed class WatchdogOptions
             => sb.AppendLine($"  {name,-38} {def,-26} {desc}");
 
         Section("KGSM integration");
-        Row("Watchdog__KgsmPath", "[REQUIRED]", "absolute path to kgsm.sh (read via kgsm-lib for spawn config)");
+        Row("Watchdog__KgsmPath", "[REQUIRED]", "absolute path to the kgsm binary (its install root locates the blueprints and settings the spawn config is read with)");
 
         Section("Control socket (the security boundary is its filesystem perms)");
         Row("Watchdog__SocketPath", $"[{d.SocketPath}]", "control unix-domain socket path");
@@ -360,6 +373,8 @@ public sealed class WatchdogOptions
         Row("Watchdog__FirewallSocketPath", $"[{d.FirewallSocketPath}]", "kgsm-firewall authority control socket; unreachable is logged, never fatal");
 
         Section("Router port forwarding (UPnP)");
+        Row("Watchdog__EnableMemoryGate", $"[{d.EnableMemoryGate.ToString().ToLowerInvariant()}]", "refuse a start the node has no memory for; false admits every start");
+        Row("Watchdog__MemoryGateHeadroomMb", $"[{d.MemoryGateHeadroomMb}]", "memory a start must leave free, MB");
         Row("Watchdog__UpnpReconcileSeconds", $"[{d.UpnpReconcileSeconds}]", "how often to restore forwards the router dropped under a running instance; 0 disables");
 
         sb.AppendLine();

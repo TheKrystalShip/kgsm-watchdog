@@ -11,7 +11,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Cgroup;
 /// <para>
 /// All operations target KGSM's delegated base (<see cref="WatchdogOptions.CgroupBasePath"/>).
 /// Methods return <c>bool</c> (success) and log on hard failure rather than throwing — except
-/// argument validation, which throws (mirrors the kgsm-lib failure-channel convention).
+/// argument validation, which throws (mirrors the failure-channel convention).
 /// Callers must gate runtime use on <see cref="Supported"/> first.
 /// </para>
 /// </summary>

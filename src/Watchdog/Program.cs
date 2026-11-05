@@ -1,10 +1,12 @@
 using Microsoft.Extensions.Configuration;
-using TheKrystalShip.KGSM.Extensions;
 using TheKrystalShip.KGSM.Core.Interfaces;
+using TheKrystalShip.KGSM.Core.Models;
+using TheKrystalShip.KGSM.Engine.Reading;
+using TheKrystalShip.KGSM.Extensions;
 
-using TheKrystalShip.KGSM.Services;
 using TheKrystalShip.KGSM.Watchdog.Events;
 using TheKrystalShip.KGSM.Watchdog;
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Control;
 using TheKrystalShip.KGSM.Watchdog.Firewall;
@@ -92,10 +94,10 @@ if (args.Any(a => a is "--selfcheck"))
 var options = ReadOptions();
 
 // Unlike the monitor, the watchdog cannot run "headless" without KGSM: it reads each instance's
-// spawn config via kgsm-lib before forking it. No path, nothing to do — fail fast and loud.
+// spawn config through the engine core before forking it. No path, nothing to do — fail fast and loud.
 if (string.IsNullOrEmpty(options.KgsmPath))
 {
-    Console.Error.WriteLine("FATAL: Watchdog__KgsmPath is required (absolute path to kgsm.sh).");
+    Console.Error.WriteLine("FATAL: Watchdog__KgsmPath is required (absolute path to the kgsm binary).");
     Console.Error.WriteLine("Run 'kgsm-watchdog --help' for the full list of configuration variables.");
     return 1;
 }
@@ -142,11 +144,11 @@ builder.Logging.AddSystemdConsole();
 
 builder.Services.AddSingleton(options);
 
-// The single KGSM chokepoint — used ONLY to read instance config. The watchdog never calls
-// Start/Stop on it (that path spawns detached) and consumes no engine events: it registers no
-// handler and never resolves IEventService, so the lazily-registered event singletons are never
-// constructed and nothing is read.
-builder.Services.AddKgsmServices(options.KgsmPath);
+// The engine core, in-process and read-only: it describes each instance (spawn config, derived layout,
+// resolved launch arguments, player-presence patterns). The watchdog never changes engine state through
+// it, and starts and stops instances itself, in its own cgroups.
+builder.Services.AddSingleton(new EngineReader(new EngineReaderOptions { BinaryPath = options.KgsmPath }));
+builder.Services.AddSingleton<IInstanceCatalog, EngineInstanceCatalog>();
 
 // Cgroup layer + boot.
 builder.Services.AddSingleton<CgroupManager>();
@@ -161,8 +163,8 @@ builder.Services.AddSingleton<SpawnEngine>();
 // on first use, which the autostart set depends on to survive the move.
 builder.Services.AddSingleton<StatePathResolver>();
 // This daemon's own event journal. It records what the watchdog itself did — the process it spawned,
-// the port it opened, the readiness line it saw — instead of spawning kgsm.sh to write each one down,
-// which cost a bash bootstrap, a sourced library and a jq call per event.
+// the port it opened, the readiness line it saw — written by this process, not by asking the engine to
+// write each one down.
 //
 // The producer id is the only input: it decides the directory a reader scans for, the version stamped
 // on every event, and the derived system:watchdog actor. Deliberately NOT StatePathResolver's answer,
@@ -197,12 +199,11 @@ builder.Services.AddSingleton<UpnpGatewayMemory>();
 // Host firewall: the same process-lifetime shape as UPnP on the other side of the door — UPnP opens the
 // ROUTER, this opens the HOST. The authority (kgsm-firewall) still owns every firewall write; the
 // supervisor only owns the trigger, because it is the only thing that sees a boot-autostart or a
-// crash-respawn. Reached through kgsm-lib's client, like every other C# consumer of the authority.
+// crash-respawn. Reached through the firewall contract package's client, like every other C# consumer of the authority.
 builder.Services.AddKgsmFirewallClient(options.FirewallSocketPath);
 builder.Services.AddSingleton<FirewallPortsService>();
-// The node-capacity check every spawn passes through. A singleton because it caches kgsm's two config
-// keys and each blueprint's declared requirement — a crash-restart can ask repeatedly, and each miss
-// costs a kgsm invocation.
+// The node-capacity check every spawn passes through. A singleton because it keeps the reservations of
+// the starts still loading and caches each blueprint's declared requirement.
 builder.Services.AddSingleton<MemoryGate>();
 builder.Services.AddSingleton<InstanceSupervisor>();
 

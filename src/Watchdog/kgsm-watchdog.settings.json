@@ -23,7 +23,9 @@
     "ContainerLifecyclePollMs": 1000,
     "ConsolePollMs": 250,
     "FirewallSocketPath": "/run/kgsm-firewall/firewall.sock",
-    "UpnpReconcileSeconds": 300
+    "UpnpReconcileSeconds": 300,
+    "EnableMemoryGate": true,
+    "MemoryGateHeadroomMb": 1024
   },
   "Logging": {
     "LogLevel": {

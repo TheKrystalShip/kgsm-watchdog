@@ -193,7 +193,7 @@ public sealed class WatchdogClientTests : IAsyncLifetime
     {
         using var client = new WatchdogClient(SocketPath);
 
-        Assert.Equal(0, (await client.ConsoleRunsAsync("nothing")).Count);
+        Assert.Empty(await client.ConsoleRunsAsync("nothing"));
         Assert.Null(await client.OpenConsoleDownloadAsync("nothing"));
         Assert.Empty(await client.ConsoleTailAsync("nothing", 5));
         Assert.Equal(12, Assert.Single(await client.ConsoleRunsAsync("factorio-a")).SizeBytes);

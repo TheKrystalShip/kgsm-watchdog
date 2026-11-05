@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using TheKrystalShip.KGSM.Core.Models;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -71,7 +72,7 @@ public sealed class UpnpServiceTests
     {
         var svc = TestUpnp.Service();
         // Disabled even though ports ARE configured — the gate short-circuits before any upnpc call.
-        var instance = new Instance
+        var instance = new InstanceSpec
         {
             Name = "factorio-test",
             EnablePortForwarding = false,
@@ -122,7 +123,7 @@ public sealed class UpnpServiceTests
         // Applied — an "upnp closed" event here would record a removal that never happened. It also
         // returns before upnpc is ever spawned, which is what keeps this test off a live IGD.
         var svc = TestUpnp.Service();
-        var instance = new Instance
+        var instance = new InstanceSpec
         {
             Name = "stationeers",
             EnablePortForwarding = true,
@@ -139,7 +140,7 @@ public sealed class UpnpServiceTests
     {
         var svc = TestUpnp.Service();
         // Enabled but nothing to forward → a clean no-op (no upnpc call), so Skipped (no event).
-        var instance = new Instance
+        var instance = new InstanceSpec
         {
             Name = "no-ports-01",
             EnablePortForwarding = true,
@@ -155,7 +156,7 @@ public sealed class UpnpServiceTests
         var svc = TestUpnp.Service();
         // Config is the authority: an external explicit-port open does NOT force-forward a gated-off
         // instance — the gate short-circuits before any upnpc call → Skipped (no event).
-        var instance = new Instance { Name = "gated-01", EnablePortForwarding = false, Ports = [] };
+        var instance = new InstanceSpec { Name = "gated-01", EnablePortForwarding = false, Ports = [] };
         IReadOnlyList<PortMapping> ports = [new() { Start = 39999, End = 39999, Protocol = "udp" }];
 
         Assert.Equal(UpnpOutcome.Skipped, await svc.OpenAsync(instance, ports));

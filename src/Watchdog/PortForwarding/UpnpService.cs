@@ -57,7 +57,7 @@ internal sealed class UpnpService(
     /// Open the instance's UPnP mappings (no-op unless <c>enable_port_forwarding</c>). Returns the
     /// <see cref="UpnpOutcome"/> so the caller emits an audit event only on a confirmed mapping.
     /// </summary>
-    public Task<UpnpOutcome> OpenAsync(Instance instance, CancellationToken ct = default)
+    public Task<UpnpOutcome> OpenAsync(InstanceSpec instance, CancellationToken ct = default)
         => ApplyAsync(instance, open: true, portsOverride: null, retain: null, ct);
 
     /// <summary>
@@ -69,7 +69,7 @@ internal sealed class UpnpService(
     /// ports.
     /// </summary>
     public Task<UpnpOutcome> OpenAsync(
-        Instance instance, IReadOnlyList<PortMapping>? portsOverride, CancellationToken ct = default)
+        InstanceSpec instance, IReadOnlyList<PortMapping>? portsOverride, CancellationToken ct = default)
         => ApplyAsync(instance, open: true, portsOverride, retain: null, ct);
 
     /// <summary>
@@ -78,7 +78,7 @@ internal sealed class UpnpService(
     /// something no longer running is exactly the state the open/close lifetime exists to prevent.
     /// </summary>
     public Task<UpnpOutcome> CloseAsync(
-        Instance instance, IReadOnlyList<PortMapping>? portsOverride,
+        InstanceSpec instance, IReadOnlyList<PortMapping>? portsOverride,
         IReadOnlySet<(int Port, string Protocol)> retain, CancellationToken ct = default)
         => ApplyAsync(instance, open: false, portsOverride, retain, ct);
 
@@ -94,11 +94,11 @@ internal sealed class UpnpService(
     /// </para>
     /// </summary>
     public Task<UpnpOutcome> CloseAsync(
-        Instance instance, IReadOnlySet<(int Port, string Protocol)> retain, CancellationToken ct = default)
+        InstanceSpec instance, IReadOnlySet<(int Port, string Protocol)> retain, CancellationToken ct = default)
         => ApplyAsync(instance, open: false, portsOverride: null, retain, ct);
 
     private async Task<UpnpOutcome> ApplyAsync(
-        Instance instance, bool open, IReadOnlyList<PortMapping>? portsOverride,
+        InstanceSpec instance, bool open, IReadOnlyList<PortMapping>? portsOverride,
         IReadOnlySet<(int Port, string Protocol)>? retain, CancellationToken ct)
     {
         string action = open ? "open" : "close";
@@ -110,8 +110,8 @@ internal sealed class UpnpService(
         if (!instance.EnablePortForwarding)
             return UpnpOutcome.Skipped;
 
-        // Expand the canonical structured ports (kgsm-lib already parsed + validated them off the
-        // `instances info --json` surface) into the individual external ports upnpc opens one at a
+        // Expand the canonical structured ports (the engine core already parsed and validated them from
+        // the instance config) into the individual external ports upnpc opens one at a
         // time. An explicit override (external control) takes precedence over the instance's own ports;
         // ranges are unrolled here; a no-ports instance/override is a clean no-op.
         IReadOnlyList<PortMapping> source = portsOverride is { Count: > 0 } ? portsOverride : instance.Ports;

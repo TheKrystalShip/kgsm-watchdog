@@ -3,12 +3,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.Cgroup;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+using TheKrystalShip.KGSM.Watchdog.Model;
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -80,7 +81,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         string log = MakeInstanceWithLog("factorio", "factorio-test",
             "2026-06-20 11:00:00 [JOIN] Stale (1) joined the game\n");
 
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-test", log, Joined, Left));
 
         var rec = new RecordingJournal();
@@ -131,11 +132,11 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     public void Container_instance_is_skipped()
     {
         string log = MakeInstanceWithLog("vrising", "vr-1", "");
-        var fake = new FakeInstanceService();
-        fake.Add(new Instance
+        var fake = new FakeInstanceCatalog();
+        fake.Add(new InstanceSpec
         {
             Name = "vr-1",
-            Runtime = InstanceRuntime.Container, // the container ingester's job, not this one
+            Runtime = BlueprintRuntime.Container, // the container ingester's job, not this one
             LogFile = log,
             PlayerJoinedRegex = Joined,
             PlayerLeftRegex = Left,
@@ -160,7 +161,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // populated, so no start edge is ever observed and nothing fires — presence detection stays
         // honestly disabled either way.
         string log = MakeInstanceWithLog("terraria", "tw-1", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("tw-1", log, joined: "", left: "")); // presence disabled (honest unknown)
 
         var rec = new RecordingJournal();
@@ -180,7 +181,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // but invalid readiness regex (a real blueprint bug — never silently substituted with the
         // immediate fallback, which is reserved for a truly EMPTY pattern).
         string log = MakeInstanceWithLog("terraria", "tw-2", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("tw-2", log, joined: "", left: "", ready: "(?<unterminated"));
 
         var cgroups = NewCgroups();
@@ -199,7 +200,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     {
         // A pattern with no id/name group: a match with neither capture must not reach the wire.
         string log = MakeInstanceWithLog("factorio", "factorio-test", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-test", log, joined: "a player connected", left: ""));
 
         var rec = new RecordingJournal();
@@ -218,7 +219,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     public void Stationeers_self_identifying_join_and_leave_resolve_the_same_session()
     {
         string log = MakeInstanceWithLog("stationeers", "stationeers-test", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("stationeers-test", log,
             joined: @"Client (?<name>.+?) \((?<id>\d+)\) is ready",
             left: @"Client disconnected: \d+ \| (?<name>.+?)\s+connectTime:.*ClientId: (?<id>\d+)"));
@@ -255,7 +256,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     public void Romestead_addr_correlated_leave_resolves_name_and_conat_sessions_stay_distinct()
     {
         string log = MakeInstanceWithLog("romestead", "romestead-test", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("romestead-test", log,
             joined: @"Character '(?<name>[^']+)' \(Peer \d+ - (?<addr>[\d.]+:\d+)\) logged in",
             left: @"Peer (?<addr>[\d.]+:\d+) disconnected"));
@@ -304,7 +305,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     public void Valheim_doubled_join_lines_dedup_and_a_6x_repeated_leave_burst_dedups_key_correlated()
     {
         string log = MakeInstanceWithLog("valheim", "valheim-test", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("valheim-test", log,
             joined: @"Got character ZDOID from (?<name>.+?) : (?!0:0)(?<key>-?\d+):\d+",
             left: @"Destroying abandoned non persistent zdo -?\d+:\d+ owner (?<key>-?\d+)"));
@@ -350,7 +351,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // them the server sends the none-ZDOID `0:0` when the character is destroyed and the owner half
         // again when it respawns — one uninterrupted connection throughout.
         string log = MakeInstanceWithLog("valheim", "valheim-signed", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("valheim-signed", log,
             joined: @"Got character ZDOID from (?<name>.+?) : (?!0:0)(?<key>-?\d+):\d+",
             left: @"Destroying abandoned non persistent zdo -?\d+:\d+ owner (?<key>-?\d+)"));
@@ -386,7 +387,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     public void Corekeeper_opaque_key_join_and_leave_with_reason_resolve_and_evict()
     {
         string log = MakeInstanceWithLog("corekeeper", "corekeeper-test", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("corekeeper-test", log,
             joined: @"\[userid:(?<key>\d+)\] player (?<name>.+?) connected",
             left: @"Disconnected from userid:(?<key>\d+) with reason (?<reason>\S+)"));
@@ -425,7 +426,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // The username is the correlation token (`key`), because the address appears on the join line
         // alone and the account UUID is on a separate line a per-line matcher cannot reach.
         string log = MakeInstanceWithLog("minecraft", "minecraft-test", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("minecraft-test", log,
             joined: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16}))\[/(?<addr>.+)\] logged in with entity id ",
             left: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16})) lost connection: (?<reason>.*)"));
@@ -472,7 +473,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // bare username. There was no join, so there is no leave to attribute — anchoring the username
         // to Minecraft's legal charset at the start of the message is what keeps this line out.
         string log = MakeInstanceWithLog("minecraft", "minecraft-prelogin", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("minecraft-prelogin", log,
             joined: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16}))\[/(?<addr>.+)\] logged in with entity id ",
             left: @"\[Server thread/INFO\]: (?<key>(?<name>[A-Za-z0-9_]{1,16})) lost connection: (?<reason>.*)"));
@@ -495,7 +496,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // — a leave that arrives afterwards for a pre-reset key, carrying no identity of its own, has
         // nothing to attribute and must be skipped rather than resolved against stale state.
         string log = MakeInstanceWithLog("corekeeper", "corekeeper-reset-test", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("corekeeper-reset-test", log,
             joined: @"\[userid:(?<key>\d+)\] player (?<name>.+?) connected",
             left: @"Disconnected from userid:(?<key>\d+) with reason (?<reason>\S+)"));
@@ -530,7 +531,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // No player patterns either — this is the exact "factorio/minecraft/terraria-shaped: a
         // startup_success_regex but no player_*_regex" case the widened enable gate exists for.
         string log = MakeInstanceWithLog("factorio", "factorio-immediate", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-immediate", log, joined: "", left: "", ready: ""));
 
         var cgroups = NewCgroups();
@@ -562,7 +563,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     public void NonEmpty_readiness_regex_fires_once_on_first_match_and_rearms_on_restart()
     {
         string log = MakeInstanceWithLog("factorio", "factorio-ready", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-ready", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
 
         var cgroups = NewCgroups();
@@ -605,7 +606,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // but no player_*_regex — they must still be watched and detected, not skipped by the old
         // "no player patterns -> skip" gate.
         string log = MakeInstanceWithLog("minecraft", "mc-ready", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("mc-ready", log, joined: "", left: "", ready: @"Done \([\d.]+s\)! For help"));
 
         var cgroups = NewCgroups();
@@ -630,7 +631,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // attaching to an instance that was already running) — primeAtEnd would otherwise make the
         // tail skip straight past the line, so the one-shot whole-file scan must catch it.
         string log = MakeInstanceWithLog("factorio", "factorio-late", "1000.000 Loading map\n1000.500 Hosting game at IP ADDR:34197\n1001.000 Player list updated\n");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-late", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
 
         var cgroups = NewCgroups();
@@ -658,7 +659,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // NativeLogMatcherTests.Invalid_pattern_is_disabled_and_warned_never_throws's "the other
         // detection still works" pattern, one layer up).
         string log = MakeInstanceWithLog("factorio", "factorio-badregex", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-badregex", log,
             joined: @"\[JOIN\] (?<name>\S+)", left: "", ready: "(?<unterminated"));
 
@@ -687,7 +688,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // cgroup and is exercised live, not here — see SpawnEngineTests for RotateLogFile's own unit
         // coverage).
         string log = MakeInstanceWithLog("factorio", "factorio-rotate", "1000.500 Hosting game at IP ADDR:34197\n");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-rotate", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+"));
 
         var cgroups = NewCgroups();
@@ -735,7 +736,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // "new" join on run 2 just because SpawnEngine rotated the log out and a fresh file appeared.
         string log = MakeInstanceWithLog("factorio", "factorio-rotate-presence",
             "[JOIN] StaleFromRun1 (1) joined the game\n");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("factorio-rotate-presence", log, Joined, Left));
 
         var rec = new RecordingJournal();
@@ -765,7 +766,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // the time a game says it is up, so from here MemAvailable accounts for it and continuing to
         // subtract a reservation would double-count.
         string log = MakeInstanceWithLog("factorio", "factorio-res", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         var spec = Native("factorio-res", log, joined: "", left: "", ready: @"Hosting game at IP ADDR:\d+");
         spec.MemoryCapMb = 4096;
         fake.Add(spec);
@@ -793,7 +794,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // "observed started" — the reservation has nothing else to wait for and is released on the same
         // rule, rather than being held for a signal that will never come.
         string log = MakeInstanceWithLog("factorio", "factorio-res-immediate", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         var spec = Native("factorio-res-immediate", log, joined: "", left: "", ready: "");
         spec.MemoryCapMb = 4096;
         fake.Add(spec);
@@ -821,7 +822,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // instance-ready will ever arrive for this instance and nothing here can release its
         // reservation. The gate's own backstop is the only thing that does.
         string log = MakeInstanceWithLog("factorio", "factorio-res-badregex", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         var spec = Native("factorio-res-badregex", log, joined: "", left: "", ready: "((((unclosed");
         spec.MemoryCapMb = 4096;
         fake.Add(spec);
@@ -846,7 +847,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
     // ---- helpers ------------------------------------------------------------------------------
 
     private NativePlayerPresenceIngester NewIngester(
-        WatchdogJournal journal, IInstanceService instances, CgroupManager? cgroups = null,
+        WatchdogJournal journal, IInstanceCatalog instances, CgroupManager? cgroups = null,
         MemoryGate? memoryGate = null, ReadinessStateStore? readiness = null)
         => new(new WatchdogOptions { InstancesDir = _root }, instances, journal, TestState.Sessions(),
             cgroups ?? NewCgroups(), memoryGate ?? TestMemoryGate.Disabled(),
@@ -864,7 +865,7 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         // on "Starting": the ready lands BEFORE the start it belongs to, so nothing is left to close the
         // window.
         string log = MakeInstanceWithLog("factorio", "factorio-fresh", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         // What kgsm reports mid-install: the instance exists, its detection config does not yet.
         fake.Add(Native("factorio-fresh", log: "", joined: "", left: "", ready: ""));
 
@@ -891,10 +892,10 @@ public sealed class NativePlayerPresenceIngesterTests : IDisposable
         Assert.Equal("server.ready", rec.Calls[0].Type);
     }
 
-    private static Instance Native(string name, string log, string joined, string left, string ready = "") => new()
+    private static InstanceSpec Native(string name, string log, string joined, string left, string ready = "") => new()
     {
         Name = name,
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
         LogFile = log,
         PlayerJoinedRegex = joined,
         PlayerLeftRegex = left,

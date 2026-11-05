@@ -1,10 +1,11 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using TheKrystalShip.KGSM.Core.Interfaces;
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
 using TheKrystalShip.KGSM.Watchdog;
 using TheKrystalShip.KGSM.Watchdog.PortForwarding;
 using TheKrystalShip.KGSM.Watchdog.Supervision;
+using TheKrystalShip.KGSM.Watchdog.Model;
+using TheKrystalShip.KGSM.Watchdog.Catalog;
 
 namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
@@ -89,7 +90,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
     [Fact]
     public void Explicit_instances_dir_option_wins()
     {
-        var ingester = NewIngester(new WatchdogOptions { InstancesDir = "/custom/instances" }, new FakeInstanceService());
+        var ingester = NewIngester(new WatchdogOptions { InstancesDir = "/custom/instances" }, new FakeInstanceCatalog());
         Assert.Equal("/custom/instances", ingester.ResolveInstancesDir());
     }
 
@@ -99,7 +100,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
     public async Task Container_instance_started_then_stopping_processes_without_throwing()
     {
         string channel = MakeChannel("vrising", "vr-1", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Container("vr-1"));
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
@@ -117,7 +118,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
     public async Task Appended_lines_are_not_redelivered_on_a_second_pass()
     {
         string channel = MakeChannel("vrising", "vr-2", """{"type":"instance_started","ts":"t"}""" + "\n");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Container("vr-2"));
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
@@ -140,7 +141,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
         // cleanly (no throw) for a channel that, by construction, should never exist for a native
         // instance in production (defensive path, not load-bearing).
         string channel = MakeChannel("factorio", "ftest", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Native("ftest"));
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
@@ -155,7 +156,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
     public async Task Unresolvable_instance_is_skipped_without_throwing()
     {
         string channel = MakeChannel("vrising", "vr-unknown", "");
-        var fake = new FakeInstanceService(); // no instance registered -> GetInstanceInfo returns null
+        var fake = new FakeInstanceCatalog(); // no instance registered -> GetInstanceInfo returns null
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
 
@@ -169,7 +170,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
     public async Task Malformed_line_is_dropped_before_any_instance_lookup()
     {
         string channel = MakeChannel("vrising", "vr-bad", "");
-        var fake = new FakeInstanceService();
+        var fake = new FakeInstanceCatalog();
         fake.Add(Container("vr-bad"));
 
         var ingester = NewIngester(new WatchdogOptions { InstancesDir = _root }, fake);
@@ -182,7 +183,7 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
 
     // ---- helpers ------------------------------------------------------------------------------
 
-    private ContainerLifecycleIngester NewIngester(WatchdogOptions options, IInstanceService instances)
+    private ContainerLifecycleIngester NewIngester(WatchdogOptions options, IInstanceCatalog instances)
         => new(options, instances, TestUpnp.Service(),
             new NoClaims(), NullLogger<ContainerLifecycleIngester>.Instance);
 
@@ -193,18 +194,18 @@ public sealed class ContainerLifecycleIngesterTests : IDisposable
             => new HashSet<(int, string)>();
     }
 
-    private static Instance Container(string name) => new()
+    private static InstanceSpec Container(string name) => new()
     {
         Name = name,
-        Runtime = InstanceRuntime.Container,
+        Runtime = BlueprintRuntime.Container,
         EnablePortForwarding = false, // gate returns Skipped before UpnpService ever shells upnpc
         Ports = [],
     };
 
-    private static Instance Native(string name) => new()
+    private static InstanceSpec Native(string name) => new()
     {
         Name = name,
-        Runtime = InstanceRuntime.Native,
+        Runtime = BlueprintRuntime.Native,
         EnablePortForwarding = false,
     };
 

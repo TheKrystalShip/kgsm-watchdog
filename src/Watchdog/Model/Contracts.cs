@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using TheKrystalShip.KGSM.Core.Models;
 
 namespace TheKrystalShip.KGSM.Watchdog.Model;
 
@@ -23,5 +22,5 @@ internal sealed record UpnpTable(
 /// A running instance the UPnP reconcile sweep is answerable for, paired with the spawn config the
 /// sweep reads its ports and forwarding gate from.
 /// </summary>
-public sealed record ForwardingCandidate(string Name, Instance Spec);
+public sealed record ForwardingCandidate(string Name, InstanceSpec Spec);
 

@@ -168,7 +168,7 @@ public sealed class PlayerSessionHandoffTests
         var state = new SupervisorState { Ready = true, Detail = "test" };
         var recorder = new RecordingJournal();
         return new InstanceSupervisor(
-            new PerInstanceCrashPolicyTests.SingleInstance(new Instance { Name = "unused" }),
+            FakeInstanceCatalog.Of(new InstanceSpec { Name = "unused" }),
             spawn,
             cgroups,
             new BackoffPolicy(),

@@ -19,12 +19,11 @@ dotnet publish src/Watchdog/Watchdog.csproj -c Release -r linux-x64 # AOT: expec
 ```
 
 The AOT publish (or a clean `dotnet build`) stays warning-free: an `IL2026`/`IL3050`/`ILC` warning means
-something reaches for reflection and fails at runtime. The project and its kgsm-lib dependency are
+something reaches for reflection and fails at runtime. The project and its engine-core dependency are
 `IsAotCompatible` with no reflection fallback.
 
-The test project hand-rolls `IInstanceService` fakes (`HotSwapCoordinatorTests.EmptyInstances`, the shared
-`FakeInstanceService`) implementing the whole interface, so a kgsm-lib bump that adds an interface member
-breaks test compilation until each fake gains it, while the daemon source still builds.
+The test project fakes the daemon's seam to the engine with `FakeInstanceCatalog` (an `IInstanceCatalog`
+answering from a map a test fills in), so no test reads an engine file.
 
 ## Deploy and live validation
 
@@ -49,9 +48,13 @@ Bounce the daemon freely; prefer Factorio or Terraria for spawn tests. One canon
 
 ## Invariants for editing
 
-- **kgsm-lib is the only path to KGSM, and read-only here.** The watchdog reads instance spawn config
-  (`IInstanceService.GetInstanceInfo`) and watches lifecycle events; it never starts or stops through
-  kgsm-lib (that path spawns detached, outside this daemon's cgroups) and never shells `kgsm.sh`.
+- **The engine core is the only path to KGSM, and read-only here.** The watchdog reads each instance's
+  spawn config, derived layout and resolved launch arguments through `IInstanceCatalog`
+  (`Catalog/`, over `EngineReader`); it never starts or stops through the engine (that path spawns
+  detached, outside this daemon's cgroups) and never runs the `kgsm` binary. The launcher receives the
+  engine's resolved arguments one parameter each and expands nothing.
+- **The memory gate's two settings are the daemon's own** (`Watchdog__EnableMemoryGate`,
+  `Watchdog__MemoryGateHeadroomMb`); the engine holds no memory check. `GET /memory-gate` reports them.
 - **Reflection-free JSON.** Every (de)serialized type is registered in `Model/WatchdogJsonContext.cs`; an
   unregistered type throws `NotSupportedException` at runtime.
 - **Never fabricate state.** A status is measured (cgroup, `/proc`) or "unknown". A failed cgroup read is

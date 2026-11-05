@@ -1,5 +1,7 @@
 using TheKrystalShip.KGSM.Core.Models;
-using TheKrystalShip.KGSM.Core.Models.Enums;
+using TheKrystalShip.KGSM.Engine.Contracts.Blueprints;
+
+using TheKrystalShip.KGSM.Watchdog.Model;
 
 namespace TheKrystalShip.KGSM.Watchdog.Supervision;
 
@@ -16,7 +18,7 @@ internal enum RestoreAction
     Spawn,
 
     /// <summary>
-    /// kgsm-lib returned no config: the instance was removed since it was enabled, OR a transient read
+    /// the engine core returned no config: the instance was removed since it was enabled, OR a transient read
     /// failure. Skip it this boot, but keep the persisted intent (only an explicit stop prunes it).
     /// </summary>
     SkipGone,
@@ -34,15 +36,15 @@ internal enum RestoreAction
 internal static class RestorePlan
 {
     /// <param name="cgroupPopulated">Whether the instance's cgroup currently holds a live process.</param>
-    /// <param name="instance">The spec kgsm-lib returned, or null if it had no config for this name.</param>
-    public static RestoreAction Classify(bool cgroupPopulated, Instance? instance)
+    /// <param name="instance">The spec the engine core returned, or null if it had no config for this name.</param>
+    public static RestoreAction Classify(bool cgroupPopulated, InstanceSpec? instance)
     {
         if (instance is null)
             return RestoreAction.SkipGone;
 
         // Runtime alone is the discriminator: every native instance is the watchdog's; containers are
         // Docker's. (systemd is gone, so there is no longer a native-but-not-ours case.)
-        if (instance.Runtime != InstanceRuntime.Native)
+        if (instance.Runtime != BlueprintRuntime.Native)
             return RestoreAction.SkipOutOfScope;
 
         return cgroupPopulated ? RestoreAction.Adopt : RestoreAction.Spawn;

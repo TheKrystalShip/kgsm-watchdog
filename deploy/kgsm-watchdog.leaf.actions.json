@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "component": "watchdog",
-  "version": "1.50.0",
+  "version": "2.0.0",
   "actions": [
     {
       "id": "config.read",

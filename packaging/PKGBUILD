@@ -22,7 +22,7 @@ groups=('kgsm-node')
 options=('!debug')
 # kgsm-base carries the kgsm service account this unit runs as, the /var/lib/kgsm tree and the
 # preset policy that decides whether this daemon runs on a node.
-depends=('kgsm-base' 'kgsm' 'systemd' 'glibc')
+depends=('kgsm-base' 'kgsm>=4.0.0' 'systemd' 'glibc')
 optdepends=('miniupnpc: opening and closing router port forwards on server start/stop')
 backup=('etc/kgsm-watchdog/kgsm-watchdog.env')
 install="${pkgname}.install"

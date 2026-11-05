@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-05
+
 ### Changed — the daemon reads the native engine through its core
 
 The daemon no longer references `TheKrystalShip.KGSM.Lib`. It pins `TheKrystalShip.KGSM.Engine`,

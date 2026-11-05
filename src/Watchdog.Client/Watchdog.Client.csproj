@@ -15,7 +15,7 @@
     <IsTrimmable>true</IsTrimmable>
 
     <PackageId>TheKrystalShip.KGSM.Watchdog.Client</PackageId>
-    <Version>1.0.0-dev.2</Version>
+    <Version>1.0.0</Version>
     <Authors>TheKrystalShip</Authors>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
     <Description>The watchdog's control-socket wire types and a typed client over its unix socket. The

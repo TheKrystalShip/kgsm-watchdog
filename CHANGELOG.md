@@ -25,7 +25,7 @@ The daemon no longer references `TheKrystalShip.KGSM.Lib`. It pins `TheKrystalSh
 - `Watchdog__KgsmPath` names the `kgsm` binary; its install root locates the system blueprints and settings.
 - `RconClient` lives in the daemon.
 
-### Added — the client package covers the whole control surface (`TheKrystalShip.KGSM.Watchdog.Client` 1.0.0-dev.2)
+### Added — the client package covers the whole control surface (`TheKrystalShip.KGSM.Watchdog.Client` 1.0.0)
 
 `IWatchdogClient` is the interface `WatchdogClient` implements, for consumers to mock, and
 `AddKgsmWatchdogClient` registers it. The client now also sets a CPU priority, begins and ends maintenance, reads
@@ -37,7 +37,7 @@ caller's cancellation.
 
 ### Added — a client package for the control socket (1.50.0)
 
-`TheKrystalShip.KGSM.Watchdog.Client` (1.0.0-dev.1, `src/Watchdog.Client`) carries the control surface's wire types
+`TheKrystalShip.KGSM.Watchdog.Client` (1.0.0, `src/Watchdog.Client`) carries the control surface's wire types
 (`ActionResult`, `ActionRefusal`, `InstanceState`, `InstanceRunTimes`, `ReadyState`, `WatchdogVersionInfo`) and
 `WatchdogClient`, a typed client over the unix socket: health, status, list, run times, enabled, version, start,
 stop, restart, enable, disable and forget. Answers are read from the body; an absent daemon is

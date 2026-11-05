@@ -12,4 +12,13 @@ namespace TheKrystalShip.KGSM.Watchdog.Client;
 [JsonSerializable(typeof(ReadyState))]
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(WatchdogVersionInfo))]
+[JsonSerializable(typeof(UpnpMapping))]
+[JsonSerializable(typeof(UpnpListResult))]
+[JsonSerializable(typeof(PlayerSession))]
+[JsonSerializable(typeof(PlayerSession[]))]
+[JsonSerializable(typeof(InstancePresence))]
+[JsonSerializable(typeof(Dictionary<string, InstancePresence>))]
+[JsonSerializable(typeof(ConsoleRun))]
+[JsonSerializable(typeof(ConsoleRun[]))]
+[JsonSerializable(typeof(MemoryGateState))]
 internal sealed partial class WatchdogClientJsonContext : JsonSerializerContext;

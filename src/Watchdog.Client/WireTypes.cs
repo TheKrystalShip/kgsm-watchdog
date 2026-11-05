@@ -122,3 +122,54 @@ public sealed record WatchdogVersionInfo(
             : new WatchdogVersionInfo(informational[..plus], informational[(plus + 1)..]);
     }
 }
+
+/// <summary>One router port-forward row (<c>GET /upnp/{name}</c>).</summary>
+public sealed record UpnpMapping(
+    int ExternalPort,
+    string Protocol,        // "tcp" | "udp"
+    int InternalPort,
+    string InternalClient,
+    string Description);
+
+/// <summary>An instance's router port-forwards and the honest state of the query.</summary>
+/// <param name="State">"queried", or "unavailable" when the router could not be asked; an unreachable router is never an empty list.</param>
+public sealed record UpnpListResult(
+    string Instance,
+    string State,
+    IReadOnlyList<UpnpMapping> Mappings);
+
+/// <summary>One player session in the live session map.</summary>
+public sealed record PlayerSession(
+    string? SessionKey,
+    string? Id,
+    string? Name,
+    string? Addr);
+
+/// <summary>
+/// What the daemon can observe of one instance's players: how it detects them and who is on. The two travel
+/// together so a caller cannot read an empty list without knowing whether the game can report players.
+/// </summary>
+/// <param name="Detection">"log", "rcon", "none" or "unknown".</param>
+public sealed record InstancePresence(
+    string Detection,
+    PlayerSession[] Players)
+{
+    /// <summary>Whether the daemon observes this instance's players at all.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsDetected => Detection is "log" or "rcon";
+}
+
+/// <summary>One run of an instance's console (<c>GET /console/{name}/runs</c>), newest first.</summary>
+public sealed record ConsoleRun(
+    int Index,
+    bool Current,
+    DateTime? EndedAt,
+    DateTime LastOutputAt,
+    long SizeBytes,
+    string Outcome,
+    int? ExitCode);
+
+/// <summary>The memory admission gate's settings as the daemon runs them (<c>GET /memory-gate</c>).</summary>
+/// <param name="Enabled">Whether a start is checked against the memory still available.</param>
+/// <param name="HeadroomMb">The memory a start must leave free, in MB.</param>
+public sealed record MemoryGateState(bool Enabled, int HeadroomMb);

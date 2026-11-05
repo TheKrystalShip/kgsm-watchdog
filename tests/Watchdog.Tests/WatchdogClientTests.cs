@@ -44,6 +44,40 @@ public sealed class WatchdogClientTests : IAsyncLifetime
         _app.MapDelete("/instance/{name}", (string name) =>
             Results.Json(new ActionResult(name, false, "still running"), JsonCamel, statusCode: 409));
 
+        _app.MapPost("/maintenance/begin/{name}", (string name, string? origin) =>
+            Results.Json(new ActionResult(name, true, $"parked by {origin}"), JsonCamel));
+        _app.MapPost("/set-cpu-priority/{name}/{priority}", (string name, string priority) =>
+            Results.Json(new ActionResult(name, true, priority), JsonCamel));
+        _app.MapGet("/console/{name}/runs", (string name) =>
+            name == "factorio-a"
+                ? Results.Json(new[] { new ConsoleRun(0, true, null, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), 12, "running", null) }, JsonCamel)
+                : Results.StatusCode(404));
+        _app.MapGet("/console/{name}", (string name, int? tail, HttpContext http) =>
+        {
+            if (name != "factorio-a") return Results.StatusCode(404);
+            http.Response.Headers["X-Console-Start"] = "10";
+            http.Response.Headers["X-Console-End"] = "30";
+            return Results.Text("one\ntwo\n");
+        });
+        _app.MapGet("/console/{name}/follow", async (string name, HttpContext http) =>
+        {
+            http.Response.ContentType = "text/plain";
+            await http.Response.WriteAsync("first\nsecond\n");
+            await http.Response.Body.FlushAsync();
+            await Task.Delay(Timeout.Infinite, http.RequestAborted).ContinueWith(_ => { });
+        });
+        _app.MapGet("/console/{name}/download", (string name) =>
+            name == "factorio-a" ? Results.Text("whole run\n") : Results.StatusCode(404));
+        _app.MapGet("/players", () => Results.Json(
+            new Dictionary<string, InstancePresence>
+            {
+                ["factorio-a"] = new("log", [new PlayerSession("k", "1", "ann", null)]),
+                ["terraria-b"] = new("none", []),
+            }, JsonCamel));
+        _app.MapGet("/upnp/{name}", (string name) => Results.Json(
+            new UpnpListResult(name, "unavailable", []), JsonCamel));
+        _app.MapGet("/memory-gate", () => Results.Json(new MemoryGateState(true, 1024), JsonCamel));
+
         await _app.StartAsync(CancellationToken.None);
     }
 
@@ -129,5 +163,95 @@ public sealed class WatchdogClientTests : IAsyncLifetime
         using var client = new WatchdogClient(Path.Combine(_directory, "absent.sock"));
 
         await Assert.ThrowsAsync<WatchdogUnavailableException>(() => client.StatusAsync("x", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Maintenance_and_cpu_priority_are_actions_with_their_answers()
+    {
+        using var client = new WatchdogClient(SocketPath);
+
+        Assert.Equal("parked by scheduler", (await client.BeginMaintenanceAsync("factorio-a", "scheduler")).Message);
+        Assert.Equal("low", (await client.SetCpuPriorityAsync("factorio-a", "low")).Message);
+    }
+
+    [Fact]
+    public async Task A_console_window_carries_its_lines_and_its_byte_range()
+    {
+        using var client = new WatchdogClient(SocketPath);
+
+        ConsoleWindow window = await client.ConsoleWindowAsync("factorio-a", 2);
+
+        Assert.Equal(["one", "two"], window.Lines);
+        Assert.Equal(10, window.Start);
+        Assert.Equal(30, window.End);
+        Assert.True(window.HasEarlier);
+        Assert.Empty((await client.ConsoleWindowAsync("nothing", 2)).Lines);
+    }
+
+    [Fact]
+    public async Task A_console_that_does_not_exist_is_empty_and_never_an_error()
+    {
+        using var client = new WatchdogClient(SocketPath);
+
+        Assert.Equal(0, (await client.ConsoleRunsAsync("nothing")).Count);
+        Assert.Null(await client.OpenConsoleDownloadAsync("nothing"));
+        Assert.Empty(await client.ConsoleTailAsync("nothing", 5));
+        Assert.Equal(12, Assert.Single(await client.ConsoleRunsAsync("factorio-a")).SizeBytes);
+    }
+
+    [Fact]
+    public async Task A_follow_yields_lines_until_the_caller_cancels()
+    {
+        using var client = new WatchdogClient(SocketPath);
+        using var cancel = new CancellationTokenSource();
+        var seen = new List<string>();
+
+        try
+        {
+            await foreach (string line in client.FollowConsoleAsync("factorio-a", cancel.Token))
+            {
+                seen.Add(line);
+                if (seen.Count == 2) await cancel.CancelAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        Assert.Equal(["first", "second"], seen);
+    }
+
+    [Fact]
+    public async Task A_download_is_a_stream_with_its_length()
+    {
+        using var client = new WatchdogClient(SocketPath);
+
+        using ConsoleDownload download = (await client.OpenConsoleDownloadAsync("factorio-a"))!;
+        using var reader = new StreamReader(download.Content);
+
+        Assert.Equal("whole run\n", await reader.ReadToEndAsync());
+    }
+
+    [Fact]
+    public async Task Players_carry_how_each_instance_is_detected_and_upnp_its_honest_state()
+    {
+        using var client = new WatchdogClient(SocketPath);
+
+        IReadOnlyDictionary<string, InstancePresence> players = (await client.PlayersAsync())!;
+        Assert.True(players["factorio-a"].IsDetected);
+        Assert.Equal("ann", Assert.Single(players["factorio-a"].Players).Name);
+        Assert.False(players["terraria-b"].IsDetected);
+        Assert.Equal("unavailable", (await client.UpnpAsync("factorio-a"))!.State);
+        Assert.Equal(new MemoryGateState(true, 1024), await client.MemoryGateAsync());
+    }
+
+    [Fact]
+    public async Task Players_and_upnp_of_an_absent_daemon_are_unknown_not_errors()
+    {
+        using var client = new WatchdogClient(Path.Combine(_directory, "absent.sock"));
+
+        Assert.Null(await client.PlayersAsync());
+        Assert.Null(await client.UpnpAsync("x"));
+        Assert.False(await client.IsReadyAsync());
     }
 }

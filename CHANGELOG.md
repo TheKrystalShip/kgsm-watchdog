@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the client package covers the whole control surface (`TheKrystalShip.KGSM.Watchdog.Client` 1.0.0-dev.2)
+
+`IWatchdogClient` is the interface `WatchdogClient` implements, for consumers to mock, and
+`AddKgsmWatchdogClient` registers it. The client now also sets a CPU priority, begins and ends maintenance, reads
+the console (runs, windows with their byte range, tail, follow, download), the player presence of every instance,
+an instance's router port-forwards and the memory gate's settings. The wire types `PlayerSession`,
+`InstancePresence`, `ConsoleRun`, `UpnpMapping`, `UpnpListResult` and `MemoryGateState` ship in the package and the
+daemon uses them from there. Console follow and download ride a connection with no time limit and end on the
+caller's cancellation.
+
 ### Added — a client package for the control socket (1.50.0)
 
 `TheKrystalShip.KGSM.Watchdog.Client` (1.0.0-dev.1, `src/Watchdog.Client`) carries the control surface's wire types

@@ -15,7 +15,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// Covers what the reconcile pass decides when a supervised instance's cgroup has emptied — the two
 /// things that can override a plain "crashed → restart":
 /// <list type="bullet">
-/// <item>the per-instance crash policy overlay (kgsm-lib <c>Instance.CrashRestart</c> /
+/// <item>the per-instance crash policy overlay (engine <c>InstanceConfig.CrashRestart</c> /
 /// <c>CrashMaxRestarts</c>): the global <see cref="BackoffPolicy"/> singleton stays, but at
 /// crash-detection time <c>crash_restart=false</c> suppresses auto-recovery and <c>crash_max_restarts</c>
 /// overrides the give-up ceiling for that one instance;</item>

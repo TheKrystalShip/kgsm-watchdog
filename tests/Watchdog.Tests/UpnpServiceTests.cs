@@ -8,7 +8,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// <summary>
 /// Covers the watchdog's one pure UPnP helper: the <c>upnpc</c> argv builder, which mirrors the
 /// management script (<c>manage.native.d/09-network.sh</c>) flag-for-flag. Parsing/validating the
-/// port spec now lives in kgsm-lib (the canonical structured <see cref="PortMapping"/> form, tested
+/// port spec lives in the engine core (the canonical structured <see cref="PortMapping"/> form, tested
 /// there) — the watchdog only expands it (<see cref="PortMappingExtensions.Expand"/>) and builds the
 /// command line. The shell-out itself needs a real IGD and is exercised live, not in the unit suite
 /// (same boundary as <see cref="SpawnEngineTests"/>).

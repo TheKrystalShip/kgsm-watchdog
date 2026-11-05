@@ -9,7 +9,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// The startup adopt/spawn/skip fork, the riskiest new logic in the persistence increment, tested in
 /// isolation from the cgroup/fork I/O it normally drives (mirrors how <c>BackoffPolicy</c> is unit-
 /// tested apart from the live reconcile loop). The two axes are: is the cgroup already live, and did
-/// kgsm-lib return an in-scope spec.
+/// the engine catalog return an in-scope spec.
 /// </summary>
 public sealed class RestorePlanTests
 {

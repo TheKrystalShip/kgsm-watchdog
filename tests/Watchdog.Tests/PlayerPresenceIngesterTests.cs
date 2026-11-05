@@ -9,7 +9,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 /// <summary>
 /// Covers the ingester's discovery (two-level walk, including <b>through the instance symlink</b> the
 /// real kgsm layout uses), instance-name derivation, instances-dir resolution, and the emit shape it
-/// hands kgsm-lib — event name (dash form), provenance (<c>actor=null / origin="system"</c>), and the
+/// hands the journal — event name (dash form), provenance (<c>actor=null / origin="system"</c>), and the
 /// positional param order (<c>instance, id, name</c>, with null id/name as an empty positional arg).
 /// </summary>
 [Collection(EnvironmentCollection.Name)] // ResolveInstancesDir tests mutate HOME/XDG_DATA_HOME — serialize with the other env-touching classes

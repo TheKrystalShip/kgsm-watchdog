@@ -15,7 +15,7 @@ namespace TheKrystalShip.KGSM.Watchdog.Tests;
 
 /// <summary>
 /// Covers the native ingester end-to-end through one ingest pass (against real temp files + faked
-/// kgsm-lib seams): first-attach-at-EOF skips a pre-existing append-only log's history, appended join/left
+/// engine seams): first-attach-at-EOF skips a pre-existing append-only log's history, appended join/left
 /// lines emit with the right name/provenance/param order, a non-native instance and a native instance
 /// with no patterns are skipped, and the tail cursor resumes across passes (no redelivery).
 /// <para>
